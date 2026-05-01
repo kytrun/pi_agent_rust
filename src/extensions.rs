@@ -4465,11 +4465,6 @@ impl SecretBrokerPolicy {
 
         let upper = name.to_ascii_uppercase();
 
-        // Unconditionally allow PI_* variables.
-        if upper.starts_with("PI_") {
-            return false;
-        }
-
         // Check disclosure allowlist first (overrides everything).
         if self
             .disclosure_allowlist
