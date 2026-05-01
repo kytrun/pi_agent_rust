@@ -670,13 +670,13 @@ const DUAL_EXEC_DEFAULT_OVERHEAD_BUDGET_US: u64 = 1_500;
 const DUAL_EXEC_DEFAULT_OVERHEAD_BACKOFF_REQUESTS: usize = 32;
 
 #[derive(Debug, Clone, Copy)]
-struct DualExecOracleConfig {
-    sample_ppm: u32,
-    divergence_window: usize,
-    divergence_budget: usize,
-    rollback_requests: usize,
-    overhead_budget_us: u64,
-    overhead_backoff_requests: usize,
+pub struct DualExecOracleConfig {
+    pub sample_ppm: u32,
+    pub divergence_window: usize,
+    pub divergence_budget: usize,
+    pub rollback_requests: usize,
+    pub overhead_budget_us: u64,
+    pub overhead_backoff_requests: usize,
 }
 
 impl Default for DualExecOracleConfig {
@@ -730,7 +730,7 @@ impl DualExecOracleConfig {
 }
 
 #[derive(Debug, Clone, Default)]
-struct DualExecOracleState {
+pub struct DualExecOracleState {
     sampled_total: u64,
     matched_total: u64,
     divergence_total: u64,
@@ -743,7 +743,7 @@ struct DualExecOracleState {
 }
 
 impl DualExecOracleState {
-    fn begin_request(&mut self) {
+    pub fn begin_request(&mut self) {
         if self.rollback_remaining > 0 {
             self.rollback_remaining = self.rollback_remaining.saturating_sub(1);
             if self.rollback_remaining == 0 {
@@ -755,16 +755,48 @@ impl DualExecOracleState {
         }
     }
 
-    const fn rollback_active(&self) -> bool {
+    pub const fn rollback_active(&self) -> bool {
         self.rollback_remaining > 0
     }
 
-    const fn record_overhead_budget_exceeded(&mut self, config: DualExecOracleConfig) {
+    pub const fn sampled_total(&self) -> u64 {
+        self.sampled_total
+    }
+
+    pub const fn matched_total(&self) -> u64 {
+        self.matched_total
+    }
+
+    pub const fn divergence_total(&self) -> u64 {
+        self.divergence_total
+    }
+
+    pub const fn skipped_unsupported_total(&self) -> u64 {
+        self.skipped_unsupported_total
+    }
+
+    pub const fn skipped_overhead_total(&self) -> u64 {
+        self.skipped_overhead_total
+    }
+
+    pub const fn rollback_remaining(&self) -> usize {
+        self.rollback_remaining
+    }
+
+    pub fn rollback_reason(&self) -> Option<&str> {
+        self.rollback_reason.as_deref()
+    }
+
+    pub const fn overhead_backoff_remaining(&self) -> usize {
+        self.overhead_backoff_remaining
+    }
+
+    pub const fn record_overhead_budget_exceeded(&mut self, config: DualExecOracleConfig) {
         self.skipped_overhead_total = self.skipped_overhead_total.saturating_add(1);
         self.overhead_backoff_remaining = config.overhead_backoff_requests;
     }
 
-    fn record_sample(
+    pub fn record_sample(
         &mut self,
         divergent: bool,
         config: DualExecOracleConfig,
