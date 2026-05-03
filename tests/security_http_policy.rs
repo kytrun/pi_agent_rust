@@ -160,6 +160,109 @@ fn tls_not_required_allows_http() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Loopback HTTP escape hatch (PI_HTTP_ALLOW_LOOPBACK=1)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn loopback_http_denied_when_opt_in_unset() {
+    let connector = HttpConnector::new(HttpConnectorConfig {
+        require_tls: true,
+        allow_loopback_http: false,
+        ..Default::default()
+    });
+    let call = http_call("http://127.0.0.1:37778/health", "GET");
+    let result = run_async(async move { connector.dispatch(&call).await.unwrap() });
+
+    assert!(result.is_error, "loopback http must stay denied by default");
+    let error = result.error.expect("error payload");
+    assert_eq!(error.code, HostCallErrorCode::Denied);
+    assert!(
+        error.message.contains("PI_HTTP_ALLOW_LOOPBACK"),
+        "denial message should hint at the opt-in: {}",
+        error.message
+    );
+}
+
+#[test]
+fn loopback_http_denied_for_non_loopback_even_when_opt_in() {
+    // The escape hatch must only loosen policy for true loopback addresses.
+    let connector = HttpConnector::new(HttpConnectorConfig {
+        require_tls: true,
+        allow_loopback_http: true,
+        ..Default::default()
+    });
+    let call = http_call("http://example.com/data", "GET");
+    let result = run_async(async move { connector.dispatch(&call).await.unwrap() });
+
+    assert!(result.is_error, "non-loopback http must still be denied");
+    let error = result.error.expect("error payload");
+    assert_eq!(error.code, HostCallErrorCode::Denied);
+}
+
+#[test]
+#[cfg(unix)] // asupersync TCP connect is unreliable on Windows CI
+fn loopback_http_allowed_when_opt_in_set() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let resp = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+        stream.write_all(resp.as_bytes()).expect("write");
+    });
+
+    let connector = HttpConnector::new(HttpConnectorConfig {
+        require_tls: true,
+        allow_loopback_http: true,
+        ..Default::default()
+    });
+    let call = http_call(&format!("http://{addr}/"), "GET");
+    let result = run_async(async move { connector.dispatch(&call).await.unwrap() });
+
+    assert!(
+        !result.is_error,
+        "loopback http should pass policy with opt-in: {:?}",
+        result.error
+    );
+    assert_eq!(
+        result.output.get("status").and_then(Value::as_u64),
+        Some(200)
+    );
+    server.join().unwrap();
+}
+
+#[test]
+fn loopback_http_accepts_localhost_literal() {
+    // "localhost" must be honored as a loopback alias even though it's not
+    // an IP literal — the bracketed IPv6 form must work too.
+    for url in [
+        "http://localhost:37778/health",
+        "http://[::1]:37778/health",
+        "http://127.0.0.1:37778/health",
+    ] {
+        let connector = HttpConnector::new(HttpConnectorConfig {
+            require_tls: true,
+            allow_loopback_http: true,
+            ..Default::default()
+        });
+        let call = http_call(url, "GET");
+        let result = run_async(async move { connector.dispatch(&call).await.unwrap() });
+
+        // Connection will fail (no server), but policy must pass — i.e. the
+        // error code must NOT be Denied. We only care about the policy gate.
+        if result.is_error {
+            let error = result.error.as_ref().expect("error payload");
+            assert_ne!(
+                error.code,
+                HostCallErrorCode::Denied,
+                "loopback alias {url} should pass policy: {}",
+                error.message
+            );
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Host allowlist enforcement
 // ═══════════════════════════════════════════════════════════════════════════════
 

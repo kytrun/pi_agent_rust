@@ -23,9 +23,25 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_MAX_REQUEST_BYTES: usize = 50 * 1024 * 1024;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 50 * 1024 * 1024;
 
+/// Environment variable that opts in to plain HTTP for loopback hosts only.
+///
+/// Set to `1` to permit `http://localhost`, `http://127.0.0.0/8`, and
+/// `http://[::1]` even when `require_tls` is enabled. Any other value
+/// (including unset) keeps the secure default. Loopback HTTP is treated as
+/// a "secure context" by browsers for the same reason: traffic never leaves
+/// the host, so TLS is friction without security gain.
+pub const ALLOW_LOOPBACK_HTTP_ENV: &str = "PI_HTTP_ALLOW_LOOPBACK";
+
 #[derive(Debug, Clone)]
 pub struct HttpConnectorConfig {
     pub require_tls: bool,
+    /// Opt-in escape hatch: when `true`, `http://` is permitted **only** for
+    /// loopback hosts (`127.0.0.0/8`, `::1`, `localhost`) even if
+    /// `require_tls` is set. Defaults to the value of
+    /// [`ALLOW_LOOPBACK_HTTP_ENV`] (`PI_HTTP_ALLOW_LOOPBACK=1`) so callers can
+    /// flip it per-shell without rebuilding, but tests can also set it
+    /// directly without polluting process env.
+    pub allow_loopback_http: bool,
     pub enforce_allowlist: bool,
     pub allowlist: Vec<String>,
     pub denylist: Vec<String>,
@@ -38,6 +54,7 @@ impl Default for HttpConnectorConfig {
     fn default() -> Self {
         Self {
             require_tls: true,
+            allow_loopback_http: allow_loopback_http_from_env(),
             enforce_allowlist: false,
             allowlist: Vec::new(),
             denylist: Vec::new(),
@@ -46,6 +63,36 @@ impl Default for HttpConnectorConfig {
             default_timeout_ms: DEFAULT_TIMEOUT_MS,
         }
     }
+}
+
+/// Returns `true` iff [`ALLOW_LOOPBACK_HTTP_ENV`] is set to exactly `"1"`.
+/// Any other value (`"0"`, `"true"`, unset, etc.) keeps the secure default —
+/// the strict `"1"` check is intentional so a typo can never accidentally
+/// loosen the policy.
+fn allow_loopback_http_from_env() -> bool {
+    std::env::var(ALLOW_LOOPBACK_HTTP_ENV).as_deref() == Ok("1")
+}
+
+/// Returns `true` iff `host` resolves to a loopback address.
+///
+/// Accepts the literal `localhost` (case-insensitive), the bare/ bracketed
+/// IPv6 loopback (`::1`, `[::1]`), and any address in `127.0.0.0/8`. Anything
+/// that fails to parse as an IP and isn't `localhost` is rejected — DNS
+/// names that *resolve* to loopback are not honored, since resolving here
+/// would reintroduce the trust problem the loopback exception is meant to
+/// avoid.
+fn is_loopback_host(host: &str) -> bool {
+    let trimmed = host.trim();
+    let stripped = trimmed
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(trimmed);
+    if stripped.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    stripped
+        .parse::<std::net::IpAddr>()
+        .map_or(false, |ip| ip.is_loopback())
 }
 
 #[derive(Debug, Clone)]
@@ -294,12 +341,19 @@ impl HttpConnector {
 
         match parsed.scheme {
             Scheme::Http if self.config.require_tls => {
-                return Err(Box::new(host_result_err(
-                    &call.call_id,
-                    HostCallErrorCode::Denied,
-                    "TLS required: use https:// URLs",
-                    None,
-                )));
+                // Loopback escape hatch: only when the operator explicitly
+                // opted in (`allow_loopback_http`, default-driven by the
+                // PI_HTTP_ALLOW_LOOPBACK=1 env var) AND the host is actually
+                // loopback. Anything else still gets the strict TLS error.
+                if !(self.config.allow_loopback_http && is_loopback_host(&parsed.host)) {
+                    return Err(Box::new(host_result_err(
+                        &call.call_id,
+                        HostCallErrorCode::Denied,
+                        "TLS required: use https:// URLs (set PI_HTTP_ALLOW_LOOPBACK=1 \
+                         to permit plain http for loopback hosts)",
+                        None,
+                    )));
+                }
             }
             Scheme::Http | Scheme::Https => {}
         }
