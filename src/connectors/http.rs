@@ -92,7 +92,7 @@ fn is_loopback_host(host: &str) -> bool {
     }
     stripped
         .parse::<std::net::IpAddr>()
-        .map_or(false, |ip| ip.is_loopback())
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 #[derive(Debug, Clone)]
