@@ -37,10 +37,17 @@ pub struct HttpConnectorConfig {
     pub require_tls: bool,
     /// Opt-in escape hatch: when `true`, `http://` is permitted **only** for
     /// loopback hosts (`127.0.0.0/8`, `::1`, `localhost`) even if
-    /// `require_tls` is set. Defaults to the value of
-    /// [`ALLOW_LOOPBACK_HTTP_ENV`] (`PI_HTTP_ALLOW_LOOPBACK=1`) so callers can
-    /// flip it per-shell without rebuilding, but tests can also set it
-    /// directly without polluting process env.
+    /// `require_tls` is set. Defaults to `true` when the
+    /// [`ALLOW_LOOPBACK_HTTP_ENV`] environment variable is set to exactly
+    /// `"1"` and `false` otherwise, so callers can flip it per-shell without
+    /// rebuilding while tests can also override it directly without
+    /// polluting process env.
+    ///
+    /// This bypass applies to the TLS check only — denylist and allowlist
+    /// policies still run, so a request to `http://localhost/` will still
+    /// be denied if `localhost` is not in an active allowlist. Callers
+    /// who want loopback freely accessible should add `localhost`/`127.0.0.1`
+    /// to their allowlist (or leave allowlist empty).
     pub allow_loopback_http: bool,
     pub enforce_allowlist: bool,
     pub allowlist: Vec<String>,
@@ -345,12 +352,23 @@ impl HttpConnector {
                 // opted in (`allow_loopback_http`, default-driven by the
                 // PI_HTTP_ALLOW_LOOPBACK=1 env var) AND the host is actually
                 // loopback. Anything else still gets the strict TLS error.
-                if !(self.config.allow_loopback_http && is_loopback_host(&parsed.host)) {
+                let host_is_loopback = is_loopback_host(&parsed.host);
+                if !(self.config.allow_loopback_http && host_is_loopback) {
+                    // Surface the env-var hint only when it would actually
+                    // help — i.e. for loopback hosts that the user could
+                    // unblock by opting in. For non-loopback hosts (e.g.
+                    // `http://example.com/`), the env var is irrelevant and
+                    // mentioning it sends the user down the wrong path.
+                    let message = if host_is_loopback {
+                        "TLS required: use https:// URLs (set PI_HTTP_ALLOW_LOOPBACK=1 \
+                         to permit plain http for loopback hosts)"
+                    } else {
+                        "TLS required: use https:// URLs"
+                    };
                     return Err(Box::new(host_result_err(
                         &call.call_id,
                         HostCallErrorCode::Denied,
-                        "TLS required: use https:// URLs (set PI_HTTP_ALLOW_LOOPBACK=1 \
-                         to permit plain http for loopback hosts)",
+                        message,
                         None,
                     )));
                 }

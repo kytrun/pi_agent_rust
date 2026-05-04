@@ -200,6 +200,33 @@ fn loopback_http_denied_for_non_loopback_even_when_opt_in() {
 }
 
 #[test]
+fn tls_required_message_omits_loopback_hint_for_non_loopback_hosts() {
+    // For a non-loopback `http://` URL the env-var hint is misdirection —
+    // setting `PI_HTTP_ALLOW_LOOPBACK=1` won't unblock `example.com`. The
+    // message should stay focused on the actual fix (use https://) and
+    // not waste the user's time on an option that doesn't apply.
+    let connector = HttpConnector::new(HttpConnectorConfig {
+        require_tls: true,
+        ..Default::default()
+    });
+    let call = http_call("http://example.com/data", "GET");
+    let result = run_async(async move { connector.dispatch(&call).await.unwrap() });
+
+    let error = result.error.expect("error payload");
+    assert_eq!(error.code, HostCallErrorCode::Denied);
+    assert!(
+        error.message.contains("TLS required"),
+        "deny message should mention TLS: {}",
+        error.message
+    );
+    assert!(
+        !error.message.contains("PI_HTTP_ALLOW_LOOPBACK"),
+        "non-loopback denial must not surface the loopback opt-in hint: {}",
+        error.message
+    );
+}
+
+#[test]
 #[cfg(unix)] // asupersync TCP connect is unreliable on Windows CI
 fn loopback_http_allowed_when_opt_in_set() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
