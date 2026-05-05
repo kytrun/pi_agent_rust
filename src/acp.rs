@@ -1039,9 +1039,8 @@ async fn run_prompt(
     // and session/list. The concurrent-prompt guard upstream guarantees only one
     // task is in here per session at a time, so the Option swap is safe.
     let mut agent_session = {
-        let mut guard = match session_state.lock(&cx).await {
-            Ok(guard) => guard,
-            Err(_) => return ACP_STOP_REASON_ERROR,
+        let Ok(mut guard) = session_state.lock(&cx).await else {
+            return ACP_STOP_REASON_ERROR;
         };
         let Some(agent) = guard.agent_session.take() else {
             return ACP_STOP_REASON_ERROR;
@@ -1072,7 +1071,7 @@ const ACP_STOP_REASON_CANCELLED: &str = "cancelled";
 // the error text has already been streamed via session/update.
 const ACP_STOP_REASON_ERROR: &str = "end_turn";
 
-fn map_stop_reason(reason: crate::model::StopReason) -> &'static str {
+const fn map_stop_reason(reason: crate::model::StopReason) -> &'static str {
     use crate::model::StopReason;
     match reason {
         StopReason::Stop | StopReason::ToolUse => ACP_STOP_REASON_END_TURN,
@@ -1154,17 +1153,16 @@ fn build_acp_event_handler(
                     "sessionUpdate": "agent_message_chunk",
                     "content": { "type": "text", "text": delta },
                 })),
-                // TextEnd carries the same text already delivered via TextDelta;
-                // emitting it again would double the user-visible message. Skip.
-                AssistantMessageEvent::TextEnd { .. } => None,
                 AssistantMessageEvent::ThinkingDelta { delta, .. } => Some(json!({
                     "sessionUpdate": "agent_thought_chunk",
                     "content": { "type": "text", "text": delta },
                 })),
-                // The tool_call announcement is sent on ToolExecutionStart so the
-                // status transitions (pending -> in_progress -> completed) line up
-                // with what the client renders. ToolCallEnd in the model stream is
-                // metadata-only and would duplicate the announcement.
+                // Everything else (TextEnd, ToolCallEnd, etc.) is intentionally
+                // skipped: TextEnd carries text already delivered via TextDelta and
+                // would double the message; the tool_call announcement is sent
+                // from ToolExecutionStart so status transitions line up
+                // (pending -> in_progress -> completed); ToolCallEnd is
+                // model-stream metadata that would duplicate the announcement.
                 _ => None,
             },
 
