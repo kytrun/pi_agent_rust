@@ -895,6 +895,71 @@ mod tests {
         assert!(matches!(parsed, ContentBlock::Thinking(t) if t.thinking == "reasoning..."));
     }
 
+    /// Anthropic emits `{"type":"redacted_thinking","data":"<opaque>"}` when
+    /// the safety pipeline hides upstream reasoning; OpenRouter relays it
+    /// verbatim. The deserializer must accept the variant or the agent loop
+    /// terminates on every redaction (issue tracked in pi_agent_rust#80).
+    #[test]
+    fn content_block_redacted_thinking_wire_form_is_accepted() {
+        let wire = serde_json::json!({
+            "type": "redacted_thinking",
+            "data": "OPAQUE_BLOB",
+        });
+        let parsed: ContentBlock =
+            serde_json::from_value(wire).expect("redacted_thinking must deserialize");
+        let ContentBlock::RedactedThinking(rt) = &parsed else {
+            panic!("expected RedactedThinking, got {parsed:?}");
+        };
+        assert_eq!(rt.data, "OPAQUE_BLOB");
+
+        // Round-trip the variant back to wire form so cross-provider replays
+        // (e.g. via session save/restore) preserve the opaque payload.
+        let reserialized = serde_json::to_value(&parsed).expect("re-serialize");
+        assert_eq!(reserialized["type"], "redacted_thinking");
+        assert_eq!(reserialized["data"], "OPAQUE_BLOB");
+    }
+
+    /// Mixed content vec — the realistic shape OpenRouter sends back when its
+    /// upstream produced redacted reasoning interleaved with normal output.
+    #[test]
+    fn content_block_redacted_thinking_in_mixed_assistant_content() {
+        let original = AssistantMessage {
+            content: vec![
+                ContentBlock::Text(TextContent::new("Before.")),
+                ContentBlock::RedactedThinking(RedactedThinkingContent {
+                    data: "REDACTED".to_string(),
+                }),
+                ContentBlock::Text(TextContent::new("After.")),
+            ],
+            ..AssistantMessage::default()
+        };
+        let json = serde_json::to_value(&original).expect("serialize");
+        let parsed: AssistantMessage =
+            serde_json::from_value(json).expect("deserialize mixed-content message");
+        assert_eq!(parsed.content.len(), 3);
+        assert!(matches!(&parsed.content[0], ContentBlock::Text(t) if t.text == "Before."));
+        assert!(matches!(
+            &parsed.content[1],
+            ContentBlock::RedactedThinking(rt) if rt.data == "REDACTED"
+        ));
+        assert!(matches!(&parsed.content[2], ContentBlock::Text(t) if t.text == "After."));
+    }
+
+    /// Forward compatibility: if Anthropic ever adds sibling fields to the
+    /// redacted_thinking block (e.g. a future marker_id), the deserializer
+    /// should ignore them rather than reject the whole block.
+    #[test]
+    fn content_block_redacted_thinking_ignores_unknown_siblings() {
+        let wire = serde_json::json!({
+            "type": "redacted_thinking",
+            "data": "OPAQUE",
+            "futureFieldFromAnthropic": "ignore me",
+        });
+        let parsed: ContentBlock =
+            serde_json::from_value(wire).expect("unknown sibling fields must not break parsing");
+        assert!(matches!(parsed, ContentBlock::RedactedThinking(_)));
+    }
+
     #[test]
     fn content_block_image_roundtrip() {
         let block = ContentBlock::Image(ImageContent {

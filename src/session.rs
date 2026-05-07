@@ -4162,6 +4162,14 @@ fn render_blocks(blocks: &[ContentBlock]) -> String {
                     escape_html(&args)
                 );
             }
+            ContentBlock::RedactedThinking(_) => {
+                // Render a compact placeholder so transcript readers can tell
+                // a redacted-thinking block was present without exposing the
+                // opaque payload (which is provider-internal safety state).
+                html.push_str(
+                    "<details class=\"thinking\"><summary>Thinking (redacted)</summary></details>",
+                );
+            }
         }
     }
     html
@@ -4202,6 +4210,9 @@ fn content_blocks_to_text(blocks: &[ContentBlock]) -> String {
             }
             ContentBlock::ToolCall(call) => {
                 push_line(&mut output, &format!("[tool call: {}]", call.name));
+            }
+            ContentBlock::RedactedThinking(_) => {
+                push_line(&mut output, "[thinking: redacted]");
             }
         }
     }
