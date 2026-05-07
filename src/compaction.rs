@@ -427,6 +427,10 @@ fn estimate_tokens(message: &SessionMessage) -> u64 {
                             chars = chars.saturating_add(call.name.len());
                             chars = chars.saturating_add(json_byte_len(&call.arguments));
                         }
+                        // Opaque marker — the data field is never replayed to a model
+                        // (see `convert_content_block_to_anthropic`), so it contributes
+                        // zero context tokens.
+                        ContentBlock::RedactedThinking(_) => {}
                     }
                 }
             }
@@ -447,6 +451,7 @@ fn estimate_tokens(message: &SessionMessage) -> u64 {
                         chars = chars.saturating_add(call.name.len());
                         chars = chars.saturating_add(json_byte_len(&call.arguments));
                     }
+                    ContentBlock::RedactedThinking(_) => {}
                 }
             }
         }
@@ -466,6 +471,7 @@ fn estimate_tokens(message: &SessionMessage) -> u64 {
                         chars = chars.saturating_add(call.name.len());
                         chars = chars.saturating_add(json_byte_len(&call.arguments));
                     }
+                    ContentBlock::RedactedThinking(_) => {}
                 }
             }
         }
@@ -703,7 +709,10 @@ fn assistant_content_flags(assistant: &AssistantMessage) -> (bool, bool, bool) {
             ContentBlock::Thinking(_) => has_thinking = true,
             ContentBlock::Text(_) => has_text = true,
             ContentBlock::ToolCall(_) => has_tools = true,
-            ContentBlock::Image(_) => {}
+            // Redacted thinking has no surfaceable content, so don't flip
+            // has_thinking — that would produce an empty `[Assistant thinking]:`
+            // section in the compaction output.
+            ContentBlock::Image(_) | ContentBlock::RedactedThinking(_) => {}
         }
     }
     (has_thinking, has_text, has_tools)

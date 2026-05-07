@@ -7,8 +7,8 @@ use crate::auth::unmark_anthropic_oauth_bearer_token;
 use crate::error::{Error, Result};
 use crate::http::client::Client;
 use crate::model::{
-    AssistantMessage, ContentBlock, Message, StopReason, StreamEvent, TextContent, ThinkingContent,
-    ThinkingLevel, ToolCall, Usage, UserContent,
+    AssistantMessage, ContentBlock, Message, RedactedThinkingContent, StopReason, StreamEvent,
+    TextContent, ThinkingContent, ThinkingLevel, ToolCall, Usage, UserContent,
 };
 use crate::models::CompatConfig;
 use crate::provider::{CacheRetention, Context, Provider, StreamOptions, ToolDef};
@@ -791,6 +791,20 @@ where
                 }));
                 StreamEvent::ToolCallStart { content_index }
             }
+            AnthropicContentBlock::RedactedThinking { data } => {
+                // Redacted thinking arrives in a single `content_block_start` —
+                // there are no follow-up `content_block_delta` events for the
+                // opaque `data` payload. Push the block immediately and bracket
+                // the stream with ThinkingStart so downstream UIs can render a
+                // placeholder; ThinkingEnd with empty content fires from
+                // `handle_content_block_stop`.
+                self.partial
+                    .content
+                    .push(ContentBlock::RedactedThinking(RedactedThinkingContent {
+                        data,
+                    }));
+                StreamEvent::ThinkingStart { content_index }
+            }
         }
     }
 
@@ -906,6 +920,10 @@ where
                     None
                 }
             }
+            Some(ContentBlock::RedactedThinking(_)) => Some(StreamEvent::ThinkingEnd {
+                content_index: idx,
+                content: String::new(),
+            }),
             _ => None,
         }
     }
@@ -1077,6 +1095,15 @@ struct AnthropicDeltaUsage {
 enum AnthropicContentBlock {
     Text,
     Thinking,
+    /// Anthropic's safety pipeline emits this when upstream reasoning is
+    /// hidden; the `data` field is opaque and must be preserved on the partial
+    /// so a faithful round-trip is possible. OpenRouter's Anthropic-compatible
+    /// relay forwards it verbatim, so any pi run that fails over to OpenRouter
+    /// will see this variant.
+    RedactedThinking {
+        #[serde(default)]
+        data: String,
+    },
     ToolUse {
         #[serde(default)]
         id: Option<String>,
@@ -1225,7 +1252,10 @@ fn convert_content_block_to_anthropic(block: &ContentBlock) -> Option<AnthropicC
                     signature: sig,
                 })
         }
-        ContentBlock::Image(_) => None,
+        // Images and redacted-thinking markers don't round-trip back to the
+        // Anthropic input surface — Anthropic discards redacted-thinking on
+        // subsequent turns, so we do the same.
+        ContentBlock::Image(_) | ContentBlock::RedactedThinking(_) => None,
     }
 }
 
