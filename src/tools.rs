@@ -15,6 +15,7 @@ use asupersync::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf, SeekFrom};
 use asupersync::time::{sleep, wall_now};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use sha2::Digest as _;
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
@@ -22,9 +23,9 @@ use std::fmt::Write as _;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{OnceLock, mpsc};
+use std::sync::{Mutex, OnceLock, mpsc};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
@@ -723,6 +724,379 @@ fn utf8_prefix_len(s: &str, max_bytes: usize) -> usize {
         valid_bytes -= 1;
     }
     valid_bytes
+}
+
+const TOOL_OUTPUT_CACHE_MAX_ENTRIES: usize = 128;
+const TOOL_OUTPUT_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const TOOL_OUTPUT_CACHE_MAX_ENTRY_BYTES: usize = DEFAULT_MAX_BYTES + 64 * 1024;
+const TOOL_OUTPUT_CACHE_MAX_FINGERPRINT_FILES: usize = 2048;
+const TOOL_OUTPUT_CACHE_MAX_FINGERPRINT_BYTES: u64 = 8 * 1024 * 1024;
+const TOOL_OUTPUT_CACHE_MAX_FILE_HASH_BYTES: u64 = 2 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolCacheDependency {
+    path: PathBuf,
+    fingerprint: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ToolCacheFingerprintMode {
+    FileContent,
+    DirectoryImmediate,
+    DirectoryRecursive,
+}
+
+#[derive(Debug, Clone)]
+struct CachedToolOutput {
+    deps: Vec<ToolCacheDependency>,
+    output: ToolOutput,
+    weight: usize,
+    generation: u64,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ToolOutputCacheStats {
+    hits: usize,
+    misses: usize,
+    inserts: usize,
+    invalidations: usize,
+    disabled: usize,
+}
+
+#[derive(Debug, Default)]
+struct ToolOutputCache {
+    entries: HashMap<String, CachedToolOutput>,
+    order: VecDeque<(String, u64)>,
+    total_bytes: usize,
+    generation: u64,
+    #[cfg(test)]
+    stats: ToolOutputCacheStats,
+}
+
+impl ToolOutputCache {
+    fn get(&mut self, key: &str, deps: &[ToolCacheDependency]) -> Option<ToolOutput> {
+        self.generation = self.generation.saturating_add(1);
+        let generation = self.generation;
+
+        if self
+            .entries
+            .get(key)
+            .is_some_and(|entry| entry.deps == deps)
+        {
+            let entry = self.entries.get_mut(key)?;
+            entry.generation = generation;
+            self.order.push_back((key.to_string(), generation));
+            #[cfg(test)]
+            {
+                self.stats.hits = self.stats.hits.saturating_add(1);
+            }
+            return Some(entry.output.clone());
+        }
+
+        if let Some(removed) = self.entries.remove(key) {
+            self.total_bytes = self.total_bytes.saturating_sub(removed.weight);
+            #[cfg(test)]
+            {
+                self.stats.invalidations = self.stats.invalidations.saturating_add(1);
+            }
+        } else {
+            #[cfg(test)]
+            {
+                self.stats.misses = self.stats.misses.saturating_add(1);
+            }
+        }
+
+        None
+    }
+
+    fn insert(
+        &mut self,
+        key: String,
+        deps: Vec<ToolCacheDependency>,
+        output: ToolOutput,
+        weight: usize,
+    ) {
+        if weight == 0 || weight > TOOL_OUTPUT_CACHE_MAX_ENTRY_BYTES {
+            #[cfg(test)]
+            {
+                self.stats.disabled = self.stats.disabled.saturating_add(1);
+            }
+            return;
+        }
+
+        if let Some(removed) = self.entries.remove(&key) {
+            self.total_bytes = self.total_bytes.saturating_sub(removed.weight);
+        }
+
+        self.generation = self.generation.saturating_add(1);
+        let generation = self.generation;
+        self.total_bytes = self.total_bytes.saturating_add(weight);
+        self.order.push_back((key.clone(), generation));
+        self.entries.insert(
+            key,
+            CachedToolOutput {
+                deps,
+                output,
+                weight,
+                generation,
+            },
+        );
+        #[cfg(test)]
+        {
+            self.stats.inserts = self.stats.inserts.saturating_add(1);
+        }
+        self.evict_to_limits();
+    }
+
+    fn evict_to_limits(&mut self) {
+        while self.entries.len() > TOOL_OUTPUT_CACHE_MAX_ENTRIES
+            || self.total_bytes > TOOL_OUTPUT_CACHE_MAX_BYTES
+        {
+            let Some((key, generation)) = self.order.pop_front() else {
+                break;
+            };
+            if self
+                .entries
+                .get(&key)
+                .is_some_and(|entry| entry.generation == generation)
+                && let Some(removed) = self.entries.remove(&key)
+            {
+                self.total_bytes = self.total_bytes.saturating_sub(removed.weight);
+            }
+        }
+    }
+}
+
+fn tool_output_cache() -> &'static Mutex<ToolOutputCache> {
+    static CACHE: OnceLock<Mutex<ToolOutputCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(ToolOutputCache::default()))
+}
+
+fn lock_tool_output_cache() -> std::sync::MutexGuard<'static, ToolOutputCache> {
+    tool_output_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn tool_cache_key(tool: &str, cwd: &Path, input: &serde_json::Value) -> String {
+    let input_json = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
+    format!("{tool}\0{}\0{input_json}", cwd.display())
+}
+
+fn cached_tool_output(key: &str, deps: Option<&[ToolCacheDependency]>) -> Option<ToolOutput> {
+    let deps = deps?;
+    lock_tool_output_cache().get(key, deps)
+}
+
+fn cache_tool_output(key: String, deps: Option<Vec<ToolCacheDependency>>, output: &ToolOutput) {
+    let Some(deps) = deps else {
+        return;
+    };
+    let Some(weight) = cacheable_tool_output_weight(output) else {
+        return;
+    };
+    lock_tool_output_cache().insert(key, deps, output.clone(), weight);
+}
+
+fn stable_cache_dependency_for_path(
+    path: &Path,
+    mode: ToolCacheFingerprintMode,
+    before_deps: Option<&[ToolCacheDependency]>,
+) -> Option<Vec<ToolCacheDependency>> {
+    let before_deps = before_deps?;
+    let after_deps = cache_dependency_for_path(path, mode)?;
+    (before_deps == after_deps.as_slice()).then_some(after_deps)
+}
+
+fn cacheable_tool_output_weight(output: &ToolOutput) -> Option<usize> {
+    let mut weight = output
+        .details
+        .as_ref()
+        .and_then(|details| serde_json::to_vec(details).ok())
+        .map_or(0, |details| details.len());
+
+    for block in &output.content {
+        match block {
+            ContentBlock::Text(text) => {
+                weight = weight.saturating_add(text.text.len());
+                if let Some(signature) = &text.text_signature {
+                    weight = weight.saturating_add(signature.len());
+                }
+            }
+            ContentBlock::Image(_)
+            | ContentBlock::Thinking(_)
+            | ContentBlock::RedactedThinking(_)
+            | ContentBlock::ToolCall(_) => return None,
+        }
+    }
+
+    Some(weight)
+}
+
+fn cache_dependency_for_path(
+    path: &Path,
+    mode: ToolCacheFingerprintMode,
+) -> Option<Vec<ToolCacheDependency>> {
+    let fingerprint = match mode {
+        ToolCacheFingerprintMode::FileContent => fingerprint_file_content(path)?,
+        ToolCacheFingerprintMode::DirectoryImmediate => fingerprint_directory_immediate(path)?,
+        ToolCacheFingerprintMode::DirectoryRecursive => fingerprint_directory_recursive(path)?,
+    };
+
+    Some(vec![ToolCacheDependency {
+        path: path.to_path_buf(),
+        fingerprint,
+    }])
+}
+
+fn fingerprint_file_content(path: &Path) -> Option<[u8; 32]> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > TOOL_OUTPUT_CACHE_MAX_FILE_HASH_BYTES {
+        return None;
+    }
+
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = sha2::Sha256::new();
+    update_fingerprint_metadata(&mut hasher, Path::new(""), &metadata);
+    hasher.update(sha2::Sha256::digest(&bytes));
+    Some(hasher.finalize().into())
+}
+
+fn fingerprint_directory_immediate(path: &Path) -> Option<[u8; 32]> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_dir() {
+        return None;
+    }
+
+    let mut entries = std::fs::read_dir(path)
+        .ok()?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()?;
+    if entries.len() > TOOL_OUTPUT_CACHE_MAX_FINGERPRINT_FILES {
+        return None;
+    }
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+
+    let mut hasher = sha2::Sha256::new();
+    update_fingerprint_metadata(&mut hasher, Path::new(""), &metadata);
+    for entry in entries {
+        let entry_path = entry.path();
+        let rel = entry.file_name();
+        let rel = Path::new(&rel);
+        let entry_metadata = std::fs::symlink_metadata(&entry_path).ok()?;
+        update_fingerprint_metadata(&mut hasher, rel, &entry_metadata);
+        if entry_metadata.file_type().is_symlink() {
+            update_symlink_target(&mut hasher, &entry_path);
+        }
+    }
+
+    Some(hasher.finalize().into())
+}
+
+fn fingerprint_directory_recursive(path: &Path) -> Option<[u8; 32]> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if metadata.is_file() {
+        return fingerprint_file_content(path);
+    }
+    if !metadata.is_dir() {
+        return None;
+    }
+
+    let mut budget = FingerprintBudget::default();
+    let mut hasher = sha2::Sha256::new();
+    update_fingerprint_metadata(&mut hasher, Path::new(""), &metadata);
+    fingerprint_tree(path, path, &mut budget, &mut hasher)?;
+    Some(hasher.finalize().into())
+}
+
+#[derive(Debug, Default)]
+struct FingerprintBudget {
+    entries: usize,
+    bytes: u64,
+}
+
+fn fingerprint_tree(
+    root: &Path,
+    dir: &Path,
+    budget: &mut FingerprintBudget,
+    hasher: &mut sha2::Sha256,
+) -> Option<()> {
+    let mut entries = std::fs::read_dir(dir)
+        .ok()?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()?;
+    entries.sort_by_key(std::fs::DirEntry::path);
+
+    for entry in entries {
+        budget.entries = budget.entries.saturating_add(1);
+        if budget.entries > TOOL_OUTPUT_CACHE_MAX_FINGERPRINT_FILES {
+            return None;
+        }
+
+        let entry_path = entry.path();
+        let rel = entry_path.strip_prefix(root).unwrap_or(&entry_path);
+        let metadata = std::fs::symlink_metadata(&entry_path).ok()?;
+        update_fingerprint_metadata(hasher, rel, &metadata);
+
+        if metadata.file_type().is_symlink() {
+            update_symlink_target(hasher, &entry_path);
+        } else if metadata.is_dir() {
+            fingerprint_tree(root, &entry_path, budget, hasher)?;
+        } else if metadata.is_file() {
+            if metadata.len() > TOOL_OUTPUT_CACHE_MAX_FILE_HASH_BYTES {
+                return None;
+            }
+            budget.bytes = budget.bytes.saturating_add(metadata.len());
+            if budget.bytes > TOOL_OUTPUT_CACHE_MAX_FINGERPRINT_BYTES {
+                return None;
+            }
+            let bytes = std::fs::read(&entry_path).ok()?;
+            hasher.update(sha2::Sha256::digest(&bytes));
+        }
+    }
+
+    Some(())
+}
+
+fn update_fingerprint_metadata(
+    hasher: &mut sha2::Sha256,
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) {
+    hasher.update(path.to_string_lossy().as_bytes());
+    hasher.update([0]);
+    let file_type = metadata.file_type();
+    hasher.update([
+        u8::from(metadata.is_file()),
+        u8::from(metadata.is_dir()),
+        u8::from(file_type.is_symlink()),
+    ]);
+    hasher.update(metadata.len().to_le_bytes());
+    let modified_nanos = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_nanos());
+    hasher.update(modified_nanos.to_le_bytes());
+    hasher.update([0xff]);
+}
+
+fn update_symlink_target(hasher: &mut sha2::Sha256, path: &Path) {
+    if let Ok(target) = std::fs::read_link(path) {
+        hasher.update(target.to_string_lossy().as_bytes());
+    }
+    hasher.update([0xfe]);
+}
+
+#[cfg(test)]
+fn reset_tool_output_cache_for_tests() {
+    *lock_tool_output_cache() = ToolOutputCache::default();
+}
+
+#[cfg(test)]
+fn tool_output_cache_stats_for_tests() -> ToolOutputCacheStats {
+    lock_tool_output_cache().stats
 }
 
 /// Format a byte count into a human-readable string with appropriate unit suffix.
@@ -1678,6 +2052,7 @@ impl Tool for ReadTool {
         input: serde_json::Value,
         _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
     ) -> Result<ToolOutput> {
+        let input_value = input.clone();
         let input: ReadInput =
             serde_json::from_value(input).map_err(|e| Error::validation(e.to_string()))?;
 
@@ -1703,6 +2078,13 @@ impl Tool for ReadTool {
                     format!("Path {} is not a regular file", path.display()),
                 ));
             }
+        }
+
+        let cache_key = tool_cache_key("read", &self.cwd, &input_value);
+        let cache_mode = ToolCacheFingerprintMode::FileContent;
+        let cache_deps = cache_dependency_for_path(&path, cache_mode);
+        if let Some(output) = cached_tool_output(&cache_key, cache_deps.as_deref()) {
+            return Ok(output);
         }
 
         let mut file = asupersync::fs::File::open(&path)
@@ -1947,11 +2329,17 @@ impl Tool for ReadTool {
                     ),
                 ));
             }
-            return Ok(ToolOutput {
+            let output = ToolOutput {
                 content: vec![ContentBlock::Text(TextContent::new(""))],
                 details: None,
                 is_error: false,
-            });
+            };
+            cache_tool_output(
+                cache_key,
+                stable_cache_dependency_for_path(&path, cache_mode, cache_deps.as_deref()),
+                &output,
+            );
+            return Ok(output);
         }
 
         // Now we have the content (up to safety limit) in memory, but only for the requested window.
@@ -2073,11 +2461,17 @@ impl Tool for ReadTool {
             }
         }
 
-        Ok(ToolOutput {
+        let output = ToolOutput {
             content: vec![ContentBlock::Text(TextContent::new(output_text))],
             details,
             is_error: false,
-        })
+        };
+        cache_tool_output(
+            cache_key,
+            stable_cache_dependency_for_path(&path, cache_mode, cache_deps.as_deref()),
+            &output,
+        );
+        Ok(output)
     }
 }
 
@@ -3818,6 +4212,7 @@ impl Tool for GrepTool {
         input: serde_json::Value,
         _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
     ) -> Result<ToolOutput> {
+        let input_value = input.clone();
         let input: GrepInput =
             serde_json::from_value(input).map_err(|e| Error::validation(e.to_string()))?;
 
@@ -3852,6 +4247,16 @@ impl Tool for GrepTool {
         let effective_limit = input.limit.unwrap_or(DEFAULT_GREP_LIMIT).max(1);
         // Overfetch one match so limit notices only appear after confirmed overflow.
         let scan_limit = effective_limit.saturating_add(1);
+        let cache_key = tool_cache_key("grep", &self.cwd, &input_value);
+        let cache_mode = if is_directory {
+            ToolCacheFingerprintMode::DirectoryRecursive
+        } else {
+            ToolCacheFingerprintMode::FileContent
+        };
+        let cache_deps = cache_dependency_for_path(&search_path, cache_mode);
+        if let Some(output) = cached_tool_output(&cache_key, cache_deps.as_deref()) {
+            return Ok(output);
+        }
 
         let mut args: Vec<String> = vec![
             "--json".to_string(),
@@ -4076,11 +4481,17 @@ impl Tool for GrepTool {
         }
 
         if match_count == 0 {
-            return Ok(ToolOutput {
+            let output = ToolOutput {
                 content: vec![ContentBlock::Text(TextContent::new("No matches found"))],
                 details: None,
                 is_error: false,
-            });
+            };
+            cache_tool_output(
+                cache_key,
+                stable_cache_dependency_for_path(&search_path, cache_mode, cache_deps.as_deref()),
+                &output,
+            );
+            return Ok(output);
         }
 
         let mut file_cache: HashMap<PathBuf, Vec<String>> = HashMap::new();
@@ -4214,11 +4625,17 @@ impl Tool for GrepTool {
             Some(serde_json::Value::Object(details_map))
         };
 
-        Ok(ToolOutput {
+        let output = ToolOutput {
             content: vec![ContentBlock::Text(TextContent::new(output))],
             details,
             is_error: false,
-        })
+        };
+        cache_tool_output(
+            cache_key,
+            stable_cache_dependency_for_path(&search_path, cache_mode, cache_deps.as_deref()),
+            &output,
+        );
+        Ok(output)
     }
 }
 
@@ -4298,6 +4715,7 @@ impl Tool for FindTool {
         input: serde_json::Value,
         _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
     ) -> Result<ToolOutput> {
+        let input_value = input.clone();
         let input: FindInput =
             serde_json::from_value(input).map_err(|e| Error::validation(e.to_string()))?;
 
@@ -4320,6 +4738,17 @@ impl Tool for FindTool {
                 "find",
                 format!("Path not found: {}", search_path.display()),
             ));
+        }
+
+        let cache_key = tool_cache_key("find", &self.cwd, &input_value);
+        let cache_mode = if search_path.is_dir() {
+            ToolCacheFingerprintMode::DirectoryRecursive
+        } else {
+            ToolCacheFingerprintMode::FileContent
+        };
+        let cache_deps = cache_dependency_for_path(&search_path, cache_mode);
+        if let Some(output) = cached_tool_output(&cache_key, cache_deps.as_deref()) {
+            return Ok(output);
         }
 
         let fd_cmd = find_fd_binary().ok_or_else(|| {
@@ -4458,13 +4887,19 @@ impl Tool for FindTool {
         }
 
         if stdout.is_empty() {
-            return Ok(ToolOutput {
+            let output = ToolOutput {
                 content: vec![ContentBlock::Text(TextContent::new(
                     "No files found matching pattern",
                 ))],
                 details: None,
                 is_error: false,
-            });
+            };
+            cache_tool_output(
+                cache_key,
+                stable_cache_dependency_for_path(&search_path, cache_mode, cache_deps.as_deref()),
+                &output,
+            );
+            return Ok(output);
         }
 
         let mut entries: Vec<FindEntry> = Vec::new();
@@ -4517,13 +4952,19 @@ impl Tool for FindTool {
         });
 
         if entries.is_empty() {
-            return Ok(ToolOutput {
+            let output = ToolOutput {
                 content: vec![ContentBlock::Text(TextContent::new(
                     "No files found matching pattern",
                 ))],
                 details: None,
                 is_error: false,
-            });
+            };
+            cache_tool_output(
+                cache_key,
+                stable_cache_dependency_for_path(&search_path, cache_mode, cache_deps.as_deref()),
+                &output,
+            );
+            return Ok(output);
         }
 
         let result_limit_reached = entries.len() > effective_limit;
@@ -4568,11 +5009,17 @@ impl Tool for FindTool {
             Some(serde_json::Value::Object(details_map))
         };
 
-        Ok(ToolOutput {
+        let output = ToolOutput {
             content: vec![ContentBlock::Text(TextContent::new(result_output))],
             details,
             is_error: false,
-        })
+        };
+        cache_tool_output(
+            cache_key,
+            stable_cache_dependency_for_path(&search_path, cache_mode, cache_deps.as_deref()),
+            &output,
+        );
+        Ok(output)
     }
 }
 
@@ -4639,6 +5086,7 @@ impl Tool for LsTool {
         input: serde_json::Value,
         _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
     ) -> Result<ToolOutput> {
+        let input_value = input.clone();
         let input: LsInput =
             serde_json::from_value(input).map_err(|e| Error::validation(e.to_string()))?;
 
@@ -4667,6 +5115,13 @@ impl Tool for LsTool {
                 "ls",
                 format!("Not a directory: {}", dir_path.display()),
             ));
+        }
+
+        let cache_key = tool_cache_key("ls", &self.cwd, &input_value);
+        let cache_mode = ToolCacheFingerprintMode::DirectoryImmediate;
+        let cache_deps = cache_dependency_for_path(&dir_path, cache_mode);
+        if let Some(output) = cached_tool_output(&cache_key, cache_deps.as_deref()) {
+            return Ok(output);
         }
 
         let mut entries = Vec::new();
@@ -4724,11 +5179,17 @@ impl Tool for LsTool {
         }
 
         if emitted_entries == 0 {
-            return Ok(ToolOutput {
+            let output = ToolOutput {
                 content: vec![ContentBlock::Text(TextContent::new("(empty directory)"))],
                 details: None,
                 is_error: false,
-            });
+            };
+            cache_tool_output(
+                cache_key,
+                stable_cache_dependency_for_path(&dir_path, cache_mode, cache_deps.as_deref()),
+                &output,
+            );
+            return Ok(output);
         }
 
         // Apply byte truncation while writing, avoiding a second joined copy.
@@ -4774,11 +5235,17 @@ impl Tool for LsTool {
             Some(serde_json::Value::Object(details_map))
         };
 
-        Ok(ToolOutput {
+        let output = ToolOutput {
             content: vec![ContentBlock::Text(TextContent::new(output))],
             details,
             is_error: false,
-        })
+        };
+        cache_tool_output(
+            cache_key,
+            stable_cache_dependency_for_path(&dir_path, cache_mode, cache_deps.as_deref()),
+            &output,
+        );
+        Ok(output)
     }
 }
 
@@ -6416,6 +6883,107 @@ mod tests {
 
         assert_same_head_truncation(&actual, &expected);
         assert_eq!(actual.content, "alpha\nβ");
+    }
+
+    fn first_text(output: &ToolOutput) -> &str {
+        output
+            .content
+            .first()
+            .and_then(|block| match block {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .unwrap_or("")
+    }
+
+    #[test]
+    fn tool_output_cache_reuses_and_invalidates_read_ls_grep_outputs() {
+        asupersync::test_utils::run_test(|| async {
+            reset_tool_output_cache_for_tests();
+
+            let tmp = tempfile::tempdir().expect("create temp dir");
+            let note = tmp.path().join("note.txt");
+            std::fs::write(&note, "alpha\n").expect("write note");
+
+            let read_tool = ReadTool::new(tmp.path());
+            let read_input = serde_json::json!({ "path": "note.txt" });
+            let first = read_tool
+                .execute("read-1", read_input.clone(), None)
+                .await
+                .expect("first read");
+            assert!(first_text(&first).contains("alpha"));
+
+            let hits_before = tool_output_cache_stats_for_tests().hits;
+            let second = read_tool
+                .execute("read-2", read_input.clone(), None)
+                .await
+                .expect("cached read");
+            assert_eq!(first_text(&first), first_text(&second));
+            assert!(tool_output_cache_stats_for_tests().hits > hits_before);
+
+            let invalidations_before = tool_output_cache_stats_for_tests().invalidations;
+            std::fs::write(&note, "beta\n").expect("rewrite note");
+            let third = read_tool
+                .execute("read-3", read_input.clone(), None)
+                .await
+                .expect("invalidated read");
+            assert!(first_text(&third).contains("beta"));
+            assert!(!first_text(&third).contains("alpha"));
+            assert!(tool_output_cache_stats_for_tests().invalidations > invalidations_before);
+
+            let ls_tool = LsTool::new(tmp.path());
+            let ls_input = serde_json::json!({ "path": "." });
+            let ls_first = ls_tool
+                .execute("ls-1", ls_input.clone(), None)
+                .await
+                .expect("first ls");
+            assert!(first_text(&ls_first).contains("note.txt"));
+            let hits_before = tool_output_cache_stats_for_tests().hits;
+            let ls_second = ls_tool
+                .execute("ls-2", ls_input.clone(), None)
+                .await
+                .expect("cached ls");
+            assert_eq!(first_text(&ls_first), first_text(&ls_second));
+            assert!(tool_output_cache_stats_for_tests().hits > hits_before);
+
+            let invalidations_before = tool_output_cache_stats_for_tests().invalidations;
+            std::fs::write(tmp.path().join("new.txt"), "new\n").expect("write new file");
+            let ls_third = ls_tool
+                .execute("ls-3", ls_input.clone(), None)
+                .await
+                .expect("invalidated ls");
+            assert!(first_text(&ls_third).contains("new.txt"));
+            assert!(tool_output_cache_stats_for_tests().invalidations > invalidations_before);
+
+            if find_rg_binary().is_some() {
+                let grep_tool = GrepTool::new(tmp.path());
+                let grep_input = serde_json::json!({ "pattern": "needle", "path": "." });
+                std::fs::write(tmp.path().join("a.txt"), "needle\n").expect("write grep file");
+
+                let grep_first = grep_tool
+                    .execute("grep-1", grep_input.clone(), None)
+                    .await
+                    .expect("first grep");
+                assert!(first_text(&grep_first).contains("a.txt"));
+
+                let hits_before = tool_output_cache_stats_for_tests().hits;
+                let grep_second = grep_tool
+                    .execute("grep-2", grep_input.clone(), None)
+                    .await
+                    .expect("cached grep");
+                assert_eq!(first_text(&grep_first), first_text(&grep_second));
+                assert!(tool_output_cache_stats_for_tests().hits > hits_before);
+
+                let invalidations_before = tool_output_cache_stats_for_tests().invalidations;
+                std::fs::write(tmp.path().join("b.txt"), "needle\n").expect("write new match");
+                let grep_third = grep_tool
+                    .execute("grep-3", grep_input.clone(), None)
+                    .await
+                    .expect("invalidated grep");
+                assert!(first_text(&grep_third).contains("b.txt"));
+                assert!(tool_output_cache_stats_for_tests().invalidations > invalidations_before);
+            }
+        });
     }
 
     #[test]
