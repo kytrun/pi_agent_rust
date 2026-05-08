@@ -1744,32 +1744,35 @@ pub async fn run_interactive(
     // PI_NO_MOUSE_CAPTURE so terminal-native copy/paste keeps working
     // (Windows-specific UX win — see pi_agent_rust#78). When disabled,
     // users scroll with Page Up/Down or arrow keys instead.
-    let mut program = Program::new(PiApp::new(
-        agent,
-        session,
-        config,
-        resources,
-        resource_cli,
-        cwd,
-        model_entry,
-        model_scope,
-        available_models,
-        pending_inputs,
-        event_tx,
-        runtime_handle,
-        save_enabled,
-        true,
-        extensions,
-        None,
-        messages,
-        usage,
-    ))
-    .with_alt_screen()
-    .with_input_receiver(ui_rx);
-    if !disable_mouse_capture {
-        program = program.with_mouse_all_motion();
+    {
+        let app = Box::new(PiApp::new(
+            agent,
+            session,
+            config,
+            resources,
+            resource_cli,
+            cwd,
+            model_entry,
+            model_scope,
+            available_models,
+            pending_inputs,
+            event_tx,
+            runtime_handle,
+            save_enabled,
+            true,
+            extensions,
+            None,
+            messages,
+            usage,
+        ));
+        let mut program = Program::new(app)
+            .with_alt_screen()
+            .with_input_receiver(ui_rx);
+        if !disable_mouse_capture {
+            program = program.with_mouse_all_motion();
+        }
+        program.run()?;
     }
-    program.run()?;
 
     // Tell the async bridge to exit promptly even if some background task still
     // holds an event sender clone after the TUI has already shut down.
@@ -2378,6 +2381,20 @@ pub struct PiApp {
     // RAII guard for tmux wheel scroll override (dropped on exit/panic).
     #[allow(dead_code)]
     tmux_wheel_guard: Option<TmuxWheelGuard>,
+}
+
+impl BubbleteaModel for Box<PiApp> {
+    fn init(&self) -> Option<Cmd> {
+        self.as_ref().init()
+    }
+
+    fn update(&mut self, msg: Message) -> Option<Cmd> {
+        self.as_mut().update(msg)
+    }
+
+    fn view(&self) -> String {
+        self.as_ref().view()
+    }
 }
 
 impl PiApp {

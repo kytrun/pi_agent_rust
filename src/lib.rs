@@ -167,6 +167,8 @@ pub mod provider_metadata;
 #[doc(hidden)]
 pub mod providers;
 #[doc(hidden)]
+pub mod resource_governor;
+#[doc(hidden)]
 pub mod resources;
 #[doc(hidden)]
 pub mod rpc;

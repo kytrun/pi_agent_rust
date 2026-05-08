@@ -36,6 +36,9 @@ use crate::hostcall_io_uring_lane::{
     HostcallCapabilityClass, HostcallDispatchLane, HostcallIoHint, IoUringLaneDecisionInput,
     IoUringLanePolicyConfig, decide_io_uring_lane,
 };
+use crate::resource_governor::{
+    AdmissionAction, AdmissionDecision, ResourceGovernor, ResourceOperationKind, ResourceRequest,
+};
 use crate::scheduler::{Clock as SchedulerClock, HostcallOutcome, WallClock};
 use crate::tools::ToolRegistry;
 
@@ -400,6 +403,8 @@ pub struct ExtensionDispatcher<C: SchedulerClock = WallClock> {
     regime_detector: RefCell<RegimeShiftDetector>,
     /// AMAC batch executor for interleaved hostcall dispatch.
     amac_executor: RefCell<AmacBatchExecutor>,
+    /// Host-scale admission and backpressure gate.
+    resource_governor: ResourceGovernor,
 }
 
 /// Runtime bridge trait so dispatcher logic is not hardwired to a concrete runtime type.
@@ -1170,6 +1175,53 @@ fn hostcall_io_hint(kind: &HostcallKind) -> HostcallIoHint {
         | HostcallKind::Events { .. }
         | HostcallKind::Log => HostcallIoHint::CpuBound,
     }
+}
+
+const fn resource_operation_kind(kind: &HostcallKind) -> ResourceOperationKind {
+    match kind {
+        HostcallKind::Tool { .. } => ResourceOperationKind::Tool,
+        HostcallKind::Exec { .. } => ResourceOperationKind::Exec,
+        HostcallKind::Http => ResourceOperationKind::Http,
+        HostcallKind::Session { .. } => ResourceOperationKind::Session,
+        HostcallKind::Ui { .. } => ResourceOperationKind::Ui,
+        HostcallKind::Events { .. } => ResourceOperationKind::Events,
+        HostcallKind::Log => ResourceOperationKind::Log,
+    }
+}
+
+fn estimated_hostcall_output_bytes(request: &HostcallRequest) -> u64 {
+    match &request.kind {
+        HostcallKind::Exec { .. } => crate::tools::READ_TOOL_MAX_BYTES,
+        HostcallKind::Tool { name } => {
+            let name = name.trim();
+            if name.eq_ignore_ascii_case("bash") {
+                crate::tools::READ_TOOL_MAX_BYTES
+            } else if name.eq_ignore_ascii_case("read")
+                || name.eq_ignore_ascii_case("grep")
+                || name.eq_ignore_ascii_case("find")
+                || name.eq_ignore_ascii_case("ls")
+            {
+                output_limit_from_payload(&request.payload)
+                    .unwrap_or(crate::tools::DEFAULT_MAX_BYTES as u64)
+            } else {
+                crate::tools::DEFAULT_MAX_BYTES as u64
+            }
+        }
+        HostcallKind::Http
+        | HostcallKind::Session { .. }
+        | HostcallKind::Ui { .. }
+        | HostcallKind::Events { .. }
+        | HostcallKind::Log => 0,
+    }
+}
+
+fn output_limit_from_payload(payload: &Value) -> Option<u64> {
+    payload
+        .get("max_bytes")
+        .or_else(|| payload.get("maxBytes"))
+        .or_else(|| payload.get("limit_bytes"))
+        .or_else(|| payload.get("limitBytes"))
+        .and_then(Value::as_u64)
 }
 
 const fn hostcall_io_hint_label(io_hint: HostcallIoHint) -> &'static str {
@@ -2060,6 +2112,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
             amac_executor: RefCell::new(
                 AmacBatchExecutor::new(AmacBatchExecutorConfig::from_env()),
             ),
+            resource_governor: ResourceGovernor::from_host(),
         }
     }
 
@@ -2217,6 +2270,70 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
             io_uring_force_compat = self.io_uring_force_compat,
             "Hostcall io_uring bridge dispatch completed"
         );
+    }
+
+    fn build_resource_request(
+        request: &HostcallRequest,
+        capability: &str,
+        queue_depth: usize,
+    ) -> ResourceRequest {
+        ResourceRequest::new(resource_operation_kind(&request.kind), capability)
+            .with_queue_depth(queue_depth)
+            .with_estimated_tool_output_bytes(estimated_hostcall_output_bytes(request))
+    }
+
+    fn emit_resource_governor_telemetry(
+        request: &HostcallRequest,
+        resource_request: &ResourceRequest,
+        decision: &AdmissionDecision,
+    ) {
+        let telemetry = decision.telemetry(resource_request);
+        let telemetry_json = serde_json::to_string(&telemetry)
+            .unwrap_or_else(|err| format!("{{\"error\":\"{err}\"}}"));
+        let action = match decision.action {
+            AdmissionAction::Admit => "admit",
+            AdmissionAction::Backpressure => "backpressure",
+            AdmissionAction::Deny => "deny",
+        };
+        tracing::debug!(
+            target: "pi.resource_governor",
+            call_id = request.call_id,
+            extension_id = %request.extension_id.as_deref().unwrap_or("<none>"),
+            method = request.method(),
+            action,
+            dominant_dimension = ?decision.dominant_dimension,
+            dominant_ratio = decision.dominant_ratio,
+            retry_after_ms = decision.retry_after_ms,
+            telemetry = %telemetry_json,
+            "Host resource governor evaluated hostcall admission"
+        );
+    }
+
+    #[allow(clippy::future_not_send)]
+    async fn apply_resource_governor(
+        &self,
+        request: &HostcallRequest,
+        capability: &str,
+        queue_depth: usize,
+    ) -> Option<HostcallOutcome> {
+        let resource_request = Self::build_resource_request(request, capability, queue_depth);
+        let decision = self.resource_governor.admit(&resource_request);
+        Self::emit_resource_governor_telemetry(request, &resource_request, &decision);
+
+        match decision.action {
+            AdmissionAction::Admit => None,
+            AdmissionAction::Backpressure => {
+                extension_wait_sleep(Duration::from_millis(decision.retry_after_ms)).await;
+                None
+            }
+            AdmissionAction::Deny => Some(HostcallOutcome::Error {
+                code: "resource_exhausted".to_string(),
+                message: format!(
+                    "Host resource governor denied hostcall: {}",
+                    decision.reason
+                ),
+            }),
+        }
     }
 
     const fn advanced_dispatch_enabled(&self) -> bool {
@@ -2449,6 +2566,17 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
             return;
         }
 
+        let queue_snapshot = self.js_runtime().hostcall_queue_telemetry();
+        let queue_depth = queue_snapshot.total_depth.max(1);
+        if let Some(outcome) = self
+            .apply_resource_governor(&request, cap, queue_depth)
+            .await
+        {
+            self.js_runtime()
+                .complete_hostcall(request.call_id, outcome);
+            return;
+        }
+
         if !self.advanced_dispatch_enabled() {
             let outcome = self.dispatch_hostcall_fast(&request).await;
             self.js_runtime()
@@ -2457,16 +2585,10 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
         }
 
         let dispatch_started_at = Instant::now();
-        let mut queue_depth = 1_usize;
-        let mut overflow_depth = 0_usize;
-        let mut overflow_rejected_total = 0_u64;
+        let overflow_depth = queue_snapshot.overflow_depth;
+        let overflow_rejected_total = queue_snapshot.overflow_rejected_total;
 
         let (outcome, lane_for_shadow) = if self.io_uring_lane_active() {
-            let queue_snapshot = self.js_runtime().hostcall_queue_telemetry();
-            queue_depth = queue_snapshot.total_depth;
-            overflow_depth = queue_snapshot.overflow_depth;
-            overflow_rejected_total = queue_snapshot.overflow_rejected_total;
-
             let io_hint = hostcall_io_hint(&request.kind);
             let capability_class = HostcallCapabilityClass::from_capability(cap);
             let lane_decision = decide_io_uring_lane(

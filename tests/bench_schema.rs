@@ -140,6 +140,10 @@ const SCHEMAS: &[(&str, &str)] = &[
         "pi.perf.phase1_matrix_validation.v1",
         "Phase-1 realistic/matched-state matrix validation with stage attribution and release-gate readiness",
     ),
+    (
+        "pi.resource_governor.admission.v1",
+        "Host-scale resource-governor admission decision telemetry for swarm pressure control",
+    ),
 ];
 
 /// Required fields for each schema (field name, description).
@@ -184,6 +188,7 @@ const CONFIDENCE_MEDIUM: &str = "medium";
 const CONFIDENCE_LOW: &str = "low";
 const EXT_STRATIFICATION_SCHEMA: &str = "pi.perf.extension_benchmark_stratification.v1";
 const PHASE1_MATRIX_SCHEMA: &str = "pi.perf.phase1_matrix_validation.v1";
+const RESOURCE_GOVERNOR_ADMISSION_SCHEMA: &str = "pi.resource_governor.admission.v1";
 const REALISTIC_SESSION_SIZES: &[u64] = &[100_000, 200_000, 500_000, 1_000_000, 5_000_000];
 const USER_PERCEIVED_SLI_IDS: &[&str] = &[
     "interactive_turn_p95_ms",
@@ -737,6 +742,125 @@ fn collect_string_set(value: &Value, context: &str) -> Result<BTreeSet<String>, 
         }
     }
     Ok(set)
+}
+
+fn validate_resource_governor_admission_record(record: &Value) -> Result<(), String> {
+    let schema = record
+        .get("schema")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "resource governor record missing schema".to_string())?;
+    if schema != RESOURCE_GOVERNOR_ADMISSION_SCHEMA {
+        return Err(format!(
+            "resource governor schema must be {RESOURCE_GOVERNOR_ADMISSION_SCHEMA}, got: {schema}"
+        ));
+    }
+
+    let request = record
+        .get("request")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "resource governor request must be an object".to_string())?;
+    for field in [
+        "operation",
+        "capability",
+        "estimated_tool_output_bytes",
+        "queue_depth",
+    ] {
+        if !request.contains_key(field) {
+            return Err(format!("resource governor request missing {field}"));
+        }
+    }
+    let operation = request
+        .get("operation")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "resource governor request.operation must be a string".to_string())?;
+    if ![
+        "tool", "exec", "http", "session", "ui", "events", "log", "unknown",
+    ]
+    .contains(&operation)
+    {
+        return Err(format!(
+            "resource governor request.operation has unknown value: {operation}"
+        ));
+    }
+    let capability = request
+        .get("capability")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "resource governor request.capability must be a string".to_string())?;
+    if capability.trim().is_empty() {
+        return Err("resource governor request.capability must not be empty".to_string());
+    }
+    for field in ["estimated_tool_output_bytes", "queue_depth"] {
+        let Some(value) = request.get(field).and_then(Value::as_u64) else {
+            return Err(format!(
+                "resource governor request.{field} must be an integer"
+            ));
+        };
+        if field == "queue_depth" && value == 0 {
+            return Err("resource governor request.queue_depth must be positive".to_string());
+        }
+    }
+
+    let decision = record
+        .get("decision")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "resource governor decision must be an object".to_string())?;
+    for field in [
+        "action",
+        "dominant_dimension",
+        "dominant_ratio",
+        "reason",
+        "retry_after_ms",
+        "sample",
+        "budgets",
+    ] {
+        if !decision.contains_key(field) {
+            return Err(format!("resource governor decision missing {field}"));
+        }
+    }
+    let action = decision
+        .get("action")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "resource governor decision.action must be a string".to_string())?;
+    if !["admit", "backpressure", "deny"].contains(&action) {
+        return Err(format!(
+            "resource governor decision.action has unknown value: {action}"
+        ));
+    }
+    let dominant_ratio = decision
+        .get("dominant_ratio")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| "resource governor decision.dominant_ratio must be numeric".to_string())?;
+    if !dominant_ratio.is_finite() || dominant_ratio < 0.0 {
+        return Err(
+            "resource governor decision.dominant_ratio must be finite and non-negative".to_string(),
+        );
+    }
+    if !decision
+        .get("sample")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        return Err("resource governor decision.sample must be an object".to_string());
+    }
+    let budgets = decision
+        .get("budgets")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "resource governor decision.budgets must be an object".to_string())?;
+    for field in [
+        "cpu_cores",
+        "max_load_avg_1m",
+        "max_rss_bytes",
+        "max_processes",
+        "max_fds",
+        "max_tool_output_bytes",
+        "backpressure_ratio",
+        "deny_ratio",
+    ] {
+        if !budgets.contains_key(field) {
+            return Err(format!("resource governor budgets missing {field}"));
+        }
+    }
+
+    Ok(())
 }
 
 fn require_string_array_eq(
@@ -3028,6 +3152,40 @@ fn schema_registry_is_complete() {
         );
     }
     eprintln!("[schema] {} schemas registered", SCHEMAS.len());
+}
+
+#[test]
+fn resource_governor_admission_schema_accepts_live_decision_payload() {
+    let budgets = pi::resource_governor::HostResourceBudgets::fixed(10.0, 1_000, 100, 100, 1_000);
+    let governor = pi::resource_governor::ResourceGovernor::with_budgets(budgets);
+    let request = pi::resource_governor::ResourceRequest::new(
+        pi::resource_governor::ResourceOperationKind::Tool,
+        "read",
+    )
+    .with_queue_depth(4)
+    .with_estimated_tool_output_bytes(900);
+    let sample = pi::resource_governor::HostResourceSample {
+        load_avg_1m: Some(2.0),
+        rss_bytes: Some(200),
+        process_count: Some(20),
+        fd_count: Some(20),
+    };
+    let decision = governor.admit_sample(&request, sample);
+    let telemetry = decision.telemetry(&request);
+
+    validate_resource_governor_admission_record(&telemetry)
+        .expect("resource governor admission telemetry should validate");
+    assert_eq!(
+        telemetry.get("schema").and_then(Value::as_str),
+        Some(RESOURCE_GOVERNOR_ADMISSION_SCHEMA)
+    );
+    assert_eq!(
+        telemetry
+            .get("decision")
+            .and_then(|value| value.get("action"))
+            .and_then(Value::as_str),
+        Some("backpressure")
+    );
 }
 
 #[test]
