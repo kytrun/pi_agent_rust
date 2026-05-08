@@ -11956,6 +11956,19 @@ fn params_without_key(params: &Value, key: &str) -> Value {
 // Hostcall Reactor Mesh (bd-3ar8v.4.20)
 // ============================================================================
 
+const HOSTCALL_REACTOR_DEFAULT_LANE_CAPACITY: usize = 256;
+const HOSTCALL_REACTOR_MAX_SHARDS: usize = 64;
+const HOSTCALL_REACTOR_MAX_LANE_CAPACITY: usize = 4096;
+const HOSTCALL_REACTOR_PRESSURE_NUMERATOR: usize = 3;
+const HOSTCALL_REACTOR_PRESSURE_DENOMINATOR: usize = 4;
+const HOSTCALL_REACTOR_LATENCY_WINDOW: usize = 128;
+
+fn hostcall_reactor_now_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+}
+
 /// Configuration for the core-pinned hostcall reactor mesh.
 #[derive(Debug, Clone)]
 pub struct HostcallReactorConfig {
@@ -11968,13 +11981,64 @@ pub struct HostcallReactorConfig {
     pub core_ids: Option<Vec<usize>>,
 }
 
-impl Default for HostcallReactorConfig {
-    fn default() -> Self {
+impl HostcallReactorConfig {
+    /// Size a reactor from the current host parallelism with no prior pressure data.
+    #[must_use]
+    pub fn auto_sized() -> Self {
+        Self::auto_sized_for(
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+            None,
+        )
+    }
+
+    /// Size a reactor from available parallelism and optional queue-pressure telemetry.
+    #[must_use]
+    pub fn auto_sized_for(
+        parallelism: usize,
+        telemetry: Option<&HostcallReactorTelemetry>,
+    ) -> Self {
+        let parallelism = parallelism.max(1);
+        let max_shards = parallelism.clamp(1, HOSTCALL_REACTOR_MAX_SHARDS);
+        let base_shards = parallelism.div_ceil(2).clamp(1, max_shards);
+        let mut shard_count = base_shards;
+        let mut lane_capacity = HOSTCALL_REACTOR_DEFAULT_LANE_CAPACITY;
+
+        if let Some(telemetry) = telemetry {
+            let observed_capacity = telemetry.lane_capacity.max(1);
+            lane_capacity = observed_capacity.clamp(
+                HOSTCALL_REACTOR_DEFAULT_LANE_CAPACITY,
+                HOSTCALL_REACTOR_MAX_LANE_CAPACITY,
+            );
+            let max_depth = telemetry
+                .max_queue_depths
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0);
+            let pressure = telemetry.rejected_enqueues > 0
+                || max_depth.saturating_mul(HOSTCALL_REACTOR_PRESSURE_DENOMINATOR)
+                    >= observed_capacity.saturating_mul(HOSTCALL_REACTOR_PRESSURE_NUMERATOR);
+
+            if pressure {
+                shard_count = max_shards;
+                lane_capacity = observed_capacity.saturating_mul(2).clamp(
+                    HOSTCALL_REACTOR_DEFAULT_LANE_CAPACITY,
+                    HOSTCALL_REACTOR_MAX_LANE_CAPACITY,
+                );
+            }
+        }
+
         Self {
-            shard_count: 4,
-            lane_capacity: 256,
+            shard_count,
+            lane_capacity,
             core_ids: None,
         }
+    }
+}
+
+impl Default for HostcallReactorConfig {
+    fn default() -> Self {
+        Self::auto_sized()
     }
 }
 
@@ -12025,6 +12089,7 @@ struct HostcallSpscLane {
     queue: std::collections::VecDeque<HostcallReactorRequest>,
     max_depth: usize,
     total_enqueued: u64,
+    dispatch_latency_ns_samples: std::collections::VecDeque<u64>,
 }
 
 impl HostcallSpscLane {
@@ -12034,6 +12099,9 @@ impl HostcallSpscLane {
             queue: std::collections::VecDeque::with_capacity(capacity),
             max_depth: 0,
             total_enqueued: 0,
+            dispatch_latency_ns_samples: std::collections::VecDeque::with_capacity(
+                HOSTCALL_REACTOR_LATENCY_WINDOW,
+            ),
         }
     }
 
@@ -12051,19 +12119,58 @@ impl HostcallSpscLane {
         Ok(())
     }
 
-    fn pop(&mut self) -> Option<HostcallReactorRequest> {
-        self.queue.pop_front()
+    fn record_latency_ns(&mut self, latency_ns: u64) {
+        if self.dispatch_latency_ns_samples.len() >= HOSTCALL_REACTOR_LATENCY_WINDOW {
+            self.dispatch_latency_ns_samples.pop_front();
+        }
+        self.dispatch_latency_ns_samples.push_back(latency_ns);
     }
 
-    fn drain_batch(&mut self, budget: usize) -> Vec<HostcallReactorRequest> {
+    fn pop_recording_latency(&mut self, now_ns: u64) -> Option<HostcallReactorRequest> {
+        let req = self.queue.pop_front()?;
+        self.record_latency_ns(now_ns.saturating_sub(req.enqueued_at_ns));
+        Some(req)
+    }
+
+    fn record_completion(&mut self, global_seq: u64, now_ns: u64) -> bool {
+        let Some(pos) = self
+            .queue
+            .iter()
+            .position(|req| req.global_seq == global_seq)
+        else {
+            return false;
+        };
+        let Some(req) = self.queue.remove(pos) else {
+            return false;
+        };
+        self.record_latency_ns(now_ns.saturating_sub(req.enqueued_at_ns));
+        true
+    }
+
+    fn drain_batch(&mut self, budget: usize, now_ns: u64) -> Vec<HostcallReactorRequest> {
         let n = budget.min(self.queue.len());
         let mut batch = Vec::with_capacity(n);
         for _ in 0..n {
-            if let Some(req) = self.queue.pop_front() {
+            if let Some(req) = self.pop_recording_latency(now_ns) {
                 batch.push(req);
             }
         }
         batch
+    }
+
+    fn latency_percentile_ns(&self, percentile_bps: usize) -> u64 {
+        if self.dispatch_latency_ns_samples.is_empty() {
+            return 0;
+        }
+        let mut samples: Vec<u64> = self.dispatch_latency_ns_samples.iter().copied().collect();
+        samples.sort_unstable();
+        let idx = samples
+            .len()
+            .saturating_sub(1)
+            .saturating_mul(percentile_bps)
+            .div_ceil(10_000)
+            .min(samples.len().saturating_sub(1));
+        samples[idx]
     }
 }
 
@@ -12071,11 +12178,17 @@ impl HostcallSpscLane {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HostcallReactorTelemetry {
     pub shard_count: usize,
+    pub lane_capacity: usize,
     pub queue_depths: Vec<usize>,
     pub max_queue_depths: Vec<usize>,
     pub total_enqueued: Vec<u64>,
     pub rejected_enqueues: u64,
     pub total_dispatched: u64,
+    pub lane_dispatch_latency_p95_ns: Vec<u64>,
+    pub lane_dispatch_latency_p99_ns: Vec<u64>,
+    pub overloaded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overload_reason: Option<String>,
     /// Whether a NUMA slab pool is active.
     pub numa_pool_active: bool,
     /// Number of thread affinity advisories available.
@@ -12220,13 +12333,41 @@ impl HostcallReactorMesh {
     /// Snapshot queueing telemetry.
     #[must_use]
     pub fn telemetry(&self) -> HostcallReactorTelemetry {
+        let overload_reason = if self.rejected_enqueues > 0 {
+            Some("rejected_enqueues".to_string())
+        } else if self.lanes.iter().any(|lane| {
+            lane.capacity > 0
+                && lane
+                    .max_depth
+                    .saturating_mul(HOSTCALL_REACTOR_PRESSURE_DENOMINATOR)
+                    >= lane
+                        .capacity
+                        .saturating_mul(HOSTCALL_REACTOR_PRESSURE_NUMERATOR)
+        }) {
+            Some("queue_pressure".to_string())
+        } else {
+            None
+        };
         HostcallReactorTelemetry {
             shard_count: self.lanes.len(),
+            lane_capacity: self.config.lane_capacity,
             queue_depths: self.lanes.iter().map(HostcallSpscLane::len).collect(),
             max_queue_depths: self.lanes.iter().map(|l| l.max_depth).collect(),
             total_enqueued: self.lanes.iter().map(|l| l.total_enqueued).collect(),
             rejected_enqueues: self.rejected_enqueues,
             total_dispatched: self.total_dispatched,
+            lane_dispatch_latency_p95_ns: self
+                .lanes
+                .iter()
+                .map(|lane| lane.latency_percentile_ns(9_500))
+                .collect(),
+            lane_dispatch_latency_p99_ns: self
+                .lanes
+                .iter()
+                .map(|lane| lane.latency_percentile_ns(9_900))
+                .collect(),
+            overloaded: overload_reason.is_some(),
+            overload_reason,
             numa_pool_active: self.numa_pool.is_some(),
             affinity_advisory_count: self.affinity_advice.len(),
         }
@@ -12320,9 +12461,7 @@ impl HostcallReactorMesh {
         let shard_id = self.route_for_opcode(opcode, &call_id);
         let global_seq = self.next_global_seq();
         let shard_seq = self.next_shard_seq(shard_id);
-        let now_ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
+        let now_ns = hostcall_reactor_now_ns();
 
         let request = HostcallReactorRequest {
             call_id,
@@ -12360,7 +12499,7 @@ impl HostcallReactorMesh {
         let Some(lane) = self.lanes.get_mut(shard_id) else {
             return Vec::new();
         };
-        let batch = lane.drain_batch(budget);
+        let batch = lane.drain_batch(budget, hostcall_reactor_now_ns());
         self.total_dispatched = self
             .total_dispatched
             .saturating_add(u64::try_from(batch.len()).unwrap_or(0));
@@ -12385,7 +12524,8 @@ impl HostcallReactorMesh {
             let Some(lane_idx) = best_lane else {
                 break;
             };
-            if let Some(req) = self.lanes[lane_idx].pop() {
+            if let Some(req) = self.lanes[lane_idx].pop_recording_latency(hostcall_reactor_now_ns())
+            {
                 drained.push(req);
             }
         }
@@ -12398,6 +12538,18 @@ impl HostcallReactorMesh {
     /// Record that a batch of completions was produced by shard processing.
     pub const fn record_completions(&mut self, count: u64) {
         self.total_dispatched = self.total_dispatched.saturating_add(count);
+    }
+
+    /// Record completion of a directly dispatched hostcall and clear its queue slot.
+    pub(crate) fn record_completion(&mut self, shard_id: usize, global_seq: u64) -> bool {
+        let Some(lane) = self.lanes.get_mut(shard_id) else {
+            return false;
+        };
+        let completed = lane.record_completion(global_seq, hostcall_reactor_now_ns());
+        if completed {
+            self.total_dispatched = self.total_dispatched.saturating_add(1);
+        }
+        completed
     }
 }
 
@@ -21601,8 +21753,9 @@ async fn dispatch_shared_allowed(
                 );
             };
             // Record reactor mesh routing for shard telemetry (bd-3ar8v.4.20).
-            // The reactor mesh assigns a shard for this opcode; actual parallel
-            // execution on shard threads is activated via enable_hostcall_reactor().
+            // The reactor mesh assigns a shard for this opcode and uses completions
+            // to keep queue-depth and dispatch-latency telemetry tied to real work.
+            let mut reactor_completion: Option<(usize, u64)> = None;
             if let Some(ref manager) = ctx.manager {
                 match manager.reactor_submit(
                     call.call_id.clone(),
@@ -21619,6 +21772,7 @@ async fn dispatch_shared_allowed(
                             opcode = opcode.code(),
                             "Hostcall routed through reactor mesh"
                         );
+                        reactor_completion = Some((reactor_req.shard_id, reactor_req.global_seq));
                     }
                     Some(Err(backpressure)) => {
                         tracing::warn!(
@@ -21629,7 +21783,7 @@ async fn dispatch_shared_allowed(
                             queue_capacity = backpressure.capacity,
                             opcode = opcode.code(),
                             stall_reason = "lane_overflow",
-                            "Hostcall reactor lane saturated; dispatch continues on shared fast lane"
+                            "Hostcall reactor lane saturated; dispatching through conservative compat lane"
                         );
                         manager.record_budget_overload_signal(
                             ctx.extension_id,
@@ -21637,11 +21791,31 @@ async fn dispatch_shared_allowed(
                             Some(backpressure.depth),
                             Some(backpressure.capacity),
                         );
+                        let outcome = dispatch_shared_allowed_legacy(ctx, call).await;
+                        let dispatch_latency_ms =
+                            u64::try_from(dispatch_started_at.elapsed().as_millis())
+                                .unwrap_or(u64::MAX);
+                        return (
+                            outcome,
+                            Some(HostcallLaneExecution {
+                                lane: HostcallDispatchLane::Compat,
+                                decision_reason: "reactor_lane_overflow".to_string(),
+                                fallback_reason: Some("reactor_lane_overflow".to_string()),
+                                matrix_key: lane.matrix_key,
+                                dispatch_latency_ms,
+                            }),
+                        );
                     }
                     None => {}
                 }
             }
-            dispatch_shared_allowed_fast(ctx, call, opcode).await
+            let outcome = dispatch_shared_allowed_fast(ctx, call, opcode).await;
+            if let (Some(manager), Some((shard_id, global_seq))) =
+                (ctx.manager.as_ref(), reactor_completion.as_ref())
+            {
+                manager.reactor_record_completion(*shard_id, *global_seq);
+            }
+            outcome
         }
         HostcallDispatchLane::Compat => dispatch_shared_allowed_legacy(ctx, call).await,
     };
@@ -26838,6 +27012,34 @@ impl ExtensionManager {
         let result = reactor.submit(call_id, opcode, params);
         drop(guard);
         Some(result)
+    }
+
+    /// Record completion for a fast-lane hostcall that was dispatched directly.
+    pub(crate) fn reactor_record_completion(&self, shard_id: usize, global_seq: u64) -> bool {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|mut guard| {
+                guard
+                    .hostcall_reactor
+                    .as_mut()
+                    .map(|r| r.record_completion(shard_id, global_seq))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Re-enable the reactor with sizing derived from host parallelism and current telemetry.
+    ///
+    /// Returns the applied configuration, or `None` if no reactor is currently enabled.
+    #[must_use]
+    pub fn retune_hostcall_reactor_from_telemetry(&self) -> Option<HostcallReactorConfig> {
+        let telemetry = self.reactor_telemetry()?;
+        let config = HostcallReactorConfig::auto_sized_for(
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+            Some(&telemetry),
+        );
+        self.enable_hostcall_reactor(config.clone());
+        Some(config)
     }
 
     /// Drain pending requests from a specific reactor shard.
@@ -41186,6 +41388,40 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
+    fn reactor_config_auto_sizes_from_parallelism_and_pressure() {
+        let baseline = HostcallReactorConfig::auto_sized_for(8, None);
+        assert_eq!(baseline.shard_count, 4);
+        assert_eq!(
+            baseline.lane_capacity,
+            HOSTCALL_REACTOR_DEFAULT_LANE_CAPACITY
+        );
+
+        let mut mesh = HostcallReactorMesh::new(HostcallReactorConfig {
+            shard_count: 1,
+            lane_capacity: 512,
+            core_ids: None,
+        });
+        for i in 0..512 {
+            mesh.submit(
+                format!("pressure-{i}"),
+                CommonHostcallOpcode::SessionGetState,
+                json!({}),
+            )
+            .expect("fill lane");
+        }
+        mesh.submit(
+            "pressure-overflow".to_string(),
+            CommonHostcallOpcode::SessionGetState,
+            json!({}),
+        )
+        .expect_err("full lane should reject");
+
+        let pressured = HostcallReactorConfig::auto_sized_for(8, Some(&mesh.telemetry()));
+        assert_eq!(pressured.shard_count, 8);
+        assert_eq!(pressured.lane_capacity, 1024);
+    }
+
+    #[test]
     fn reactor_mesh_hash_routing_preserves_shard_affinity() {
         let mut mesh = HostcallReactorMesh::new(HostcallReactorConfig {
             shard_count: 8,
@@ -41274,6 +41510,8 @@ mod tests {
         let telem = mesh.telemetry();
         assert_eq!(telem.rejected_enqueues, 1);
         assert_eq!(telem.queue_depths, vec![2]);
+        assert!(telem.overloaded);
+        assert_eq!(telem.overload_reason.as_deref(), Some("rejected_enqueues"));
     }
 
     #[test]
@@ -41360,13 +41598,44 @@ mod tests {
 
         let telem = mesh.telemetry();
         assert_eq!(telem.shard_count, 2);
+        assert_eq!(telem.lane_capacity, 64);
         let total_enqueued: u64 = telem.total_enqueued.iter().sum();
         assert_eq!(total_enqueued, 5);
         assert_eq!(telem.total_dispatched, 0);
+        assert_eq!(telem.lane_dispatch_latency_p95_ns, vec![0, 0]);
+        assert_eq!(telem.lane_dispatch_latency_p99_ns, vec![0, 0]);
 
         mesh.drain_global_order(3);
         let telem2 = mesh.telemetry();
         assert_eq!(telem2.total_dispatched, 3);
+        assert_eq!(telem2.lane_dispatch_latency_p95_ns.len(), 2);
+        assert_eq!(telem2.lane_dispatch_latency_p99_ns.len(), 2);
+    }
+
+    #[test]
+    fn reactor_mesh_completion_clears_lane_and_records_latency() {
+        let mut mesh = HostcallReactorMesh::new(HostcallReactorConfig {
+            shard_count: 1,
+            lane_capacity: 4,
+            core_ids: None,
+        });
+
+        let req = mesh
+            .submit(
+                "complete-fast".to_string(),
+                CommonHostcallOpcode::ToolRead,
+                json!({}),
+            )
+            .expect("submit");
+        assert_eq!(mesh.total_depth(), 1);
+
+        assert!(mesh.record_completion(req.shard_id, req.global_seq));
+
+        let telemetry = mesh.telemetry();
+        assert_eq!(telemetry.queue_depths, vec![0]);
+        assert_eq!(telemetry.total_dispatched, 1);
+        assert_eq!(telemetry.lane_dispatch_latency_p95_ns.len(), 1);
+        assert_eq!(telemetry.lane_dispatch_latency_p99_ns.len(), 1);
     }
 
     #[test]
@@ -42111,10 +42380,80 @@ mod tests {
             Some("forced_compat_budget_controller")
         );
 
-        match outcome {
-            HostcallOutcome::Success(_) => {}
-            other => panic!(),
-        }
+        assert!(
+            matches!(outcome, HostcallOutcome::Success(_)),
+            "expected successful compat dispatch, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn dispatch_shared_allowed_reactor_overflow_uses_conservative_lane() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("lane_reactor_overflow.txt");
+        std::fs::write(&file, "lane-reactor-overflow").expect("write test file");
+
+        let tools = ToolRegistry::new(&["read"], dir.path(), None);
+        let http = HttpConnector::with_defaults();
+        let policy = permissive_policy();
+        let manager = ExtensionManager::new();
+        manager.set_budget_controller_config(ExtensionBudgetControllerConfig {
+            enabled: true,
+            tier: ExtensionBudgetTier::Balanced,
+            overload_window_ms: 10_000,
+            overload_signals_to_fallback: 1,
+            recovery_successes_to_exit: 5,
+            ..Default::default()
+        });
+        manager.enable_hostcall_reactor(HostcallReactorConfig {
+            shard_count: 1,
+            lane_capacity: 1,
+            core_ids: None,
+        });
+        manager
+            .reactor_submit(
+                "prefill-overflow-lane".to_string(),
+                CommonHostcallOpcode::ToolRead,
+                json!({}),
+            )
+            .expect("reactor enabled")
+            .expect("prefill lane");
+
+        let ctx = HostCallContext {
+            runtime_name: "test",
+            extension_id: Some("ext.reactor.overflow"),
+            tools: &tools,
+            http: &http,
+            manager: Some(manager.clone()),
+            policy: &policy,
+            js_runtime: None,
+            interceptor: None,
+        };
+
+        let payload =
+            typed_tool_read_payload("lane-reactor-overflow", file.to_str().expect("utf-8 path"));
+        let (outcome, lane_meta) =
+            run_async(async { dispatch_shared_allowed(&ctx, &payload).await });
+        let lane_meta = lane_meta.expect("lane metadata");
+        assert_eq!(lane_meta.lane, HostcallDispatchLane::Compat);
+        assert_eq!(lane_meta.decision_reason, "reactor_lane_overflow");
+        assert_eq!(
+            lane_meta.fallback_reason.as_deref(),
+            Some("reactor_lane_overflow")
+        );
+        assert_eq!(
+            manager.hostcall_compat_kill_switch_reason(Some("ext.reactor.overflow")),
+            Some("forced_compat_budget_controller")
+        );
+
+        let telemetry = manager.reactor_telemetry().expect("telemetry");
+        assert_eq!(telemetry.queue_depths, vec![1]);
+        assert_eq!(telemetry.rejected_enqueues, 1);
+        assert!(telemetry.overloaded);
+
+        assert!(
+            matches!(outcome, HostcallOutcome::Success(_)),
+            "expected successful compat dispatch, got {outcome:?}"
+        );
     }
 
     // ── Regime-shift detector (CUSUM/BOCPD) tests ─────────────────────
