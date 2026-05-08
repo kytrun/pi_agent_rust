@@ -60,6 +60,15 @@ struct Args {
     /// Output report path (JSON).
     #[arg(long)]
     report_path: Option<PathBuf>,
+    /// Output event stream path (JSONL).
+    #[arg(long)]
+    events_path: Option<PathBuf>,
+    /// Stable run ID for evidence lineage.
+    #[arg(long)]
+    run_id: Option<String>,
+    /// Shared correlation ID for multi-artifact evidence lineage.
+    #[arg(long)]
+    correlation_id: Option<String>,
     /// Enable reactor diagnostics (queue depth, stall reasons, migration events).
     #[arg(long, default_value_t = true, action = ArgAction::Set)]
     reactor_enabled: bool,
@@ -112,7 +121,19 @@ async fn run(args: Args) -> Result<()> {
     let payloads_path = args
         .event_payloads_path
         .unwrap_or_else(default_event_payloads_path);
-    let report_path = args.report_path.unwrap_or_else(default_report_path);
+    let report_path = args.report_path.clone().unwrap_or_else(default_report_path);
+    let events_path = args.events_path.clone().unwrap_or_else(default_events_path);
+    let run_id = args
+        .run_id
+        .as_deref()
+        .map(str::to_owned)
+        .unwrap_or_else(default_run_id);
+    let correlation_id = args
+        .correlation_id
+        .as_deref()
+        .map(str::to_owned)
+        .or_else(|| std::env::var("CI_CORRELATION_ID").ok())
+        .unwrap_or_else(|| format!("ext-stress-{run_id}"));
 
     let mut entries = extensions_by_tier(&manifest_path, &args.tier)?;
     if let Some(max) = args.max_extensions {
@@ -216,10 +237,19 @@ async fn run(args: Args) -> Result<()> {
         .await?;
         (result, None)
     };
+    let latency_summary = summarize_us(&run_result.latencies_us);
+    let logical_cpus = std::thread::available_parallelism().map_or(1, usize::from);
 
     let report = serde_json::json!({
         "schema": "pi.ext.stress_profile.v1",
+        "run_id": run_id,
+        "correlation_id": correlation_id,
         "generated_at": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        "events_path": events_path.display().to_string(),
+        "host": {
+            "logical_cpus": logical_cpus,
+            "target_class": if logical_cpus >= 64 { "64plus_cpu" } else { "below_64_cpu" },
+        },
         "config": {
             "tier": args.tier,
             "event": args.event,
@@ -241,13 +271,22 @@ async fn run(args: Args) -> Result<()> {
             "names": names,
         },
         "rss": {
-            "initial_kb": run_result.initial_rss_kb,
-            "max_kb": run_result.max_rss_kb,
+            "initial_bytes": run_result.initial_rss_bytes,
+            "max_bytes": run_result.max_rss_bytes,
+            "initial_kib": bytes_to_kib(run_result.initial_rss_bytes),
+            "max_kib": bytes_to_kib(run_result.max_rss_bytes),
+            "initial_kb": bytes_to_kib(run_result.initial_rss_bytes),
+            "max_kb": bytes_to_kib(run_result.max_rss_bytes),
             "growth_pct": run_result.rss_growth_pct,
-            "samples": run_result.rss_samples,
+            "samples": run_result.resource_samples_json(),
+        },
+        "cpu": {
+            "process_max_pct": run_result.max_cpu_usage_pct,
+            "process_mean_pct": run_result.mean_cpu_usage_pct(),
+            "samples": run_result.resource_samples_json(),
         },
         "latency_us": {
-            "summary": summarize_us(&run_result.latencies_us),
+            "summary": latency_summary,
             "p99_first": run_result.p99_first,
             "p99_last": run_result.p99_last,
         },
@@ -264,6 +303,8 @@ async fn run(args: Args) -> Result<()> {
             "overall": run_result.rss_ok && run_result.latency_ok,
         }
     });
+
+    write_events_jsonl(&events_path, &report, &run_result).await?;
 
     if let Some(parent) = report_path.parent() {
         asupersync::fs::create_dir_all(parent)
@@ -286,10 +327,11 @@ async fn run(args: Args) -> Result<()> {
 }
 
 struct RunResult {
-    initial_rss_kb: u64,
-    max_rss_kb: u64,
+    initial_rss_bytes: u64,
+    max_rss_bytes: u64,
     rss_growth_pct: Option<f64>,
-    rss_samples: Vec<Value>,
+    resource_samples: Vec<ResourceSample>,
+    max_cpu_usage_pct: f32,
     latencies_us: Vec<u64>,
     p99_first: Option<u64>,
     p99_last: Option<u64>,
@@ -299,6 +341,47 @@ struct RunResult {
     rss_ok: bool,
     latency_ok: bool,
     reactor: Value,
+}
+
+impl RunResult {
+    #[allow(clippy::cast_precision_loss)]
+    fn mean_cpu_usage_pct(&self) -> Option<f64> {
+        if self.resource_samples.is_empty() {
+            return None;
+        }
+        let total = self
+            .resource_samples
+            .iter()
+            .map(|sample| f64::from(sample.process_cpu_pct))
+            .sum::<f64>();
+        Some(total / self.resource_samples.len() as f64)
+    }
+
+    fn resource_samples_json(&self) -> Vec<Value> {
+        self.resource_samples
+            .iter()
+            .map(ResourceSample::to_json)
+            .collect()
+    }
+}
+
+#[derive(Clone)]
+struct ResourceSample {
+    t_s: u64,
+    rss_bytes: u64,
+    process_cpu_pct: f32,
+}
+
+impl ResourceSample {
+    fn to_json(&self) -> Value {
+        serde_json::json!({
+            "t_s": self.t_s,
+            "rss_bytes": self.rss_bytes,
+            "rss_kib": bytes_to_kib(self.rss_bytes),
+            "rss_kb": bytes_to_kib(self.rss_bytes),
+            "process_cpu_pct": self.process_cpu_pct,
+        })
+    }
 }
 
 fn configure_reactor(
@@ -373,12 +456,22 @@ async fn run_loop(
     let mut next_event = start;
 
     let pid = get_current_pid().map_err(|err| anyhow::anyhow!(err))?;
-    let refresh = ProcessRefreshKind::nothing().with_memory();
+    let refresh = ProcessRefreshKind::nothing().with_memory().with_cpu();
     let mut system = System::new_with_specifics(RefreshKind::nothing().with_processes(refresh));
     system.refresh_processes_specifics(sysinfo::ProcessesToUpdate::Some(&[pid]), true, refresh);
-    let initial_rss_kb = system.process(pid).map_or(0, sysinfo::Process::memory);
-    let mut max_rss_kb = initial_rss_kb;
-    let mut rss_samples: Vec<Value> = Vec::new();
+    let initial_rss_bytes = system.process(pid).map_or(0, sysinfo::Process::memory);
+    let initial_cpu_usage_pct = system.process(pid).map_or(0.0, sysinfo::Process::cpu_usage);
+    let mut max_rss_bytes = initial_rss_bytes;
+    let mut max_cpu_usage_pct = initial_cpu_usage_pct;
+    let mut resource_samples = if collect {
+        vec![ResourceSample {
+            t_s: 0,
+            rss_bytes: initial_rss_bytes,
+            process_cpu_pct: initial_cpu_usage_pct,
+        }]
+    } else {
+        Vec::new()
+    };
     let mut next_rss = if rss_interval_secs == 0 {
         None
     } else {
@@ -429,15 +522,20 @@ async fn run_loop(
                     refresh,
                 );
                 if let Some(process) = system.process(pid) {
-                    let rss_kb = process.memory();
-                    if rss_kb > max_rss_kb {
-                        max_rss_kb = rss_kb;
+                    let rss_bytes = process.memory();
+                    let process_cpu_pct = process.cpu_usage();
+                    if rss_bytes > max_rss_bytes {
+                        max_rss_bytes = rss_bytes;
+                    }
+                    if process_cpu_pct > max_cpu_usage_pct {
+                        max_cpu_usage_pct = process_cpu_pct;
                     }
                     if collect {
-                        rss_samples.push(serde_json::json!({
-                            "t_s": start.elapsed().as_secs(),
-                            "rss_kb": rss_kb,
-                        }));
+                        resource_samples.push(ResourceSample {
+                            t_s: start.elapsed().as_secs(),
+                            rss_bytes,
+                            process_cpu_pct,
+                        });
                     }
                 }
                 if collect {
@@ -454,9 +552,10 @@ async fn run_loop(
         (None, None)
     };
 
-    let rss_growth_pct = if initial_rss_kb > 0 {
+    let rss_growth_pct = if initial_rss_bytes > 0 {
         #[allow(clippy::cast_precision_loss)]
-        let growth = (max_rss_kb.saturating_sub(initial_rss_kb) as f64) / (initial_rss_kb as f64);
+        let growth =
+            (max_rss_bytes.saturating_sub(initial_rss_bytes) as f64) / (initial_rss_bytes as f64);
         Some(growth)
     } else {
         None
@@ -485,10 +584,11 @@ async fn run_loop(
     };
 
     Ok(RunResult {
-        initial_rss_kb,
-        max_rss_kb,
+        initial_rss_bytes,
+        max_rss_bytes,
         rss_growth_pct,
-        rss_samples,
+        resource_samples,
+        max_cpu_usage_pct,
         latencies_us,
         p99_first,
         p99_last,
@@ -519,6 +619,75 @@ fn default_event_payloads_path() -> PathBuf {
 
 fn default_report_path() -> PathBuf {
     project_root().join("tests/perf/reports/ext_stress_report.json")
+}
+
+fn default_events_path() -> PathBuf {
+    project_root().join("tests/perf/reports/ext_stress_events.jsonl")
+}
+
+fn default_run_id() -> String {
+    std::env::var("CI_RUN_ID")
+        .or_else(|_| std::env::var("GITHUB_RUN_ID"))
+        .unwrap_or_else(|_| format!("local-{}", Utc::now().format("%Y%m%dT%H%M%SZ")))
+}
+
+fn bytes_to_kib(bytes: u64) -> u64 {
+    bytes / 1024
+}
+
+async fn write_events_jsonl(
+    events_path: &Path,
+    report: &Value,
+    run_result: &RunResult,
+) -> Result<()> {
+    if let Some(parent) = events_path.parent() {
+        asupersync::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("create events directory {}", parent.display()))?;
+    }
+
+    let run_id = report
+        .get("run_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let correlation_id = report
+        .get("correlation_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let generated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+
+    let mut lines = Vec::with_capacity(run_result.resource_samples.len() + 1);
+    for sample in &run_result.resource_samples {
+        lines.push(serde_json::to_string(&serde_json::json!({
+            "schema": "pi.ext.stress_resource_sample.v1",
+            "run_id": run_id,
+            "correlation_id": correlation_id,
+            "ts": generated_at,
+            "t_s": sample.t_s,
+            "rss_bytes": sample.rss_bytes,
+            "rss_kib": bytes_to_kib(sample.rss_bytes),
+            "rss_kb": bytes_to_kib(sample.rss_bytes),
+            "process_cpu_pct": sample.process_cpu_pct,
+        }))?);
+    }
+    lines.push(serde_json::to_string(&serde_json::json!({
+        "schema": "pi.ext.stress_summary.v1",
+        "run_id": run_id,
+        "correlation_id": correlation_id,
+        "ts": generated_at,
+        "event_count": run_result.event_count,
+        "error_count": run_result.error_count,
+        "rss": report.get("rss"),
+        "cpu": report.get("cpu"),
+        "latency_us": report.get("latency_us"),
+        "reactor": report.get("reactor"),
+        "pass": report.get("pass"),
+    }))?);
+
+    asupersync::fs::write(events_path, lines.join("\n") + "\n")
+        .await
+        .with_context(|| format!("write events {}", events_path.display()))?;
+    Ok(())
 }
 
 fn push_reactor_queue_sample(
@@ -675,6 +844,8 @@ fn build_shard_comparison_report(
     let candidate_p95 = candidate_latency.get("p95").and_then(Value::as_u64);
     let baseline_p99 = baseline_latency.get("p99").and_then(Value::as_u64);
     let candidate_p99 = candidate_latency.get("p99").and_then(Value::as_u64);
+    let baseline_p999 = baseline_latency.get("p999").and_then(Value::as_u64);
+    let candidate_p999 = candidate_latency.get("p999").and_then(Value::as_u64);
 
     let baseline_rejected = value_u64_at_path(&baseline.reactor, &["rejected_enqueues"]);
     let candidate_rejected = value_u64_at_path(&candidate.reactor, &["rejected_enqueues"]);
@@ -691,6 +862,10 @@ fn build_shard_comparison_report(
         _ => false,
     };
     let p99_improved = match (baseline_p99, candidate_p99) {
+        (Some(base), Some(curr)) => curr <= base,
+        _ => false,
+    };
+    let p999_improved = match (baseline_p999, candidate_p999) {
         (Some(base), Some(curr)) => curr <= base,
         _ => false,
     };
@@ -722,6 +897,10 @@ fn build_shard_comparison_report(
                 (Some(base), Some(curr)) => Some(signed_delta_u64(curr, base)),
                 _ => None,
             },
+            "p999_us": match (baseline_p999, candidate_p999) {
+                (Some(base), Some(curr)) => Some(signed_delta_u64(curr, base)),
+                _ => None,
+            },
             "rejected_enqueues": signed_delta_u64(candidate_rejected, baseline_rejected),
             "max_queue_depth_total": signed_delta_u64(candidate_max_depth, baseline_max_depth),
             "lane_overflow_stalls": signed_delta_u64(candidate_lane_overflow, baseline_lane_overflow),
@@ -730,6 +909,7 @@ fn build_shard_comparison_report(
             "throughput": candidate_throughput >= baseline_throughput,
             "p95": p95_improved,
             "p99": p99_improved,
+            "p999": p999_improved,
             "contention_proxy": contention_improved,
         }
     })
@@ -862,6 +1042,7 @@ fn summarize_us(values: &[u64]) -> Value {
     let p50 = sorted[percentile_index(sorted.len(), 50, 100)];
     let p95 = sorted[percentile_index(sorted.len(), 95, 100)];
     let p99 = sorted[percentile_index(sorted.len(), 99, 100)];
+    let p999 = sorted[percentile_index(sorted.len(), 999, 1000)];
     let min = sorted.first().copied().unwrap_or(0);
     let max = sorted.last().copied().unwrap_or(0);
     let sum: u128 = sorted.iter().map(|v| u128::from(*v)).sum();
@@ -874,6 +1055,7 @@ fn summarize_us(values: &[u64]) -> Value {
         "p50": p50,
         "p95": p95,
         "p99": p99,
+        "p999": p999,
     })
 }
 
@@ -896,10 +1078,11 @@ mod tests {
 
     fn synthetic_result(event_count: u64, latencies_us: Vec<u64>, reactor: Value) -> RunResult {
         RunResult {
-            initial_rss_kb: 100,
-            max_rss_kb: 110,
+            initial_rss_bytes: 100,
+            max_rss_bytes: 110,
             rss_growth_pct: Some(0.10),
-            rss_samples: Vec::new(),
+            resource_samples: Vec::new(),
+            max_cpu_usage_pct: 0.0,
             latencies_us,
             p99_first: None,
             p99_last: None,
@@ -918,6 +1101,7 @@ mod tests {
         let summary = summarize_us(&values);
         assert_eq!(summary["p95"].as_u64(), Some(100));
         assert_eq!(summary["p99"].as_u64(), Some(100));
+        assert_eq!(summary["p999"].as_u64(), Some(100));
     }
 
     #[test]
@@ -953,6 +1137,11 @@ mod tests {
             "p99 should improve"
         );
         assert_eq!(
+            report["improved"]["p999"].as_bool(),
+            Some(true),
+            "p999 should improve"
+        );
+        assert_eq!(
             report["delta"]["rejected_enqueues"].as_i64(),
             Some(-6),
             "rejected enqueues should drop"
@@ -961,5 +1150,19 @@ mod tests {
             .as_f64()
             .expect("gain pct");
         assert!(gain > 0.0, "throughput gain should be positive");
+    }
+
+    #[test]
+    fn resource_sample_reports_bytes_and_kib() {
+        let sample = ResourceSample {
+            t_s: 7,
+            rss_bytes: 65_536,
+            process_cpu_pct: 12.5,
+        };
+        let json = sample.to_json();
+        assert_eq!(json["rss_bytes"].as_u64(), Some(65_536));
+        assert_eq!(json["rss_kib"].as_u64(), Some(64));
+        assert_eq!(json["rss_kb"].as_u64(), Some(64));
+        assert_eq!(json["process_cpu_pct"].as_f64(), Some(12.5));
     }
 }
