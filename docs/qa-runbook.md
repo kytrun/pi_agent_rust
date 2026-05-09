@@ -96,6 +96,13 @@ Use a two-speed workflow so agents can move quickly without treating partial dat
 
 ### Definitive Benchmark Gate (authoritative)
 
+Before starting a long benchmark refresh, run the read-only preflight so missing
+inputs are reported up front with the exact RCH commands and expected paths:
+
+```bash
+python3 scripts/perf/preflight_budget_inputs.py
+```
+
 Run heavyweight checks with remote offload:
 
 ```bash

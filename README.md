@@ -1833,6 +1833,9 @@ Current checked-in performance evidence state:
 - The current budget summary is a blocker artifact, not claim support: most
   CI-enforced budgets have no measurement data and the data-contract section
   reports missing or stale required evidence.
+- Before spending time on a definitive refresh, run
+  `python3 scripts/perf/preflight_budget_inputs.py` to list missing budget
+  inputs, expected artifact paths, and RCH-only refresh commands.
 - Regenerate the perf evidence bundle before adding release-facing speed,
   throughput, memory, or startup numbers to this README.
 
