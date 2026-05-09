@@ -45,6 +45,8 @@ Repeated blocker fingerprints are evidence keys, not raw logs. For diagnostic en
 
 Use saturation as a stop-and-redirect signal, not as a performance claim. When the digest reports closed-surface churn, stale introductions, or high chatter with low throughput, stop launching more agents on the same review loop and switch to a narrower implementation bead, a deeper audit of one subsystem, or explicit blocker cleanup. The `saturation.signals` field lists the active typed signals, and `saturation.evidence_pointers` names the redacted agent, bead, thread, or window counts that caused each signal so operators can verify the decision without reading prompt bodies.
 
+When saturation is active, the digest may also emit `recommendations`: deterministic advisory triage hints derived only from the redacted `saturation` fields. These recommendations name a next work mode such as a narrow implementation bead, `testing-golden-artifacts`, `testing-conformance-harnesses`, `mock-code-finder`, `deadlock-finder`, or profiling, along with confidence and the redacted evidence pointers that support the hint. They do not invoke tools, assign work, or override Beads/Agent Mail ownership; operators must treat them as starting points for choosing a narrower next action, not as a mandate.
+
 ## Tail-latency regime guard
 
 `TailLatencyRegimeGuard` in `src/resource_governor.rs` consumes live p99, p999, queue-depth, and resource-pressure samples to detect when a swarm has left its calibrated operating regime. It requires consecutive violating samples before entering conservative fallback and consecutive recovered samples before returning to calibrated mode, so brief spikes do not flap the controller.

@@ -393,6 +393,75 @@ impl SwarmActivitySaturationSignals {
     }
 }
 
+/// Advisory work mode operators can switch to when swarm activity saturates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SwarmActivitySkillSwitchMode {
+    /// Assign one narrow implementation bead with explicit ownership.
+    NarrowImplementationBead,
+    /// Freeze disputed behavior with golden artifacts.
+    TestingGoldenArtifacts,
+    /// Build or tighten conformance harnesses for repeated blockers.
+    TestingConformanceHarnesses,
+    /// Search for concrete placeholder or mock code before another broad review.
+    MockCodeFinder,
+    /// Inspect stale coordination for blocked waits or dependency deadlocks.
+    DeadlockFinder,
+    /// Profile the saturated work path before increasing fanout.
+    Profiling,
+}
+
+impl SwarmActivitySkillSwitchMode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::NarrowImplementationBead => "narrow implementation bead",
+            Self::TestingGoldenArtifacts => "testing-golden-artifacts",
+            Self::TestingConformanceHarnesses => "testing-conformance-harnesses",
+            Self::MockCodeFinder => "mock-code-finder",
+            Self::DeadlockFinder => "deadlock-finder",
+            Self::Profiling => "profiling",
+        }
+    }
+}
+
+/// Confidence assigned to an advisory skill-switch recommendation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SwarmActivityRecommendationConfidence {
+    /// Weak signal; inspect before acting.
+    Low,
+    /// Clear signal, but not enough to make it the only reasonable path.
+    Medium,
+    /// Direct saturation signal with bounded evidence.
+    High,
+}
+
+impl SwarmActivityRecommendationConfidence {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
+/// Deterministic advisory recommendation derived from redacted saturation fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmActivitySkillSwitchRecommendation {
+    /// Recommended next work mode.
+    pub mode: SwarmActivitySkillSwitchMode,
+    /// Confidence in the recommendation.
+    pub confidence: SwarmActivityRecommendationConfidence,
+    /// Why this mode fits the active saturation evidence.
+    pub reason: String,
+    /// Why the confidence level was assigned.
+    pub confidence_reason: String,
+    /// Redacted saturation evidence pointers that support this recommendation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_pointers: Vec<String>,
+}
+
 /// Deterministic redacted digest for swarm handoff and saturation review.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SwarmActivityDigest {
@@ -422,6 +491,9 @@ pub struct SwarmActivityDigest {
     pub stale_threads: Vec<SwarmActivityStaleThread>,
     /// Saturation and duplicate-work signals.
     pub saturation: SwarmActivitySaturationSignals,
+    /// Advisory skill-switch recommendations derived from saturation evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recommendations: Vec<SwarmActivitySkillSwitchRecommendation>,
 }
 
 impl SwarmActivityDigest {
@@ -473,6 +545,7 @@ impl SwarmActivityDigest {
                 let _ = writeln!(out, "- {pointer}");
             }
         }
+        write_recommendation_section(&mut out, &self.recommendations);
         out
     }
 }
@@ -1067,6 +1140,7 @@ pub fn digest_entries_with_config(
     let repeated_blockers = repeated_blockers(entries, config);
     let stale_threads = stale_threads(entries, config);
     let saturation = saturation_signals(entries, config, &repeated_blockers, &stale_threads);
+    let recommendations = skill_switch_recommendations(&saturation, config.max_items);
 
     SwarmActivityDigest {
         schema: SWARM_ACTIVITY_DIGEST_SCHEMA.to_string(),
@@ -1094,6 +1168,7 @@ pub fn digest_entries_with_config(
         repeated_blockers,
         stale_threads,
         saturation,
+        recommendations,
     }
 }
 
@@ -1259,6 +1334,293 @@ fn saturation_signals(
         reasons: evidence.reasons,
         evidence_pointers: evidence.evidence_pointers,
     }
+}
+
+#[derive(Debug)]
+struct SkillSwitchRecommendationDraft {
+    confidence: SwarmActivityRecommendationConfidence,
+    reasons: Vec<String>,
+    confidence_reasons: Vec<String>,
+    evidence_pointers: BTreeSet<String>,
+}
+
+type SkillSwitchRecommendationDrafts =
+    BTreeMap<SwarmActivitySkillSwitchMode, SkillSwitchRecommendationDraft>;
+
+impl SkillSwitchRecommendationDraft {
+    const fn new(confidence: SwarmActivityRecommendationConfidence) -> Self {
+        Self {
+            confidence,
+            reasons: Vec::new(),
+            confidence_reasons: Vec::new(),
+            evidence_pointers: BTreeSet::new(),
+        }
+    }
+}
+
+struct SkillSwitchRecommendationInput<'a> {
+    mode: SwarmActivitySkillSwitchMode,
+    confidence: SwarmActivityRecommendationConfidence,
+    reason: String,
+    confidence_reason: &'a str,
+    evidence_prefixes: &'a [&'a str],
+}
+
+fn skill_switch_recommendations(
+    saturation: &SwarmActivitySaturationSignals,
+    max_items: usize,
+) -> Vec<SwarmActivitySkillSwitchRecommendation> {
+    if max_items == 0 || !saturation.saturated {
+        return Vec::new();
+    }
+
+    let mut drafts = BTreeMap::new();
+    push_few_new_bug_recommendation(&mut drafts, saturation, max_items);
+    push_repeated_blocker_recommendation(&mut drafts, saturation, max_items);
+    push_duplicate_work_recommendation(&mut drafts, saturation, max_items);
+    push_closed_surface_recommendation(&mut drafts, saturation, max_items);
+    push_stale_introduction_recommendation(&mut drafts, saturation, max_items);
+    push_chatter_throughput_recommendation(&mut drafts, saturation, max_items);
+    push_stale_thread_recommendation(&mut drafts, saturation, max_items);
+    materialize_skill_switch_recommendations(drafts, max_items)
+}
+
+fn push_few_new_bug_recommendation(
+    drafts: &mut SkillSwitchRecommendationDrafts,
+    saturation: &SwarmActivitySaturationSignals,
+    max_items: usize,
+) {
+    if saturation.has_signal(SwarmActivitySaturationSignal::FewNewBugs) {
+        push_skill_switch_recommendation(
+            drafts,
+            saturation,
+            max_items,
+            SkillSwitchRecommendationInput {
+                mode: SwarmActivitySkillSwitchMode::MockCodeFinder,
+                confidence: SwarmActivityRecommendationConfidence::Medium,
+                reason: format!(
+                    "{} newly filed bugs in {} ms suggests broad review is not producing concrete findings.",
+                    saturation.new_bug_count, saturation.window_ms
+                ),
+                confidence_reason: "medium: few-new-bugs signal should redirect review into concrete placeholder/mock discovery.",
+                evidence_prefixes: &["new_bug_window:"],
+            },
+        );
+    }
+}
+
+fn push_repeated_blocker_recommendation(
+    drafts: &mut SkillSwitchRecommendationDrafts,
+    saturation: &SwarmActivitySaturationSignals,
+    max_items: usize,
+) {
+    if saturation.has_signal(SwarmActivitySaturationSignal::RepeatedBlockers) {
+        push_skill_switch_recommendation(
+            drafts,
+            saturation,
+            max_items,
+            SkillSwitchRecommendationInput {
+                mode: SwarmActivitySkillSwitchMode::TestingConformanceHarnesses,
+                confidence: SwarmActivityRecommendationConfidence::High,
+                reason: format!(
+                    "{} repeated blocker observations need one reproducible contract fixture.",
+                    saturation.repeated_blocker_count
+                ),
+                confidence_reason: "high: repeated blocker fingerprints are grouped from bounded redacted evidence.",
+                evidence_prefixes: &["repeated_blocker:"],
+            },
+        );
+    }
+}
+
+fn push_duplicate_work_recommendation(
+    drafts: &mut SkillSwitchRecommendationDrafts,
+    saturation: &SwarmActivitySaturationSignals,
+    max_items: usize,
+) {
+    if saturation.has_signal(SwarmActivitySaturationSignal::DuplicateWork) {
+        push_skill_switch_recommendation(
+            drafts,
+            saturation,
+            max_items,
+            SkillSwitchRecommendationInput {
+                mode: SwarmActivitySkillSwitchMode::TestingGoldenArtifacts,
+                confidence: SwarmActivityRecommendationConfidence::High,
+                reason: format!(
+                    "{} duplicate-work events need a frozen target that makes ownership and completion visible.",
+                    saturation.duplicate_work_count
+                ),
+                confidence_reason: "high: duplicate-work count crossed the configured saturation threshold.",
+                evidence_prefixes: &["duplicate_work:"],
+            },
+        );
+    }
+}
+
+fn push_closed_surface_recommendation(
+    drafts: &mut SkillSwitchRecommendationDrafts,
+    saturation: &SwarmActivitySaturationSignals,
+    max_items: usize,
+) {
+    if saturation.has_signal(SwarmActivitySaturationSignal::RepeatedClosedSurfaceEdits) {
+        push_skill_switch_recommendation(
+            drafts,
+            saturation,
+            max_items,
+            SkillSwitchRecommendationInput {
+                mode: SwarmActivitySkillSwitchMode::NarrowImplementationBead,
+                confidence: SwarmActivityRecommendationConfidence::High,
+                reason: format!(
+                    "{} closed-surface edit events mean new effort should move to one unclosed bead.",
+                    saturation.closed_surface_edit_count
+                ),
+                confidence_reason: "high: closed-surface churn is direct evidence of agents working past completed surfaces.",
+                evidence_prefixes: &["closed_surface_edit:"],
+            },
+        );
+    }
+}
+
+fn push_stale_introduction_recommendation(
+    drafts: &mut SkillSwitchRecommendationDrafts,
+    saturation: &SwarmActivitySaturationSignals,
+    max_items: usize,
+) {
+    if saturation.has_signal(SwarmActivitySaturationSignal::StaleIntroductionsWithoutClaims) {
+        push_skill_switch_recommendation(
+            drafts,
+            saturation,
+            max_items,
+            SkillSwitchRecommendationInput {
+                mode: SwarmActivitySkillSwitchMode::NarrowImplementationBead,
+                confidence: SwarmActivityRecommendationConfidence::Medium,
+                reason: format!(
+                    "{} introductions did not turn into claims or reservations.",
+                    saturation.stale_introduction_count
+                ),
+                confidence_reason: "medium: stale introductions are coordination evidence, so use them to narrow assignment rather than prove a code defect.",
+                evidence_prefixes: &["stale_introduction:"],
+            },
+        );
+    }
+}
+
+fn push_chatter_throughput_recommendation(
+    drafts: &mut SkillSwitchRecommendationDrafts,
+    saturation: &SwarmActivitySaturationSignals,
+    max_items: usize,
+) {
+    if saturation.has_signal(SwarmActivitySaturationSignal::HighChatterLowThroughput) {
+        push_skill_switch_recommendation(
+            drafts,
+            saturation,
+            max_items,
+            SkillSwitchRecommendationInput {
+                mode: SwarmActivitySkillSwitchMode::Profiling,
+                confidence: SwarmActivityRecommendationConfidence::High,
+                reason: format!(
+                    "{} Agent Mail events with {} throughput events means the run is coordination-heavy.",
+                    saturation.coordination_chatter_count, saturation.throughput_event_count
+                ),
+                confidence_reason: "high: high-chatter/low-throughput is a direct saturation signal before raising fanout.",
+                evidence_prefixes: &["coordination_window:"],
+            },
+        );
+    }
+}
+
+fn push_stale_thread_recommendation(
+    drafts: &mut SkillSwitchRecommendationDrafts,
+    saturation: &SwarmActivitySaturationSignals,
+    max_items: usize,
+) {
+    if saturation.has_signal(SwarmActivitySaturationSignal::StaleThreads) {
+        push_skill_switch_recommendation(
+            drafts,
+            saturation,
+            max_items,
+            SkillSwitchRecommendationInput {
+                mode: SwarmActivitySkillSwitchMode::DeadlockFinder,
+                confidence: SwarmActivityRecommendationConfidence::Medium,
+                reason: format!(
+                    "{} stale Agent Mail threads need blocked-wait or dependency inspection.",
+                    saturation.stale_thread_count
+                ),
+                confidence_reason: "medium: stale threads may be benign, but they are the right evidence to inspect for coordination deadlocks.",
+                evidence_prefixes: &["stale_thread:"],
+            },
+        );
+    }
+}
+
+fn materialize_skill_switch_recommendations(
+    drafts: SkillSwitchRecommendationDrafts,
+    max_items: usize,
+) -> Vec<SwarmActivitySkillSwitchRecommendation> {
+    let mut recommendations = drafts
+        .into_iter()
+        .map(|(mode, draft)| SwarmActivitySkillSwitchRecommendation {
+            mode,
+            confidence: draft.confidence,
+            reason: draft.reasons.join(" "),
+            confidence_reason: draft.confidence_reasons.join(" "),
+            evidence_pointers: draft
+                .evidence_pointers
+                .into_iter()
+                .take(max_items)
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    recommendations.sort_by(|left, right| {
+        right
+            .confidence
+            .cmp(&left.confidence)
+            .then_with(|| left.mode.cmp(&right.mode))
+    });
+    recommendations.truncate(max_items);
+    recommendations
+}
+
+fn push_skill_switch_recommendation(
+    drafts: &mut SkillSwitchRecommendationDrafts,
+    saturation: &SwarmActivitySaturationSignals,
+    max_items: usize,
+    input: SkillSwitchRecommendationInput<'_>,
+) {
+    let draft = drafts
+        .entry(input.mode)
+        .or_insert_with(|| SkillSwitchRecommendationDraft::new(input.confidence));
+    if input.confidence > draft.confidence {
+        draft.confidence = input.confidence;
+    }
+    push_unique_string(&mut draft.reasons, input.reason);
+    push_unique_string(
+        &mut draft.confidence_reasons,
+        input.confidence_reason.to_string(),
+    );
+    for pointer in matching_evidence_pointers(saturation, input.evidence_prefixes, max_items) {
+        draft.evidence_pointers.insert(pointer);
+    }
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: String) {
+    if !values.contains(&value) {
+        values.push(value);
+    }
+}
+
+fn matching_evidence_pointers(
+    saturation: &SwarmActivitySaturationSignals,
+    prefixes: &[&str],
+    max_items: usize,
+) -> Vec<String> {
+    saturation
+        .evidence_pointers
+        .iter()
+        .filter(|pointer| prefixes.iter().any(|prefix| pointer.starts_with(prefix)))
+        .take(max_items)
+        .cloned()
+        .collect()
 }
 
 #[derive(Default)]
@@ -2028,6 +2390,34 @@ fn write_stale_thread_section(out: &mut String, threads: &[SwarmActivityStaleThr
     }
 }
 
+fn write_recommendation_section(
+    out: &mut String,
+    recommendations: &[SwarmActivitySkillSwitchRecommendation],
+) {
+    if recommendations.is_empty() {
+        return;
+    }
+    out.push_str("Skill-switch recommendations (advisory):\n");
+    for recommendation in recommendations {
+        let _ = writeln!(
+            out,
+            "- {} ({} confidence): {}",
+            recommendation.mode.label(),
+            recommendation.confidence.label(),
+            recommendation.reason
+        );
+        let _ = writeln!(out, "  confidence: {}", recommendation.confidence_reason);
+        if recommendation.evidence_pointers.is_empty() {
+            continue;
+        }
+        out.push_str("  evidence:");
+        for pointer in &recommendation.evidence_pointers {
+            let _ = write!(out, " {pointer}");
+        }
+        out.push('\n');
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct BoundedLatencySamples {
     capacity: usize,
@@ -2352,8 +2742,8 @@ mod tests {
         BLOCKER_FINGERPRINT_PREFIX, SWARM_ACTIVITY_DIGEST_SCHEMA, SWARM_ACTIVITY_LEDGER_SCHEMA,
         SWARM_ACTIVITY_SUMMARY_SCHEMA, SwarmActivityDigestConfig, SwarmActivityIds,
         SwarmActivityKind, SwarmActivityLedger, SwarmActivityLedgerError,
-        SwarmActivitySaturationSignal, SwarmActivitySketch, SwarmActivitySummaryConfig,
-        digest_from_jsonl, entries_from_jsonl, timeline_from_jsonl,
+        SwarmActivitySaturationSignal, SwarmActivitySketch, SwarmActivitySkillSwitchMode,
+        SwarmActivitySummaryConfig, digest_from_jsonl, entries_from_jsonl, timeline_from_jsonl,
     };
 
     #[test]
@@ -2925,6 +3315,136 @@ mod tests {
         assert!(text.contains("Saturation evidence:"));
     }
 
+    #[test]
+    fn digest_recommends_skill_switches_from_saturation_evidence() {
+        let mut ledger = SwarmActivityLedger::new();
+        append_saturation_signal_fixture(&mut ledger);
+        append_duplicate_blocker_churn_fixture(&mut ledger);
+
+        let digest = ledger.digest_with_config(skill_switch_test_config());
+        let text = digest.to_text();
+
+        assert!(digest.saturation.saturated);
+        assert_recommendation(
+            &digest.recommendations,
+            SwarmActivitySkillSwitchMode::NarrowImplementationBead,
+            "closed_surface_edit:",
+        );
+        assert_recommendation(
+            &digest.recommendations,
+            SwarmActivitySkillSwitchMode::TestingGoldenArtifacts,
+            "duplicate_work:",
+        );
+        assert_recommendation(
+            &digest.recommendations,
+            SwarmActivitySkillSwitchMode::TestingConformanceHarnesses,
+            "repeated_blocker:",
+        );
+        assert_recommendation(
+            &digest.recommendations,
+            SwarmActivitySkillSwitchMode::Profiling,
+            "coordination_window:",
+        );
+        assert!(text.contains("Skill-switch recommendations (advisory):"));
+        assert!(text.contains("testing-golden-artifacts"));
+        assert!(text.contains("confidence:"));
+        assert!(!text.contains("secret duplicate prompt"));
+    }
+
+    #[test]
+    fn healthy_digest_has_no_skill_switch_recommendations() {
+        let mut ledger = SwarmActivityLedger::new();
+        ledger.append(
+            1_000,
+            SwarmActivityKind::BeadStatus,
+            SwarmActivityIds::new("bug-healthy").with_agent_name("ActiveAgent"),
+            "filed bug for concrete issue",
+            [("issue_type", "bug"), ("status", "open")],
+        );
+        ledger.append(
+            1_100,
+            SwarmActivityKind::Verification,
+            SwarmActivityIds::new("verify-healthy").with_agent_name("ActiveAgent"),
+            "cargo test passed",
+            [("status", "passed")],
+        );
+
+        let digest =
+            ledger.digest_with_config(SwarmActivityDigestConfig::new(8, 60_000, 60_000, 1, 2, 2));
+        let text = digest.to_text();
+
+        assert!(!digest.saturation.saturated);
+        assert!(digest.recommendations.is_empty());
+        assert!(text.contains("Saturation: no"));
+        assert!(!text.contains("Skill-switch recommendations"));
+    }
+
+    fn assert_recommendation(
+        recommendations: &[super::SwarmActivitySkillSwitchRecommendation],
+        mode: SwarmActivitySkillSwitchMode,
+        evidence_prefix: &str,
+    ) {
+        let recommendation = recommendations
+            .iter()
+            .find(|recommendation| recommendation.mode == mode)
+            .expect("expected skill-switch recommendation");
+
+        assert!(!recommendation.reason.is_empty());
+        assert!(!recommendation.confidence_reason.is_empty());
+        assert!(
+            recommendation
+                .evidence_pointers
+                .iter()
+                .any(|pointer| pointer.starts_with(evidence_prefix))
+        );
+    }
+
+    fn append_duplicate_blocker_churn_fixture(ledger: &mut SwarmActivityLedger) {
+        ledger.append(
+            1_800,
+            SwarmActivityKind::AgentMail,
+            SwarmActivityIds::new("duplicate-1")
+                .with_agent_name("DuplicateOne")
+                .with_mail_thread_id("bd-dup"),
+            "duplicate work noticed on same bead",
+            [
+                ("status", "duplicate"),
+                ("prompt_body", "secret duplicate prompt"),
+            ],
+        );
+        ledger.append(
+            1_900,
+            SwarmActivityKind::AgentMail,
+            SwarmActivityIds::new("duplicate-2")
+                .with_agent_name("DuplicateTwo")
+                .with_mail_thread_id("bd-dup"),
+            "same bead duplicate work noticed again",
+            [("status", "duplicate")],
+        );
+        ledger.append(
+            2_000,
+            SwarmActivityKind::Verification,
+            SwarmActivityIds::new("blocker-1").with_agent_name("DuplicateOne"),
+            "cargo check failed with provider contract mismatch",
+            [
+                ("command", "cargo check --all-targets"),
+                ("stderr", "error[E0308]: provider contract mismatch"),
+                ("status", "failed"),
+            ],
+        );
+        ledger.append(
+            2_100,
+            SwarmActivityKind::Verification,
+            SwarmActivityIds::new("blocker-2").with_agent_name("DuplicateTwo"),
+            "cargo check failed with provider contract mismatch",
+            [
+                ("command", "cargo check --all-targets"),
+                ("stderr", "error[E0308]: provider contract mismatch"),
+                ("status", "failed"),
+            ],
+        );
+    }
+
     fn append_saturation_signal_fixture(ledger: &mut SwarmActivityLedger) {
         ledger.append(
             1_000,
@@ -3004,6 +3524,14 @@ mod tests {
             stale_introduction_threshold: 2,
             coordination_chatter_threshold: 5,
             low_throughput_event_threshold: 1,
+        }
+    }
+
+    fn skill_switch_test_config() -> SwarmActivityDigestConfig {
+        SwarmActivityDigestConfig {
+            duplicate_work_threshold: 2,
+            repeated_blocker_threshold: 2,
+            ..saturation_signal_test_config()
         }
     }
 
