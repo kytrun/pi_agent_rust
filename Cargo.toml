@@ -170,7 +170,7 @@ anyhow = "1.0.102"
 thiserror = "2"
 
 # Terminal output (rich_rust for beautiful TUI)
-rich_rust = { version = "0.2.0", features = ["full"] }
+rich_rust = { version = "0.2.0", features = ["markdown"] }
 crossterm = "0.29"
 enable-ansi-support = "0.2"
 
@@ -284,17 +284,27 @@ tikv-jemallocator = { version = "0.6", optional = true }
 rquickjs = { version = "0.11", features = ["futures", "loader", "bindgen"] }
 
 [features]
-default = ["image-resize", "jemalloc", "clipboard", "wasm-host", "sqlite-sessions"]
+default = ["sqlite-sessions"]
+full = [
+    "image-resize",
+    "jemalloc",
+    "clipboard",
+    "wasm-host",
+    "sqlite-sessions",
+    "syntax-highlighting",
+    "rich_rust/full",
+]
 image-resize = ["image"]
 clipboard = ["dep:arboard"]
 wasm-host = ["dep:wasmtime"]
 sqlite-sessions = []
+syntax-highlighting = ["rich_rust/syntax"]
 ext-conformance = []
 fuzzing = []
 jemalloc = ["dep:tikv-jemallocator"]
 
 [profile.release]
-opt-level = 3
+opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"

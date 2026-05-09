@@ -166,7 +166,7 @@ If you want full details, see:
 | Feature | Pi (Rust) | Typical TS/Python CLI |
 |---------|-----------|----------------------|
 | **Startup** | <100ms | 500ms-2s |
-| **Binary size** | ~44MB (default features) | 100MB+ (with runtime) |
+| **Binary size** | ~21.1 MiB (default release) | 100MB+ (with runtime) |
 | **Memory (idle)** | <50MB | 200MB+ |
 | **Streaming** | Native SSE parser | Library-dependent |
 | **Tool execution** | Process tree management | Basic subprocess |
@@ -835,7 +835,7 @@ Provider-count rule: Pi has 10 native provider implementation modules, counted a
 2. **Streaming-first**: Custom SSE parser, no blocking on responses
 3. **Process tree management**: `sysinfo` crate ensures no orphaned processes
 4. **Structured errors**: `thiserror` with specific error types per component
-5. **Speed-oriented release profile**: LTO + strip + `opt-level = 3` for runtime performance
+5. **Size-budgeted release profile**: LTO + strip + `opt-level = "z"` for budget-compliant shipping artifacts
 
 ### asupersync Context vs TypeScript Pi (pi-mono)
 
@@ -1782,7 +1782,7 @@ Concrete engineering work in this codebase includes:
 | Provider/message memory path | Zero-copy request context migration (`Cow`), `Arc`-based message/result sharing, clone elimination in stream end paths | Removes hot-path cloning and allocation churn in core agent/provider loops |
 | TUI rendering path | Message render cache, conversation-prefix cache, reusable render buffers, viewport/render-path refactors, Criterion perf gates | Reduces redraw cost and jitter while streaming long outputs |
 | Startup/resource loading | Parallelized skill/prompt/theme loading plus precomputed tool definitions/command names | Moves heavy initialization off the critical path to improve time-to-interaction |
-| Allocator/build profile | jemalloc default for allocation-heavy paths, speed-oriented release profile, strict artifact validation for perf claims | Improves runtime consistency and prevents benchmark/reporting drift |
+| Allocator/build profile | Size-budgeted default release profile, opt-in jemalloc benchmark variants, strict artifact validation for perf claims | Keeps shipping artifacts within budget and prevents benchmark/reporting drift |
 | Perf governance | Scenario matrix, claim-integrity gates, strict no-data fail behavior, variance/confidence artifacts, reproducible orchestration bundles | Makes performance claims auditable and regression detection automatic |
 | Hostcall marshalling planner | `HostcallRewriteEngine` uses a small cost model to pick fast opcode fusion only when it is clearly cheaper and unambiguous; otherwise it stays on the canonical path and records fallback reason | Gains speed on hot marshalling shapes without risking silent semantic drift from ambiguous rewrites |
 | Tool text-processing hot path | `truncate_head`/`truncate_tail` use lazy line traversal and `memchr` line counting; normalization switched to a single-pass transform instead of chained string rewrites | Large file/tool outputs avoid unnecessary intermediate allocations and stay responsive |
@@ -1795,18 +1795,24 @@ Optimization spans algorithms, execution lanes, memory movement, queue disciplin
 
 ### Release Profile and Binary Size Gate
 
-The shipping release profile is tuned for runtime speed:
+The shipping release profile is tuned to keep release artifacts inside the
+binary-size budget while preserving cross-crate optimization:
 
 ```toml
 [profile.release]
-opt-level = 3        # Maximum speed optimization
+opt-level = "z"      # Optimize generated code for size
 lto = true           # Link-time optimization across all crates
 codegen-units = 1    # Single codegen unit (slower compile, better optimization)
 panic = "abort"      # No unwinding machinery
 strip = true         # Remove symbol tables
 ```
 
-Binary size is explicitly budgeted in CI via `binary_size_release`, with a target threshold of `22.0 MB`. However, current builds with default features (including wasm-host, image-resize, jemalloc) produce ~44MB binaries. This discrepancy represents a known issue where default features have grown beyond the original size budget.
+Binary size is explicitly budgeted in CI via `binary_size_release`, with a target
+threshold of `22.0 MiB` (the harness computes bytes / 1024 / 1024). Default
+release builds keep heavyweight extras opt-in and currently measure `21.12 MiB`
+for `pi` with the standard Cargo `release` profile. Use `--features full` when
+you need the image, clipboard, wasm, jemalloc, and syntax-highlighting extras in
+one build.
 
 ### Benchmark Evidence vs Shipping Artifacts
 
@@ -1889,11 +1895,12 @@ If the evidence set is incomplete or contradictory, the claim-integrity gate sta
 
 ### Allocator Strategy for Benchmarks
 
-Default Linux/macOS builds use `jemalloc` for allocation-heavy paths. FreeBSD
-and MSVC builds always use the platform allocator; FreeBSD libc already uses
-jemalloc internally, and mixing allocator domains across libc/pthread and C
-dependencies can turn heap corruption into thread-spawn crashes. For allocator
-experiments, Pi supports explicit `system` and `jemalloc` benchmark variants:
+Default release builds use the platform allocator to stay inside the shipping
+binary-size budget. FreeBSD and MSVC builds also always use the platform
+allocator; FreeBSD libc already uses jemalloc internally, and mixing allocator
+domains across libc/pthread and C dependencies can turn heap corruption into
+thread-spawn crashes. For allocator experiments, Pi supports explicit `system`
+and `jemalloc` benchmark variants:
 
 ```bash
 # System allocator baseline + jemalloc variant in one repeatable run
@@ -1905,7 +1912,7 @@ The benchmark harness records both requested and effective allocator metadata in
 its JSONL output (`allocator_requested`, `allocator_effective`,
 `allocator_fallback_reason`) via `PI_BENCH_ALLOCATOR`.
 
-- `system`: build with the normal benchmark feature set except `jemalloc`
+- `system`: build with the explicit benchmark feature set except `jemalloc`
 - `jemalloc`: build with `--features jemalloc` where supported by the target
 - `auto`: prefer `jemalloc`, fall back to `system` if build fails
 
@@ -2267,10 +2274,22 @@ space. Set `PI_CARGO_RUNNER=local` for a local-only run,
 
 ### Cargo Feature Defaults
 
-Default builds enable `image-resize`, `jemalloc`, `clipboard`, `wasm-host`, and `sqlite-sessions`. The `sqlite-sessions` feature is therefore on for normal `cargo build`, `cargo test`, release, and installer builds; JSONL remains the default session store unless configuration selects SQLite storage. To build without SQLite session backend support, use `--no-default-features` and explicitly re-enable the feature subset you need, for example:
+Default builds enable `sqlite-sessions` only. The `sqlite-sessions` feature is
+therefore on for normal `cargo build`, `cargo test`, release, and installer
+builds; JSONL remains the default session store unless configuration selects
+SQLite storage. Heavyweight extras (`image-resize`, `jemalloc`, `clipboard`,
+`wasm-host`, and syntax highlighting) are opt-in so the default release binary
+stays under the size budget. To build all optional user-facing extras, use:
 
 ```bash
-./scripts/cargo_headroom.sh build --no-default-features --features image-resize,clipboard
+./scripts/cargo_headroom.sh build --features full
+```
+
+To build a smaller custom subset without SQLite session backend support, use
+`--no-default-features` and explicitly re-enable only the features you need:
+
+```bash
+./scripts/cargo_headroom.sh build --no-default-features --features clipboard
 ```
 
 ### Testing

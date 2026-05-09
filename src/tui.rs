@@ -6,7 +6,9 @@
 use std::io::{self, IsTerminal, Write};
 
 use rich_rust::prelude::*;
-use rich_rust::renderables::{Markdown, Syntax};
+use rich_rust::renderables::Markdown;
+#[cfg(feature = "syntax-highlighting")]
+use rich_rust::renderables::Syntax;
 use rich_rust::segment::Segment;
 
 /// Pi's console wrapper providing styled terminal output.
@@ -462,6 +464,7 @@ fn split_markdown_fenced_code_blocks(markdown: &str) -> Vec<MarkdownChunk> {
     chunks
 }
 
+#[cfg(feature = "syntax-highlighting")]
 fn has_multiple_non_none_styles(segments: &[Segment<'_>]) -> bool {
     use std::collections::HashSet;
 
@@ -483,6 +486,7 @@ fn has_multiple_non_none_styles(segments: &[Segment<'_>]) -> bool {
     false
 }
 
+#[cfg(feature = "syntax-highlighting")]
 fn render_syntax_line_by_line(
     code: &str,
     language: &str,
@@ -508,6 +512,75 @@ fn indent_code_block(code: &str, indent: usize) -> String {
         out.push_str(line);
     }
     out
+}
+
+fn render_plain_fenced_code_block(
+    language: Option<&str>,
+    code: &str,
+    width: usize,
+) -> Vec<Segment<'static>> {
+    let mut markdown = String::from("```");
+    if let Some(language) = language.filter(|language| !language.is_empty()) {
+        markdown.push_str(language);
+    }
+    markdown.push('\n');
+    markdown.push_str(code);
+    markdown.push_str("```\n");
+
+    Markdown::new(markdown)
+        .render(width)
+        .into_iter()
+        .map(Segment::into_owned)
+        .collect()
+}
+
+fn render_code_block_segments(
+    language: Option<&str>,
+    code: &str,
+    width: usize,
+) -> Vec<Segment<'static>> {
+    #[cfg(feature = "syntax-highlighting")]
+    {
+        let language = language.unwrap_or("text");
+        let require_variation = matches!(language, "typescript" | "ts" | "tsx");
+        let mut candidates: Vec<&str> = Vec::new();
+        match language {
+            // syntect's built-in set doesn't always include TypeScript; prefer `ts` if
+            // available, otherwise fall back to JavaScript highlighting.
+            "typescript" | "ts" | "tsx" => candidates.extend(["ts", "javascript"]),
+            _ => candidates.push(language),
+        }
+        candidates.push("text");
+
+        let mut rendered_items: Option<Vec<Segment<'static>>> = None;
+        for candidate in candidates {
+            let syntax = Syntax::new(code, candidate);
+            if let Ok(items) = syntax.render(Some(width)) {
+                if require_variation && candidate != "text" && !has_multiple_non_none_styles(&items)
+                {
+                    if candidate == "javascript" {
+                        if let Some(line_items) = render_syntax_line_by_line(code, candidate, width)
+                        {
+                            if has_multiple_non_none_styles(&line_items) {
+                                rendered_items = Some(line_items);
+                                break;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                rendered_items = Some(items.into_iter().map(Segment::into_owned).collect());
+                break;
+            }
+        }
+
+        rendered_items
+            .unwrap_or_else(|| render_plain_fenced_code_block(Some(language), code, width))
+    }
+    #[cfg(not(feature = "syntax-highlighting"))]
+    {
+        render_plain_fenced_code_block(language, code, width)
+    }
 }
 
 fn render_markdown_with_syntax(
@@ -547,52 +620,11 @@ fn render_markdown_with_syntax(
                     code = indent_code_block(&code, code_block_indent);
                 }
 
-                let language = language.unwrap_or_else(|| "text".to_string());
-                let require_variation = matches!(language.as_str(), "typescript" | "ts" | "tsx");
-                let mut candidates: Vec<&str> = Vec::new();
-                match language.as_str() {
-                    // syntect's built-in set doesn't always include TypeScript; prefer `ts` if
-                    // available, otherwise fall back to JavaScript highlighting.
-                    "typescript" | "ts" | "tsx" => candidates.extend(["ts", "javascript"]),
-                    _ => candidates.push(language.as_str()),
-                }
-                candidates.push("text");
-
-                let mut rendered_items: Option<Vec<Segment<'static>>> = None;
-                for candidate in candidates {
-                    let syntax = Syntax::new(code.as_str(), candidate);
-                    if let Ok(items) = syntax.render(Some(width)) {
-                        if require_variation
-                            && candidate != "text"
-                            && !has_multiple_non_none_styles(&items)
-                        {
-                            if candidate == "javascript" {
-                                if let Some(line_items) =
-                                    render_syntax_line_by_line(code.as_str(), candidate, width)
-                                {
-                                    if has_multiple_non_none_styles(&line_items) {
-                                        rendered_items = Some(line_items);
-                                        break;
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-                        rendered_items = Some(items.into_iter().map(Segment::into_owned).collect());
-                        break;
-                    }
-                }
-
-                if let Some(items) = rendered_items {
-                    segments.extend(items);
-                } else {
-                    segments.extend(
-                        Markdown::new(format!("```\n{code}```\n"))
-                            .render(width)
-                            .into_iter()
-                            .map(Segment::into_owned),
-                    );
-                }
+                segments.extend(render_code_block_segments(
+                    language.as_deref(),
+                    code.as_str(),
+                    width,
+                ));
             }
         }
     }
@@ -1177,17 +1209,20 @@ Nested: **bold and *italic*** and ~~**strike bold**~~.
     }
 
     // ── has_multiple_non_none_styles ────────────────────────────────────
+    #[cfg(feature = "syntax-highlighting")]
     #[test]
     fn has_multiple_styles_empty() {
         assert!(!has_multiple_non_none_styles(&[]));
     }
 
+    #[cfg(feature = "syntax-highlighting")]
     #[test]
     fn has_multiple_styles_all_none() {
         let segments = vec![Segment::plain("text1"), Segment::plain("text2")];
         assert!(!has_multiple_non_none_styles(&segments));
     }
 
+    #[cfg(feature = "syntax-highlighting")]
     #[test]
     fn has_multiple_styles_single_style() {
         let style = Style::parse("bold").unwrap();
@@ -1198,6 +1233,7 @@ Nested: **bold and *italic*** and ~~**strike bold**~~.
         assert!(!has_multiple_non_none_styles(&segments));
     }
 
+    #[cfg(feature = "syntax-highlighting")]
     #[test]
     fn has_multiple_styles_two_different() {
         let bold = Style::parse("bold").unwrap();
@@ -1209,6 +1245,7 @@ Nested: **bold and *italic*** and ~~**strike bold**~~.
         assert!(has_multiple_non_none_styles(&segments));
     }
 
+    #[cfg(feature = "syntax-highlighting")]
     #[test]
     fn has_multiple_styles_ignores_whitespace_only() {
         let bold = Style::parse("bold").unwrap();
