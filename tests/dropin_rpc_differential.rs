@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -295,16 +296,13 @@ fn g05_rpc_differential_tool_execution_sorting() {
 struct RpcDifferentialTester {
     #[allow(dead_code)]
     temp_dir: TempDir,
-    rust_pi_path: String,
+    rust_pi_path: PathBuf,
 }
 
 impl RpcDifferentialTester {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let temp_dir = tempfile::tempdir()?;
-        let rust_pi_path = std::env::var("CARGO_TARGET_DIR").map_or_else(
-            |_| "target/debug/pi".to_string(),
-            |dir| format!("{dir}/debug/pi"),
-        );
+        let rust_pi_path = PathBuf::from(env!("CARGO_BIN_EXE_pi"));
 
         Ok(Self {
             temp_dir,
@@ -405,24 +403,9 @@ fn g05_rpc_differential_basic_command_execution() {
     let scenarios: Value = serde_json::from_str(SCENARIOS).expect("scenario fixture JSON");
     let command_scenarios = scenarios["commands"].as_array().expect("command scenarios");
 
-    let cargo_target_dir =
-        std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-    let rust_pi_path = format!("{cargo_target_dir}/debug/pi");
-
-    if !std::path::Path::new(&rust_pi_path).exists() {
-        eprintln!(
-            "Warning: Rust pi binary not found at {rust_pi_path}. Skipping differential test."
-        );
-        return;
-    }
-
-    let tester = match RpcDifferentialTester::new() {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Warning: Failed to create differential tester: {e}. Skipping test.");
-            return;
-        }
-    };
+    let tester =
+        RpcDifferentialTester::new().expect("create RPC differential tester with Cargo-built pi");
+    assert_compiled_pi_binary(&tester.rust_pi_path);
 
     let mut successful_scenarios = 0u32;
     let mut total_scenarios = 0u32;
@@ -495,24 +478,9 @@ fn g05_rpc_differential_comprehensive_command_coverage() {
     let scenarios: Value = serde_json::from_str(SCENARIOS).expect("scenario fixture JSON");
     let command_scenarios = scenarios["commands"].as_array().expect("command scenarios");
 
-    let cargo_target_dir =
-        std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-    let rust_pi_path = format!("{cargo_target_dir}/debug/pi");
-
-    if !std::path::Path::new(&rust_pi_path).exists() {
-        eprintln!(
-            "Warning: Rust pi binary not found at {rust_pi_path}. Skipping comprehensive differential test."
-        );
-        return;
-    }
-
-    let tester = match RpcDifferentialTester::new() {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Warning: Failed to create differential tester: {e}. Skipping test.");
-            return;
-        }
-    };
+    let tester =
+        RpcDifferentialTester::new().expect("create RPC differential tester with Cargo-built pi");
+    assert_compiled_pi_binary(&tester.rust_pi_path);
 
     let mut successful_scenarios = 0usize;
     let mut failed_scenarios = Vec::new();
@@ -585,5 +553,13 @@ fn g05_rpc_differential_comprehensive_command_coverage() {
     println!(
         "✅ G05 RPC differential harness: {total_scenarios} scenarios with {:.1}% success rate",
         success_rate * 100.0
+    );
+}
+
+fn assert_compiled_pi_binary(path: &Path) {
+    assert!(
+        path.is_file(),
+        "Cargo-built pi binary should exist for RPC differential tests: {}",
+        path.display()
     );
 }
