@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import difflib
 import json
 import os
 import sys
@@ -25,6 +26,10 @@ from typing import Any
 REPORT_SCHEMA = "pi.swarm.claim_readiness_report.v1"
 STALE_CLAIM_REPORT_SCHEMA = "pi.swarm.stale_claim_report.v1"
 HOSTCALL_QUEUE_REPORT_SCHEMA = "pi.swarm.hostcall_queue_readiness.v1"
+GOLDEN_REPORT_RELATIVE_PATH = Path(
+    "tests/golden_corpus/swarm_claim_readiness/complete_report_projection.json"
+)
+UPDATE_GOLDEN_ENV = "UPDATE_SWARM_CLAIM_READINESS_GOLDEN"
 DEFAULT_MAX_AGE_DAYS = 14
 DEFAULT_STALE_CLAIM_AFTER_HOURS = 24
 DEFAULT_STALE_CLAIM_ACTIVITY_FRESH_HOURS = 6
@@ -1423,6 +1428,77 @@ def assert_condition(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def repo_golden_path() -> Path:
+    return Path(__file__).resolve().parent.parent / GOLDEN_REPORT_RELATIVE_PATH
+
+
+def canonical_report_projection(report: dict[str, Any]) -> dict[str, Any]:
+    """Keep the golden focused on stable operator-facing report structure."""
+
+    return {
+        "schema": report["schema"],
+        "generated_at": report["generated_at"],
+        "max_age_days": report["max_age_days"],
+        "overall_status": report["overall_status"],
+        "blocking_issue_count": report["blocking_issue_count"],
+        "categories": report["categories"],
+        "artifact_statuses": [
+            {
+                "id": artifact["id"],
+                "category": artifact["category"],
+                "claim_surface": artifact["claim_surface"],
+                "release_blocking": artifact["release_blocking"],
+                "status": artifact["status"],
+                "exists": artifact["exists"],
+                "schema": artifact["schema"],
+                "issue_count": len(artifact["issues"]),
+                "issue_kinds": [issue["kind"] for issue in artifact["issues"]],
+            }
+            for artifact in report["artifacts"]
+        ],
+        "stale_claims": report["stale_claims"],
+        "hostcall_queue_telemetry": report["hostcall_queue_telemetry"],
+    }
+
+
+def stable_json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def assert_report_matches_golden(report: dict[str, Any]) -> None:
+    actual = stable_json(canonical_report_projection(report))
+    golden_path = repo_golden_path()
+    if os.environ.get(UPDATE_GOLDEN_ENV) == "1":
+        golden_path.parent.mkdir(parents=True, exist_ok=True)
+        golden_path.write_text(actual, encoding="utf-8")
+        return
+
+    try:
+        expected = golden_path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise AssertionError(
+            f"{GOLDEN_REPORT_RELATIVE_PATH} is missing; run "
+            f"`{UPDATE_GOLDEN_ENV}=1 python3 scripts/report_swarm_claim_readiness.py "
+            "--self-test` to create it, then review the diff."
+        ) from exc
+
+    if actual != expected:
+        diff = "".join(
+            difflib.unified_diff(
+                expected.splitlines(keepends=True),
+                actual.splitlines(keepends=True),
+                fromfile=str(GOLDEN_REPORT_RELATIVE_PATH),
+                tofile="actual swarm claim readiness projection",
+            )
+        )
+        raise AssertionError(
+            "swarm claim readiness JSON projection changed; update the golden only "
+            f"after review with `{UPDATE_GOLDEN_ENV}=1 python3 "
+            "scripts/report_swarm_claim_readiness.py --self-test`\n"
+            f"{diff}"
+        )
+
+
 def run_self_test() -> int:
     now = datetime(2026, 5, 8, 12, 0, 0, tzinfo=timezone.utc)
     stale = now - timedelta(days=30)
@@ -1430,8 +1506,10 @@ def run_self_test() -> int:
     try:
         repo_root = fixture_root()
         make_complete_fixture(repo_root, now)
+        write_beads_ledger(repo_root, [])
         report = build_report(repo_root, now=now)
         assert_condition(report["overall_status"] == "ready", "fresh fixture should be ready")
+        assert_report_matches_golden(report)
         hostcall = report["hostcall_queue_telemetry"]
         assert_condition(
             hostcall["status"] == "ready",

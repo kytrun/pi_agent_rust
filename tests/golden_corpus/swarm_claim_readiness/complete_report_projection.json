@@ -1,0 +1,475 @@
+{
+  "artifact_statuses": [
+    {
+      "category": "perf",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "perf_budget_summary",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.perf.budget_summary.v1",
+      "status": "ready"
+    },
+    {
+      "category": "perf",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "perf_stress_triage",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": null,
+      "status": "ready"
+    },
+    {
+      "category": "perf",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "perf3x_bead_coverage",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.perf3x.bead_coverage.audit.v1",
+      "status": "ready"
+    },
+    {
+      "category": "full_suite",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "full_suite_verdict",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.ci.full_suite_gate.v1",
+      "status": "ready"
+    },
+    {
+      "category": "full_suite",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "certification_lane",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.ci.certification_lane.v1",
+      "status": "ready"
+    },
+    {
+      "category": "full_suite",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "evidence_bundle_index",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.ci.evidence_bundle.v1",
+      "status": "ready"
+    },
+    {
+      "category": "dropin",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "dropin_certification_verdict",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.dropin.certification_verdict.v1",
+      "status": "ready"
+    },
+    {
+      "category": "dropin",
+      "claim_surface": "release_policy",
+      "exists": true,
+      "id": "dropin_contract",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.dropin.certification_contract.v1",
+      "status": "ready"
+    },
+    {
+      "category": "dropin",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "dropin_differential_suite",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.dropin.differential_evidence_suite.v1",
+      "status": "ready"
+    },
+    {
+      "category": "dropin",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "dropin_feature_inventory",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.dropin.feature_inventory.v1",
+      "status": "ready"
+    },
+    {
+      "category": "dropin",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "dropin_gap_ledger",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.dropin.parity_gap_ledger.v1",
+      "status": "ready"
+    },
+    {
+      "category": "extension",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "extension_must_pass_gate",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.ext.must_pass_gate.v1",
+      "status": "ready"
+    },
+    {
+      "category": "extension",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "extension_health_delta",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.ext.health_delta.v1",
+      "status": "ready"
+    },
+    {
+      "category": "extension",
+      "claim_surface": "historical_snapshot",
+      "exists": true,
+      "id": "extension_journey_report",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": null,
+      "status": "historical_snapshot"
+    },
+    {
+      "category": "extension",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "extension_reactor_queue_coverage",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.ext.reactor_queue_coverage_evidence.v1",
+      "status": "ready"
+    },
+    {
+      "category": "activity_ledger",
+      "claim_surface": "historical_snapshot",
+      "exists": true,
+      "id": "activity_ledger_docs",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": null,
+      "status": "historical_snapshot"
+    },
+    {
+      "category": "activity_ledger",
+      "claim_surface": "release_facing",
+      "exists": true,
+      "id": "activity_ledger_digest",
+      "issue_count": 0,
+      "issue_kinds": [],
+      "release_blocking": true,
+      "schema": "pi.swarm.activity_digest.v1",
+      "status": "ready"
+    }
+  ],
+  "blocking_issue_count": 0,
+  "categories": [
+    {
+      "blocking_issues": 0,
+      "category": "activity_ledger",
+      "status": "ready",
+      "statuses": {
+        "historical_snapshot": 1,
+        "ready": 1
+      }
+    },
+    {
+      "blocking_issues": 0,
+      "category": "dropin",
+      "status": "ready",
+      "statuses": {
+        "ready": 5
+      }
+    },
+    {
+      "blocking_issues": 0,
+      "category": "extension",
+      "status": "ready",
+      "statuses": {
+        "historical_snapshot": 1,
+        "ready": 3
+      }
+    },
+    {
+      "blocking_issues": 0,
+      "category": "full_suite",
+      "status": "ready",
+      "statuses": {
+        "ready": 3
+      }
+    },
+    {
+      "blocking_issues": 0,
+      "category": "perf",
+      "status": "ready",
+      "statuses": {
+        "ready": 3
+      }
+    }
+  ],
+  "generated_at": "2026-05-08T12:00:00Z",
+  "hostcall_queue_telemetry": {
+    "policy": "read_only_no_gate_side_effect",
+    "required_fields": [
+      "s3fifo_fallback_transitions",
+      "s3fifo_fairness_rejected_total",
+      "s3fifo_lane_overflow_rejected_total",
+      "bravo_mode",
+      "bravo_transitions_total",
+      "bravo_rollbacks_total"
+    ],
+    "schema": "pi.swarm.hostcall_queue_readiness.v1",
+    "source_paths": [
+      "tests/perf/reports/stress_triage.json",
+      "docs/evidence/ext-stress-reactor-queue-coverage.json"
+    ],
+    "sources": [
+      {
+        "id": "perf_stress_triage",
+        "metrics": {
+          "bravo_last_signature": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          },
+          "bravo_mode": {
+            "present": true,
+            "required": true,
+            "source_path": "bravo.mode",
+            "value": "Balanced"
+          },
+          "bravo_rollbacks_total": {
+            "present": true,
+            "required": true,
+            "source_path": "bravo.rollbacks",
+            "value": 0
+          },
+          "bravo_transitions_total": {
+            "present": true,
+            "required": true,
+            "source_path": "bravo.transitions",
+            "value": 0
+          },
+          "bravo_writer_recovery_remaining": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          },
+          "queue_overflow_rejected_total": {
+            "present": true,
+            "required": false,
+            "source_path": "rejected_enqueues",
+            "value": 0
+          },
+          "s3fifo_fairness_rejected_total": {
+            "present": true,
+            "required": true,
+            "source_path": "s3fifo.fairness_budget_rejections",
+            "value": 0
+          },
+          "s3fifo_fallback_reason": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          },
+          "s3fifo_fallback_transitions": {
+            "present": true,
+            "required": true,
+            "source_path": "s3fifo.fallback_event_total",
+            "value": 0
+          },
+          "s3fifo_ghost_hits_total": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          },
+          "s3fifo_lane_overflow_rejected_total": {
+            "present": true,
+            "required": true,
+            "source_path": "s3fifo.lane_overflow_rejections",
+            "value": 0
+          },
+          "s3fifo_mode": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          },
+          "safe_reclamation_fallback_transitions": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          }
+        },
+        "missing_required_fields": [],
+        "path": "tests/perf/reports/stress_triage.json",
+        "reactor_path": "results.reactor",
+        "recommended_operator_action": "No hostcall queue fallback pressure is visible in this source.",
+        "status": "ready",
+        "warnings": []
+      },
+      {
+        "id": "extension_reactor_queue_coverage",
+        "metrics": {
+          "bravo_last_signature": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          },
+          "bravo_mode": {
+            "present": true,
+            "required": true,
+            "source_path": "bravo.mode",
+            "value": "Balanced"
+          },
+          "bravo_rollbacks_total": {
+            "present": true,
+            "required": true,
+            "source_path": "bravo.rollbacks",
+            "value": 0
+          },
+          "bravo_transitions_total": {
+            "present": true,
+            "required": true,
+            "source_path": "bravo.transitions",
+            "value": 0
+          },
+          "bravo_writer_recovery_remaining": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          },
+          "queue_overflow_rejected_total": {
+            "present": true,
+            "required": false,
+            "source_path": "rejected_enqueues",
+            "value": 0
+          },
+          "s3fifo_fairness_rejected_total": {
+            "present": true,
+            "required": true,
+            "source_path": "s3fifo.fairness_budget_rejections",
+            "value": 0
+          },
+          "s3fifo_fallback_reason": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          },
+          "s3fifo_fallback_transitions": {
+            "present": true,
+            "required": true,
+            "source_path": "s3fifo.fallback_event_total",
+            "value": 0
+          },
+          "s3fifo_ghost_hits_total": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          },
+          "s3fifo_lane_overflow_rejected_total": {
+            "present": true,
+            "required": true,
+            "source_path": "s3fifo.lane_overflow_rejections",
+            "value": 0
+          },
+          "s3fifo_mode": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          },
+          "safe_reclamation_fallback_transitions": {
+            "present": false,
+            "required": false,
+            "source_path": null,
+            "value": null
+          }
+        },
+        "missing_required_fields": [],
+        "path": "docs/evidence/ext-stress-reactor-queue-coverage.json",
+        "reactor_path": "captured_report_metrics.reactor",
+        "recommended_operator_action": "No hostcall queue fallback pressure is visible in this source.",
+        "status": "ready",
+        "warnings": []
+      }
+    ],
+    "status": "ready",
+    "summary": {
+      "bravo_rollbacks_total": 0,
+      "bravo_transitions_total": 0,
+      "missing_required_field_count": 0,
+      "queue_overflow_rejected_total": 0,
+      "s3fifo_fairness_rejected_total": 0,
+      "s3fifo_fallback_transitions": 0,
+      "s3fifo_lane_overflow_rejected_total": 0,
+      "safe_reclamation_fallback_transitions": 0,
+      "sources_checked": 2,
+      "sources_with_hostcall_queue_telemetry": 2,
+      "status_counts": {
+        "ready": 2
+      }
+    }
+  },
+  "max_age_days": 14,
+  "overall_status": "ready",
+  "schema": "pi.swarm.claim_readiness_report.v1",
+  "stale_claims": {
+    "items": [],
+    "policy": "report_only_no_auto_reopen_or_reassign",
+    "schema": "pi.swarm.stale_claim_report.v1",
+    "source_paths": {
+      "activity_jsonl": [],
+      "beads_ledger": ".beads/issues.jsonl"
+    },
+    "status": "ready",
+    "summary": {
+      "active_count": 0,
+      "classifications": {},
+      "in_progress_count": 0,
+      "missing_evidence_count": 0,
+      "stale_count": 0,
+      "unassigned_count": 0
+    },
+    "thresholds": {
+      "activity_fresh_after_hours": 6,
+      "stale_after_hours": 24
+    },
+    "warnings": []
+  }
+}
