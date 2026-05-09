@@ -26,9 +26,8 @@ from typing import Any
 REPORT_SCHEMA = "pi.swarm.claim_readiness_report.v1"
 STALE_CLAIM_REPORT_SCHEMA = "pi.swarm.stale_claim_report.v1"
 HOSTCALL_QUEUE_REPORT_SCHEMA = "pi.swarm.hostcall_queue_readiness.v1"
-GOLDEN_REPORT_RELATIVE_PATH = Path(
-    "tests/golden_corpus/swarm_claim_readiness/complete_report_projection.json"
-)
+GOLDEN_REPORT_DIRECTORY = Path("tests/golden_corpus/swarm_claim_readiness")
+COMPLETE_REPORT_GOLDEN = "complete_report_projection.json"
 UPDATE_GOLDEN_ENV = "UPDATE_SWARM_CLAIM_READINESS_GOLDEN"
 DEFAULT_MAX_AGE_DAYS = 14
 DEFAULT_STALE_CLAIM_AFTER_HOURS = 24
@@ -1428,8 +1427,9 @@ def assert_condition(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def repo_golden_path() -> Path:
-    return Path(__file__).resolve().parent.parent / GOLDEN_REPORT_RELATIVE_PATH
+def repo_golden_path(golden_name: str) -> tuple[Path, Path]:
+    relative_path = GOLDEN_REPORT_DIRECTORY / golden_name
+    return Path(__file__).resolve().parent.parent / relative_path, relative_path
 
 
 def canonical_report_projection(report: dict[str, Any]) -> dict[str, Any]:
@@ -1465,9 +1465,12 @@ def stable_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
-def assert_report_matches_golden(report: dict[str, Any]) -> None:
+def assert_report_matches_golden(
+    report: dict[str, Any],
+    golden_name: str = COMPLETE_REPORT_GOLDEN,
+) -> None:
     actual = stable_json(canonical_report_projection(report))
-    golden_path = repo_golden_path()
+    golden_path, relative_path = repo_golden_path(golden_name)
     if os.environ.get(UPDATE_GOLDEN_ENV) == "1":
         golden_path.parent.mkdir(parents=True, exist_ok=True)
         golden_path.write_text(actual, encoding="utf-8")
@@ -1477,7 +1480,7 @@ def assert_report_matches_golden(report: dict[str, Any]) -> None:
         expected = golden_path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise AssertionError(
-            f"{GOLDEN_REPORT_RELATIVE_PATH} is missing; run "
+            f"{relative_path} is missing; run "
             f"`{UPDATE_GOLDEN_ENV}=1 python3 scripts/report_swarm_claim_readiness.py "
             "--self-test` to create it, then review the diff."
         ) from exc
@@ -1487,7 +1490,7 @@ def assert_report_matches_golden(report: dict[str, Any]) -> None:
             difflib.unified_diff(
                 expected.splitlines(keepends=True),
                 actual.splitlines(keepends=True),
-                fromfile=str(GOLDEN_REPORT_RELATIVE_PATH),
+                fromfile=str(relative_path),
                 tofile="actual swarm claim readiness projection",
             )
         )
@@ -1579,6 +1582,7 @@ def run_self_test() -> int:
 
         repo_root = fixture_root()
         make_complete_fixture(repo_root, now)
+        write_beads_ledger(repo_root, [])
         stress_payload = fixture_payload(EVIDENCE_SPECS[1], now, "fixture-run")
         assert stress_payload is not None
         assign_path(stress_payload, "results.reactor.s3fifo.fairness_budget_rejections", 5)
@@ -1588,6 +1592,7 @@ def run_self_test() -> int:
         write_artifact(repo_root, EVIDENCE_SPECS[1].path, stress_payload, mtime=now)
         report = build_report(repo_root, now=now)
         hostcall = report["hostcall_queue_telemetry"]
+        assert_report_matches_golden(report, "hostcall_fallback_heavy_projection.json")
         assert_condition(
             hostcall["status"] == "fallback_heavy",
             "non-zero hostcall fallback counters should mark the run fallback-heavy",
@@ -1603,11 +1608,13 @@ def run_self_test() -> int:
 
         repo_root = fixture_root()
         make_complete_fixture(repo_root, now)
+        write_beads_ledger(repo_root, [])
         stress_payload = fixture_payload(EVIDENCE_SPECS[1], now, "fixture-run")
         assert stress_payload is not None
         stress_payload["results"] = {}
         write_artifact(repo_root, EVIDENCE_SPECS[1].path, stress_payload, mtime=now)
         report = build_report(repo_root, now=now)
+        assert_report_matches_golden(report, "hostcall_missing_telemetry_projection.json")
         missing_source = hostcall_source(report, "perf_stress_triage")
         assert_condition(
             missing_source["status"] == "missing_telemetry",
