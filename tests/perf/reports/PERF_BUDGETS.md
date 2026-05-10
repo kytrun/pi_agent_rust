@@ -1,8 +1,8 @@
 # Performance Budgets
 
-> Generated: 2026-05-10T00:48:04Z
+> Generated: 2026-05-10T01:12:24Z
 
-> Run ID: bd-2zcs5.51-darkgoose-20260510T0021Z
+> Run ID: bd-2zcs5.71-darkgoose-20260510T0058Z
 
 ## Summary
 
@@ -17,7 +17,7 @@
 | FAIL | 0 |
 | No data | 2 |
 
-| Failing data contracts | 2 |
+| Failing data contracts | 0 |
 
 ## Startup
 
@@ -74,10 +74,7 @@
 
 ## Failing Data Contracts
 
-- `missing_required_e2e_or_ratio_outputs` (`global`): full_e2e_long_session evidence has invalid required values (absolute_metrics.value=valid, rust_vs_node_ratio=missing_or_non_numeric, rust_vs_bun_ratio=missing_or_non_numeric) in /data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/extension_benchmark_stratification.json
-  - Remediation: Emit full_e2e_long_session absolute latency and Rust-vs-Node/Bun ratios as finite positive numbers.
-- `invalid_claim_integrity_guard` (`global`): claim_integrity.cherry_pick_guard requires global_claim_valid=true and layer_coverage.full_e2e_long_session=true (global_claim_valid=false, full_e2e_layer_coverage=false) in /data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/extension_benchmark_stratification.json
-  - Remediation: Emit claim_integrity.cherry_pick_guard.global_claim_valid=true and layer_coverage.full_e2e_long_session=true for valid global claims.
+- None
 
 ## Measurement Methodology
 

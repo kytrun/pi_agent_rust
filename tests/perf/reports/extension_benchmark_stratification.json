@@ -1,45 +1,178 @@
 {
   "schema": "pi.perf.extension_benchmark_stratification.v1",
-  "generated_at": "2026-02-17T03:04:00Z",
+  "bead_id": "bd-2zcs5.71",
+  "generated_at": "2026-05-10T01:04:47.457606+00:00",
+  "run_id": "bd-2zcs5.71-darkgoose-20260510T0058Z",
+  "correlation_id": "bd-2zcs5.71-darkgoose-20260510T0058Z",
+  "profile": "perf",
+  "execution_contract": {
+    "orchestrator": "scripts/bench_legacy_extension_workloads.mjs + target-local perf budget refresh",
+    "layer_definition_version": "1.0.0",
+    "required_layers": [
+      "cold_load_init",
+      "per_call_dispatch_micro",
+      "full_e2e_long_session"
+    ],
+    "lineage_contract": "Rust measurements and Node/Bun portable extension API measurements are generated in the same bd-2zcs5.71 refresh window."
+  },
   "layers": [
     {
       "layer_id": "cold_load_init",
+      "display_name": "Cold-load and initialization",
+      "scenario_tags": [
+        "cold-load",
+        "init",
+        "extension-runtime",
+        "microbench"
+      ],
+      "expected_suites": [
+        "extension_criterion_load_init",
+        "legacy_node_bun_load_init"
+      ],
+      "suite_status": {
+        "rust": "pass",
+        "node": "pass",
+        "bun": "pass"
+      },
       "absolute_metrics": {
-        "value": 10.0
+        "metric_name": "cold_load_p95",
+        "value": 1.0673958504945056,
+        "unit": "ms"
       },
       "relative_metrics": {
-        "rust_vs_node_ratio": 2.1,
-        "rust_vs_bun_ratio": 1.7
+        "rust_vs_node_ratio": 1.5256816217033922,
+        "rust_vs_node_ratio_basis": "node_legacy_extension_workloads",
+        "rust_vs_bun_ratio": 2.7582606674854113,
+        "rust_vs_bun_ratio_basis": "bun_legacy_extension_workloads"
+      },
+      "confidence": "high",
+      "evidence_state": "measured",
+      "interpretation": "Cold-load evidence is attribution-only and does not substitute for full-session evidence.",
+      "lineage": {
+        "run_id_lineage": [
+          "bd-2zcs5.71-darkgoose-20260510T0058Z"
+        ],
+        "source_artifacts": [
+          "/data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/criterion/ext_load_init/load_init_cold/hello/new/estimates.json",
+          "/data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/legacy_extension_workloads.jsonl"
+        ]
       }
     },
     {
       "layer_id": "per_call_dispatch_micro",
+      "display_name": "Per-call dispatch microbench",
+      "scenario_tags": [
+        "per-call",
+        "dispatch",
+        "hostcall",
+        "microbench"
+      ],
+      "expected_suites": [
+        "pijs_workload",
+        "legacy_node_bun_tool_call"
+      ],
+      "suite_status": {
+        "rust": "pass",
+        "node": "pass",
+        "bun": "pass"
+      },
       "absolute_metrics": {
-        "value": 40.0
+        "metric_name": "dispatch_per_call",
+        "value": 8.898197,
+        "unit": "us"
       },
       "relative_metrics": {
-        "rust_vs_node_ratio": 2.0,
-        "rust_vs_bun_ratio": 1.6
+        "rust_vs_node_ratio": 2.6142184422300043,
+        "rust_vs_node_ratio_basis": "node_legacy_extension_workloads",
+        "rust_vs_bun_ratio": 4.23837093545987,
+        "rust_vs_bun_ratio_basis": "bun_legacy_extension_workloads"
+      },
+      "confidence": "high",
+      "evidence_state": "measured",
+      "interpretation": "Per-call evidence is diagnostic and does not substitute for full-session outcomes.",
+      "lineage": {
+        "run_id_lineage": [
+          "bd-2zcs5.71-darkgoose-20260510T0058Z"
+        ],
+        "source_artifacts": [
+          "/data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/perf/pijs_workload_perf.jsonl",
+          "/data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/legacy_extension_workloads.jsonl"
+        ]
       }
     },
     {
       "layer_id": "full_e2e_long_session",
+      "display_name": "Full end-to-end long-session workload",
+      "scenario_tags": [
+        "full-e2e",
+        "long-session",
+        "user-facing",
+        "release-facing"
+      ],
+      "expected_suites": [
+        "pijs_workload",
+        "legacy_node_bun_full_session"
+      ],
+      "suite_status": {
+        "rust": "pass",
+        "node": "pass",
+        "bun": "pass"
+      },
       "absolute_metrics": {
-        "value": 120.0
+        "metric_name": "long_session_elapsed",
+        "value": 177.427,
+        "unit": "ms"
       },
       "relative_metrics": {
-        "rust_vs_node_ratio": 1.8,
-        "rust_vs_bun_ratio": 1.5
+        "rust_vs_node_ratio": 0.09937621860062154,
+        "rust_vs_node_ratio_basis": "node_legacy_extension_workloads",
+        "rust_vs_bun_ratio": 0.10796369940198763,
+        "rust_vs_bun_ratio_basis": "bun_legacy_extension_workloads"
+      },
+      "confidence": "high",
+      "evidence_state": "measured",
+      "interpretation": "Full-session evidence is the release-facing signal for extension runtime claims.",
+      "lineage": {
+        "run_id_lineage": [
+          "bd-2zcs5.71-darkgoose-20260510T0058Z"
+        ],
+        "source_artifacts": [
+          "/data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/perf/pijs_workload_perf.jsonl",
+          "/data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/legacy_extension_workloads.jsonl"
+        ]
       }
     }
   ],
   "claim_integrity": {
+    "anti_conflation": {
+      "cold_load_wins_do_not_imply_per_call_or_e2e": true,
+      "per_call_wins_do_not_imply_full_e2e": true,
+      "full_e2e_is_release_facing_primary_signal": true
+    },
     "cherry_pick_guard": {
-      "invalidity_reasons": [],
-      "global_claim_valid": true,
+      "requires_all_layers_for_global_claim": true,
       "layer_coverage": {
+        "cold_load_init": true,
+        "per_call_dispatch_micro": true,
         "full_e2e_long_session": true
-      }
-    }
+      },
+      "global_claim_valid": true,
+      "invalidity_reasons": []
+    },
+    "required_partition_tags": [
+      "extension-full-session"
+    ],
+    "partition_coverage": {
+      "extension-full-session": true
+    },
+    "policy_ref": "docs/perf_sli_matrix.json#ci_enforcement.fail_closed_conditions"
+  },
+  "lineage": {
+    "run_id_lineage": [
+      "bd-2zcs5.71-darkgoose-20260510T0058Z"
+    ],
+    "source_pijs_workload_path": "/data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/perf/pijs_workload_perf.jsonl",
+    "source_cold_load_path": "/data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/criterion/ext_load_init/load_init_cold/hello/new/estimates.json",
+    "source_legacy_extension_workloads_path": "/data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/legacy_extension_workloads.jsonl"
   }
 }

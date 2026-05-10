@@ -7,7 +7,7 @@
 {"budget_name":"tool_call_throughput_min","category":"tool_call","threshold":5000.0,"unit":"calls/sec","actual":112722.0,"status":"PASS","source":"/data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/perf/pijs_workload_perf.jsonl","ci_enforced":true}
 {"budget_name":"event_dispatch_p99","category":"event_dispatch","threshold":5000.0,"unit":"us","actual":null,"status":"NO_DATA","source":"no scenario_runner data for event_dispatch","ci_enforced":false}
 {"budget_name":"policy_eval_p99","category":"policy","threshold":500.0,"unit":"ns","actual":30.321455999033574,"status":"PASS","source":"criterion: ext_policy/evaluate (max)","ci_enforced":true}
-{"budget_name":"idle_memory_rss","category":"memory","threshold":50.0,"unit":"MB","actual":3.50390625,"status":"PASS","source":"sysinfo: current process RSS","ci_enforced":true}
+{"budget_name":"idle_memory_rss","category":"memory","threshold":50.0,"unit":"MB","actual":3.51171875,"status":"PASS","source":"sysinfo: current process RSS","ci_enforced":true}
 {"budget_name":"sustained_load_rss_growth","category":"memory","threshold":5.0,"unit":"percent","actual":0.0,"status":"PASS","source":"tests/perf/reports/stress_triage.json","ci_enforced":false}
 {"budget_name":"binary_size_release","category":"binary","threshold":22.0,"unit":"MB","actual":21.17967987060547,"status":"PASS","source":"/data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/release/pi","ci_enforced":true}
 {"budget_name":"protocol_parse_p99","category":"protocol","threshold":50.0,"unit":"us","actual":3.0559037274221987,"status":"PASS","source":"criterion: ext_protocol/parse_and_validate (max)","ci_enforced":true}

@@ -122,27 +122,14 @@
   "ci_fail": 0,
   "ci_no_data": 0,
   "ci_with_data": 8,
-  "correlation_id": "bd-2zcs5.51-darkgoose-20260510T0021Z",
-  "data_contract_failures_count": 2,
+  "correlation_id": "bd-2zcs5.71-darkgoose-20260510T0058Z",
+  "data_contract_failures_count": 0,
   "fail": 0,
-  "failing_data_contracts": [
-    {
-      "budget_name": null,
-      "contract_id": "missing_required_e2e_or_ratio_outputs",
-      "detail": "full_e2e_long_session evidence has invalid required values (absolute_metrics.value=valid, rust_vs_node_ratio=missing_or_non_numeric, rust_vs_bun_ratio=missing_or_non_numeric) in /data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/extension_benchmark_stratification.json",
-      "remediation": "Emit full_e2e_long_session absolute latency and Rust-vs-Node/Bun ratios as finite positive numbers."
-    },
-    {
-      "budget_name": null,
-      "contract_id": "invalid_claim_integrity_guard",
-      "detail": "claim_integrity.cherry_pick_guard requires global_claim_valid=true and layer_coverage.full_e2e_long_session=true (global_claim_valid=false, full_e2e_layer_coverage=false) in /data/tmp/pi_agent_rust_cargo/darkgoose-bd-2zcs5-51/target/perf/extension_benchmark_stratification.json",
-      "remediation": "Emit claim_integrity.cherry_pick_guard.global_claim_valid=true and layer_coverage.full_e2e_long_session=true for valid global claims."
-    }
-  ],
-  "generated_at": "2026-05-10T00:48:04.347063721+00:00",
+  "failing_data_contracts": [],
+  "generated_at": "2026-05-10T01:12:24.268305842+00:00",
   "no_data": 2,
   "pass": 11,
-  "run_id": "bd-2zcs5.51-darkgoose-20260510T0021Z",
+  "run_id": "bd-2zcs5.71-darkgoose-20260510T0058Z",
   "schema": "pi.perf.budget_summary.v1",
   "total_budgets": 13
 }

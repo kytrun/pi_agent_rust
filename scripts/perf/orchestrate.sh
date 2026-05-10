@@ -1509,33 +1509,65 @@ def extract_ratio_from_comparison_row(row):
     return None
 
 
-legacy_cold_samples_ms: list[float] = []
-legacy_tool_samples_us: list[float] = []
+def legacy_runtime_kind(record: dict) -> str:
+    runtime = str(record.get("runtime", "")).strip().lower()
+    runtime_kind = str(record.get("runtime_kind", "")).strip().lower()
+    joined = " ".join(token for token in (runtime, runtime_kind) if token)
+    if "bun" in joined:
+        return "bun"
+    if "node" in joined or runtime == "legacy_pi_mono":
+        return "node"
+    return "node"
+
+
+legacy_cold_samples_ms_by_runtime: dict[str, list[float]] = {"node": [], "bun": []}
+legacy_tool_samples_us_by_runtime: dict[str, list[float]] = {"node": [], "bun": []}
+legacy_full_e2e_samples_ms_by_runtime: dict[str, list[float]] = {"node": [], "bun": []}
 for record in legacy_records:
+    runtime_kind = legacy_runtime_kind(record)
     scenario = str(record.get("scenario", "")).strip()
     if scenario == "ext_load_init/load_init_cold":
         summary = record.get("summary", {})
         if isinstance(summary, dict):
             p50_ms = parse_float(summary.get("p50_ms"))
             if p50_ms is not None:
-                legacy_cold_samples_ms.append(p50_ms)
+                legacy_cold_samples_ms_by_runtime.setdefault(runtime_kind, []).append(p50_ms)
     if scenario == "ext_tool_call/hello":
         per_call_us = parse_float(record.get("per_call_us"))
         if per_call_us is not None:
-            legacy_tool_samples_us.append(per_call_us)
+            legacy_tool_samples_us_by_runtime.setdefault(runtime_kind, []).append(per_call_us)
+    if scenario == "full_e2e_long_session":
+        elapsed_ms = parse_float(record.get("elapsed_ms"))
+        if elapsed_ms is not None:
+            legacy_full_e2e_samples_ms_by_runtime.setdefault(runtime_kind, []).append(elapsed_ms)
 
-legacy_cold_ms = mean(legacy_cold_samples_ms)
-legacy_tool_us = mean(legacy_tool_samples_us)
+legacy_cold_node_ms = mean(legacy_cold_samples_ms_by_runtime.get("node", []))
+legacy_cold_bun_ms = mean(legacy_cold_samples_ms_by_runtime.get("bun", []))
+legacy_tool_node_us = mean(legacy_tool_samples_us_by_runtime.get("node", []))
+legacy_tool_bun_us = mean(legacy_tool_samples_us_by_runtime.get("bun", []))
+legacy_full_e2e_node_ms = mean(legacy_full_e2e_samples_ms_by_runtime.get("node", []))
+legacy_full_e2e_bun_ms = mean(legacy_full_e2e_samples_ms_by_runtime.get("bun", []))
+
+
+def ratio_from_pair(rust_value, legacy_value):
+    if rust_value is not None and legacy_value is not None and legacy_value > 0:
+        return rust_value / legacy_value
+    return None
 
 cold_node_ratio = None
+cold_bun_ratio = None
 per_call_node_ratio = None
+per_call_bun_ratio = None
 full_e2e_node_ratio = None
+full_e2e_bun_ratio = None
+full_e2e_node_ratio_basis = "missing"
 
 cold_ratio_row = comparison_row("rust-to-ts ratio", "load time")
 if isinstance(cold_ratio_row, dict):
     cold_node_ratio = parse_float(cold_ratio_row.get("rust_value"))
-if cold_node_ratio is None and cold_abs_ms is not None and legacy_cold_ms is not None and legacy_cold_ms > 0:
-    cold_node_ratio = cold_abs_ms / legacy_cold_ms
+if cold_node_ratio is None:
+    cold_node_ratio = ratio_from_pair(cold_abs_ms, legacy_cold_node_ms)
+cold_bun_ratio = ratio_from_pair(cold_abs_ms, legacy_cold_bun_ms)
 
 per_call_row = comparison_row("hello per-call latency", "tool call")
 if isinstance(per_call_row, dict):
@@ -1543,27 +1575,25 @@ if isinstance(per_call_row, dict):
     legacy_value = parse_float(per_call_row.get("legacy_value"))
     if rust_value is not None and legacy_value and legacy_value > 0:
         per_call_node_ratio = rust_value / legacy_value
-if per_call_node_ratio is None and per_call_abs_us is not None and legacy_tool_us is not None and legacy_tool_us > 0:
-    per_call_node_ratio = per_call_abs_us / legacy_tool_us
+if per_call_node_ratio is None:
+    per_call_node_ratio = ratio_from_pair(per_call_abs_us, legacy_tool_node_us)
+per_call_bun_ratio = ratio_from_pair(per_call_abs_us, legacy_tool_bun_us)
 
-full_e2e_row = comparison_row("200 iters x 1 tool", "e2e process")
-full_e2e_node_ratio = extract_ratio_from_comparison_row(full_e2e_row)
+full_e2e_node_ratio = ratio_from_pair(full_e2e_abs_ms, legacy_full_e2e_node_ms)
+if full_e2e_node_ratio is not None:
+    full_e2e_node_ratio_basis = "node_legacy_extension_workloads"
 if full_e2e_node_ratio is None:
-    # Some perf_comparison payloads publish ratio rows separately from E2E rows.
-    ratio_row = comparison_row("rust-to-ts ratio", "load time")
-    full_e2e_node_ratio = extract_ratio_from_comparison_row(ratio_row)
-if full_e2e_node_ratio is None and full_e2e_abs_ms is not None:
-    # Last-resort fallback when E2E absolute timing exists but legacy baselines are absent.
-    for proxy_ratio in (per_call_node_ratio, cold_node_ratio):
-        if proxy_ratio is not None and proxy_ratio > 0:
-            full_e2e_node_ratio = proxy_ratio
-            break
+    full_e2e_row = comparison_row("200 iters x 1 tool", "e2e process")
+    full_e2e_node_ratio = extract_ratio_from_comparison_row(full_e2e_row)
+    if full_e2e_node_ratio is not None:
+        full_e2e_node_ratio_basis = "perf_comparison_full_e2e"
+full_e2e_bun_ratio = ratio_from_pair(full_e2e_abs_ms, legacy_full_e2e_bun_ms)
 
-# Bun coverage is still missing in existing benchmark sources; emit explicit proxy/missing state.
-def bun_ratio_from_node(node_ratio):
-    if node_ratio is None:
-        return (None, "missing")
-    return (node_ratio, "node_proxy")
+
+def ratio_basis(value, measured_basis: str) -> str:
+    if value is None:
+        return "missing"
+    return measured_basis
 
 
 def build_layer(
@@ -1576,10 +1606,11 @@ def build_layer(
     absolute_unit: str,
     node_ratio,
     node_ratio_basis: str,
+    bun_ratio,
+    bun_ratio_basis: str,
     source_artifacts: list[Path],
     interpretation: str,
 ) -> dict:
-    bun_ratio, bun_ratio_basis = bun_ratio_from_node(node_ratio)
     suite_statuses = {name: suite_status(name, suite_result_by_name) for name in expected_suites}
     absolute_present = absolute_value is not None
     relative_present = node_ratio is not None and bun_ratio is not None
@@ -1640,7 +1671,9 @@ layers = [
         cold_abs_ms,
         "ms",
         cold_node_ratio,
-        "direct_or_derived",
+        ratio_basis(cold_node_ratio, "node_legacy_extension_workloads"),
+        cold_bun_ratio,
+        ratio_basis(cold_bun_ratio, "bun_legacy_extension_workloads"),
         [ext_bench_path, ext_bench_report_path, scenario_runner_path],
         "Cold-load wins are attribution-only and must not be promoted as global UX claims.",
     ),
@@ -1653,7 +1686,9 @@ layers = [
         per_call_abs_us,
         "us",
         per_call_node_ratio,
-        "direct_or_derived",
+        ratio_basis(per_call_node_ratio, "node_legacy_extension_workloads"),
+        per_call_bun_ratio,
+        ratio_basis(per_call_bun_ratio, "bun_legacy_extension_workloads"),
         [scenario_runner_path, workload_path],
         "Per-call improvements are diagnostic and cannot substitute for full-session outcomes.",
     ),
@@ -1666,8 +1701,10 @@ layers = [
         full_e2e_abs_ms,
         "ms",
         full_e2e_node_ratio,
-        "direct_or_derived",
-        [workload_path, perf_comparison_path],
+        full_e2e_node_ratio_basis,
+        full_e2e_bun_ratio,
+        ratio_basis(full_e2e_bun_ratio, "bun_legacy_extension_workloads"),
+        [workload_path, legacy_path, perf_comparison_path],
         "Full E2E evidence is the release-facing signal and must gate global speed claims.",
     ),
 ]

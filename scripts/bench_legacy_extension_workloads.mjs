@@ -13,18 +13,26 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
-
-import { discoverAndLoadExtensions } from "../legacy_pi_mono_code/pi-mono/packages/coding-agent/dist/core/extensions/loader.js";
-import { ExtensionRunner } from "../legacy_pi_mono_code/pi-mono/packages/coding-agent/dist/core/extensions/runner.js";
-import { wrapRegisteredTools } from "../legacy_pi_mono_code/pi-mono/packages/coding-agent/dist/core/extensions/wrapper.js";
-import { AuthStorage } from "../legacy_pi_mono_code/pi-mono/packages/coding-agent/dist/core/auth-storage.js";
-import { ModelRegistry } from "../legacy_pi_mono_code/pi-mono/packages/coding-agent/dist/core/model-registry.js";
-import { SessionManager } from "../legacy_pi_mono_code/pi-mono/packages/coding-agent/dist/core/session-manager.js";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
+const RUNTIME_KIND = process.versions.bun ? "bun" : "node";
+const RUNTIME_LABEL = `portable_${RUNTIME_KIND}_extension_api`;
+const COMPILED_MODULES = new Map();
+const COMPILED_SOURCES = new Map();
+
+const TYPEBOX_STUB = `const Type = {
+  Object: (properties = {}, options = {}) => ({ type: "object", properties, ...options }),
+  String: (options = {}) => ({ type: "string", ...options }),
+  Number: (options = {}) => ({ type: "number", ...options }),
+  Boolean: (options = {}) => ({ type: "boolean", ...options }),
+  Array: (items, options = {}) => ({ type: "array", items, ...options }),
+  Optional: (schema) => ({ ...schema, optional: true }),
+  Literal: (value) => ({ const: value }),
+  Union: (anyOf, options = {}) => ({ anyOf, ...options }),
+};`;
 
 function nowNs() {
 	return process.hrtime.bigint();
@@ -40,6 +48,15 @@ function nsToUs(ns) {
 
 function mkdirTemp(prefix) {
 	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function runtimeMetadata() {
+	return {
+		kind: RUNTIME_KIND,
+		version: process.versions.bun ?? process.version,
+		platform: process.platform,
+		arch: process.arch,
+	};
 }
 
 function percentile(sortedNumbers, pct) {
@@ -78,25 +95,102 @@ function summarizeNs(valuesNs) {
 	};
 }
 
-function noopBindings() {
-	// Keep these minimal; most benchmarks only need tool execution and event dispatch.
-	const actions = {
-		sendMessage: () => {},
-		sendUserMessage: () => {},
-		appendEntry: () => {},
-		setSessionName: () => {},
-		getSessionName: () => undefined,
-		setLabel: () => {},
-		getActiveTools: () => [],
-		getAllTools: () => [],
-		setActiveTools: () => {},
-		setModel: async () => {},
-		getThinkingLevel: () => "off",
-		setThinkingLevel: async () => {},
-	};
+function transpileFixtureSource(source) {
+	return source
+		.replace(/^\s*import\s+type\s+[^;]+;\s*$/gm, "")
+		.replace(
+			/^\s*import\s+\{\s*Type\s*\}\s+from\s+["']@sinclair\/typebox["'];\s*$/gm,
+			TYPEBOX_STUB,
+		)
+		.replace(/:\s*ExtensionAPI\b/g, "")
+		.replace(/\s+as\s+\{[^}]*\}/g, "");
+}
 
-	const contextActions = {
-		getModel: () => undefined,
+function compiledSource(entryPath) {
+	const resolved = path.resolve(entryPath);
+	const cached = COMPILED_SOURCES.get(resolved);
+	if (cached) return cached;
+
+	const source = fs.readFileSync(resolved, "utf-8");
+	const compiled = transpileFixtureSource(source);
+	COMPILED_SOURCES.set(resolved, compiled);
+	return compiled;
+}
+
+function sanitizeNonce(nonce) {
+	return String(nonce).replace(/[^A-Za-z0-9_.-]/g, "_");
+}
+
+function compiledModulePath(entryPath) {
+	const resolved = path.resolve(entryPath);
+	const cached = COMPILED_MODULES.get(resolved);
+	if (cached) return cached;
+
+	const compiled = compiledSource(resolved);
+	const tempDir = mkdirTemp("pi-legacy-portable-extension-");
+	const outPath = path.join(tempDir, `${path.basename(resolved).replace(/\.[^.]+$/, "")}.mjs`);
+	fs.writeFileSync(outPath, compiled, "utf-8");
+	COMPILED_MODULES.set(resolved, outPath);
+	return outPath;
+}
+
+async function loadExtensionFactory(entryPath, nonce) {
+	let compiledPath = compiledModulePath(entryPath);
+	if (RUNTIME_KIND === "bun") {
+		// Bun 1.3 caches file imports even when a query string changes. Use a
+		// distinct temporary module file for each cache-busted load so cold-load
+		// and full-session measurements actually reparse the extension source.
+		const resolved = path.resolve(entryPath);
+		const tempDir = mkdirTemp("pi-legacy-portable-bun-extension-");
+		compiledPath = path.join(
+			tempDir,
+			`${path.basename(resolved).replace(/\.[^.]+$/, "")}-${sanitizeNonce(nonce)}.mjs`,
+		);
+		fs.writeFileSync(compiledPath, compiledSource(resolved), "utf-8");
+	}
+	const moduleUrl = `${pathToFileURL(compiledPath).href}?run=${encodeURIComponent(nonce)}`;
+	const module = await import(moduleUrl);
+	if (typeof module.default !== "function") {
+		throw new Error(`Extension does not export a default factory: ${entryPath}`);
+	}
+	return module.default;
+}
+
+function createNoopContext(cwd) {
+	return {
+		ui: {
+			select: async () => undefined,
+			confirm: async () => false,
+			input: async () => undefined,
+			notify: () => {},
+			setStatus: () => {},
+			setWorkingMessage: () => {},
+			setWidget: () => {},
+			setFooter: () => {},
+			setHeader: () => {},
+			setTitle: () => {},
+			custom: async () => undefined,
+			setEditorText: () => {},
+			getEditorText: () => "",
+			editor: async () => undefined,
+			setEditorComponent: () => {},
+			getAllThemes: () => [],
+			getTheme: () => undefined,
+			setTheme: () => ({ success: false, error: "UI not available" }),
+		},
+		hasUI: false,
+		cwd,
+		sessionManager: {
+			getCurrentSession: () => undefined,
+			listSessions: () => [],
+		},
+		modelRegistry: {
+			getCurrentModel: () => undefined,
+			listModels: () => [],
+		},
+		get model() {
+			return undefined;
+		},
 		isIdle: () => true,
 		abort: () => {},
 		hasPendingMessages: () => false,
@@ -105,48 +199,102 @@ function noopBindings() {
 		compact: () => {},
 		getSystemPrompt: () => "",
 	};
-
-	return { actions, contextActions };
 }
 
-async function loadRunner(entryPath, cwd) {
-	// Override agentDir to avoid accidentally loading user-installed extensions.
-	const agentDir = mkdirTemp("pi-legacy-bench-agent-");
-	const result = await discoverAndLoadExtensions([entryPath], cwd, agentDir);
+async function loadRunner(entryPath, cwd, nonce = `${Date.now()}-${Math.random()}`) {
+	const tools = new Map();
+	const commands = new Map();
+	const handlers = new Map();
+	const flags = new Map();
+	const flagValues = new Map();
 
-	const sessionManager = SessionManager.inMemory();
-	const authStorage = new AuthStorage(path.join(agentDir, "auth.json"));
-	const modelRegistry = new ModelRegistry(authStorage);
+	const api = {
+		on(event, handler) {
+			const list = handlers.get(event) ?? [];
+			list.push(handler);
+			handlers.set(event, list);
+		},
+		registerTool(tool) {
+			tools.set(tool.name, tool);
+		},
+		registerCommand(name, options) {
+			commands.set(name, { name, ...options });
+		},
+		registerShortcut() {},
+		registerFlag(name, options) {
+			flags.set(name, options);
+			if (Object.hasOwn(options, "default")) {
+				flagValues.set(name, options.default);
+			}
+		},
+		registerMessageRenderer() {},
+		getFlag(name) {
+			return flagValues.get(name);
+		},
+		sendMessage() {},
+		sendUserMessage() {},
+		appendEntry() {},
+		setSessionName() {},
+		getSessionName: () => undefined,
+		setLabel() {},
+		exec: async () => {
+			throw new Error("portable benchmark harness does not execute shell commands");
+		},
+		getActiveTools: () => [...tools.keys()],
+		getAllTools: () => [...tools.values()],
+		setActiveTools() {},
+		setModel: async () => {},
+		getThinkingLevel: () => "off",
+		setThinkingLevel: async () => {},
+		registerProvider() {},
+		events: {
+			on: () => {},
+			emit: async () => {},
+		},
+	};
 
-	const runner = new ExtensionRunner(result.extensions, result.runtime, cwd, sessionManager, modelRegistry);
-	const { actions, contextActions } = noopBindings();
-	runner.bindCore(actions, contextActions);
-	return runner;
+	const factory = await loadExtensionFactory(entryPath, nonce);
+	await factory(api);
+
+	return {
+		tools,
+		commands,
+		handlers,
+		createContext: () => createNoopContext(cwd),
+		hasHandlers: (eventName) => (handlers.get(eventName) ?? []).length > 0,
+		async emit(event) {
+			let result;
+			const ctx = createNoopContext(cwd);
+			for (const handler of handlers.get(event.type) ?? []) {
+				const handlerResult = await handler(event, ctx);
+				if (handlerResult !== undefined) {
+					result = handlerResult;
+				}
+			}
+			return result;
+		},
+	};
 }
 
 async function scenarioLoadInitCold(extName, entryPath, { cwd, runs }) {
 	const timingsNs = [];
 
 	for (let i = 0; i < runs; i++) {
-		const agentDir = mkdirTemp("pi-legacy-bench-agent-");
-
 		const start = nowNs();
-		const result = await discoverAndLoadExtensions([entryPath], cwd, agentDir);
-		const sessionManager = SessionManager.inMemory();
-		const authStorage = new AuthStorage(path.join(agentDir, "auth.json"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const runner = new ExtensionRunner(result.extensions, result.runtime, cwd, sessionManager, modelRegistry);
-		const { actions, contextActions } = noopBindings();
-		runner.bindCore(actions, contextActions);
+		const runner = await loadRunner(entryPath, cwd, `cold-${extName}-${RUNTIME_KIND}-${i}`);
 		// Touch the registries so "load+init" includes basic access/validation.
-		runner.getAllRegisteredTools();
+		if (runner.tools.size === 0 && runner.commands.size === 0 && runner.handlers.size === 0) {
+			throw new Error(`Extension registered no tools, commands, or handlers: ${entryPath}`);
+		}
 		const end = nowNs();
 		timingsNs.push(end - start);
 	}
 
 	return {
 		schema: "pi.ext.legacy_bench.v1",
-		runtime: "legacy_pi_mono",
+		runtime: RUNTIME_LABEL,
+		runtime_kind: RUNTIME_KIND,
+		runtime_family: "portable_extension_api",
 		scenario: "ext_load_init/load_init_cold",
 		extension: extName,
 		runs,
@@ -156,14 +304,13 @@ async function scenarioLoadInitCold(extName, entryPath, { cwd, runs }) {
 			platform: process.platform,
 			arch: process.arch,
 		},
+		runtime_metadata: runtimeMetadata(),
 	};
 }
 
 async function scenarioToolCall(extName, entryPath, toolName, toolInput, { cwd, iterations }) {
 	const runner = await loadRunner(entryPath, cwd);
-	const registered = runner.getAllRegisteredTools();
-	const tools = wrapRegisteredTools(registered, runner);
-	const tool = tools.find((t) => t.name === toolName);
+	const tool = runner.tools.get(toolName);
 	if (!tool) {
 		throw new Error(`Tool not found: ${toolName} (extension=${extName})`);
 	}
@@ -173,7 +320,7 @@ async function scenarioToolCall(extName, entryPath, toolName, toolInput, { cwd, 
 		// Keep callId stable; this mirrors the Rust benchmark and avoids extra allocations.
 		// The tool interface treats it as an opaque identifier.
 		// eslint-disable-next-line no-await-in-loop
-		await tool.execute("bench-call-1", toolInput);
+		await tool.execute("bench-call-1", toolInput, undefined, () => {}, runner.createContext());
 	}
 	const elapsedNs = nowNs() - start;
 
@@ -194,11 +341,26 @@ async function scenarioToolCall(extName, entryPath, toolName, toolInput, { cwd, 
 			platform: process.platform,
 			arch: process.arch,
 		},
+		runtime: RUNTIME_LABEL,
+		runtime_kind: RUNTIME_KIND,
+		runtime_family: "portable_extension_api",
+		runtime_metadata: runtimeMetadata(),
 	};
 }
 
 async function scenarioEventHook(extName, entryPath, { cwd, iterations }) {
 	const runner = await loadRunner(entryPath, cwd);
+	const command = runner.commands.get("pirate");
+	if (command?.handler) {
+		await command.handler("", {
+			...runner.createContext(),
+			waitForIdle: async () => {},
+			newSession: async () => ({ cancelled: false }),
+			fork: async () => ({ cancelled: false }),
+			navigateTree: async () => ({ cancelled: false }),
+			switchSession: async () => ({ cancelled: false }),
+		});
+	}
 
 	const start = nowNs();
 	for (let i = 0; i < iterations; i++) {
@@ -228,6 +390,89 @@ async function scenarioEventHook(extName, entryPath, { cwd, iterations }) {
 			platform: process.platform,
 			arch: process.arch,
 		},
+		runtime: RUNTIME_LABEL,
+		runtime_kind: RUNTIME_KIND,
+		runtime_family: "portable_extension_api",
+		runtime_metadata: runtimeMetadata(),
+	};
+}
+
+async function scenarioFullE2ELongSession(helloEntry, pirateEntry, { cwd, iterations, toolCalls }) {
+	const sessionTurns = iterations;
+	const start = nowNs();
+	let toolExecutions = 0;
+	let eventExecutions = 0;
+
+	for (let i = 0; i < sessionTurns; i++) {
+		const helloRunner = await loadRunner(helloEntry, cwd, `full-hello-${RUNTIME_KIND}-${i}`);
+		const helloTool = helloRunner.tools.get("hello");
+		if (!helloTool) {
+			throw new Error("Tool not found during full E2E workload: hello");
+		}
+		for (let j = 0; j < toolCalls; j++) {
+			// eslint-disable-next-line no-await-in-loop
+			await helloTool.execute(
+				`bench-call-${i}-${j}`,
+				{ name: "World" },
+				undefined,
+				() => {},
+				helloRunner.createContext(),
+			);
+			toolExecutions += 1;
+		}
+
+		const pirateRunner = await loadRunner(pirateEntry, cwd, `full-pirate-${RUNTIME_KIND}-${i}`);
+		const command = pirateRunner.commands.get("pirate");
+		if (command?.handler) {
+			// eslint-disable-next-line no-await-in-loop
+			await command.handler("", {
+				...pirateRunner.createContext(),
+				waitForIdle: async () => {},
+				newSession: async () => ({ cancelled: false }),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				switchSession: async () => ({ cancelled: false }),
+			});
+		}
+		// eslint-disable-next-line no-await-in-loop
+		await pirateRunner.emit({
+			type: "before_agent_start",
+			prompt: "",
+			systemPrompt: "You are Pi.",
+		});
+		eventExecutions += 1;
+	}
+
+	const elapsedNs = nowNs() - start;
+	const elapsedMs = nsToMs(elapsedNs);
+
+	return {
+		schema: "pi.ext.legacy_bench.v1",
+		runtime: RUNTIME_LABEL,
+		runtime_kind: RUNTIME_KIND,
+		runtime_family: "portable_extension_api",
+		scenario: "full_e2e_long_session",
+		extension: "hello+pirate",
+		iterations: sessionTurns,
+		tool_calls_per_iteration: toolCalls,
+		tool_executions: toolExecutions,
+		event_executions: eventExecutions,
+		elapsed_ms: elapsedMs,
+		per_iteration_ms: elapsedMs / sessionTurns,
+		calls_per_sec: ((toolExecutions + eventExecutions) * 1_000_000) / nsToUs(elapsedNs),
+		workload_shape: {
+			description:
+				"cache-busted extension load, hello tool dispatch, pirate command toggle, and before_agent_start event per session turn",
+			extension_loads_per_iteration: 2,
+			tool_calls_per_iteration: toolCalls,
+			event_hooks_per_iteration: 1,
+		},
+		node: {
+			version: process.version,
+			platform: process.platform,
+			arch: process.arch,
+		},
+		runtime_metadata: runtimeMetadata(),
 	};
 }
 
@@ -236,7 +481,9 @@ function parseArgs(argv) {
 		cwd: ROOT,
 		loadRuns: Number(process.env.LOAD_RUNS ?? "5"),
 		iterations: Number(process.env.ITERATIONS ?? "2000"),
+		toolCalls: Number(process.env.TOOL_CALLS ?? "10"),
 		out: process.env.JSONL_OUT ?? null,
+		append: false,
 	};
 
 	for (let i = 0; i < argv.length; i++) {
@@ -249,8 +496,16 @@ function parseArgs(argv) {
 			args.iterations = Number(argv[++i] ?? "");
 			continue;
 		}
+		if (token === "--tool-calls") {
+			args.toolCalls = Number(argv[++i] ?? "");
+			continue;
+		}
 		if (token === "--out") {
 			args.out = argv[++i] ?? null;
+			continue;
+		}
+		if (token === "--append") {
+			args.append = true;
 			continue;
 		}
 		if (token === "--help" || token === "-h") {
@@ -266,17 +521,21 @@ function parseArgs(argv) {
 	if (!Number.isFinite(args.iterations) || args.iterations <= 0) {
 		throw new Error(`--iterations must be > 0 (got ${args.iterations})`);
 	}
+	if (!Number.isFinite(args.toolCalls) || args.toolCalls <= 0) {
+		throw new Error(`--tool-calls must be > 0 (got ${args.toolCalls})`);
+	}
 
 	return args;
 }
 
 function usage() {
 	return `Usage:
-  node scripts/bench_legacy_extension_workloads.mjs [--load-runs N] [--iterations N] [--out PATH]
+  node scripts/bench_legacy_extension_workloads.mjs [--load-runs N] [--iterations N] [--tool-calls N] [--out PATH] [--append]
 
 Env:
   LOAD_RUNS     default 5
   ITERATIONS    default 2000
+  TOOL_CALLS    default 10
   JSONL_OUT     if set, writes JSONL to this file (overwrites)
 
 Example:
@@ -292,8 +551,10 @@ function openOut(outPath) {
 	if (parent && parent !== "." && !fs.existsSync(parent)) {
 		fs.mkdirSync(parent, { recursive: true });
 	}
-	// Deterministic: overwrite file each run.
-	fs.writeFileSync(resolved, "");
+	if (!globalThis.__PI_LEGACY_BENCH_APPEND) {
+		// Deterministic by default: overwrite file each run.
+		fs.writeFileSync(resolved, "");
+	}
 	return {
 		writeLine: (line) => fs.appendFileSync(resolved, `${line}\n`),
 	};
@@ -306,6 +567,7 @@ async function main() {
 		return;
 	}
 
+	globalThis.__PI_LEGACY_BENCH_APPEND = args.append;
 	const out = openOut(args.out);
 
 	const helloEntry = path.join(ROOT, "tests", "ext_conformance", "artifacts", "hello", "hello.ts");
@@ -324,6 +586,13 @@ async function main() {
 		),
 	);
 	results.push(await scenarioEventHook("pirate", pirateEntry, { cwd: args.cwd, iterations: args.iterations }));
+	results.push(
+		await scenarioFullE2ELongSession(helloEntry, pirateEntry, {
+			cwd: args.cwd,
+			iterations: args.iterations,
+			toolCalls: args.toolCalls,
+		}),
+	);
 
 	for (const row of results) {
 		out.writeLine(JSON.stringify(row));
@@ -331,4 +600,3 @@ async function main() {
 }
 
 await main();
-

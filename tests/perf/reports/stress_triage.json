@@ -21,8 +21,8 @@
     ],
     "rss_interval_secs": 5
   },
-  "correlation_id": "local-20260501T0324",
-  "generated_at": "2026-05-01T03:28:52Z",
+  "correlation_id": "bd-2zcs5.71-darkgoose-20260510T0058Z",
+  "generated_at": "2026-05-10T01:22:30Z",
   "pass": true,
   "results": {
     "error_count": 0,
@@ -30,19 +30,25 @@
     "extensions_loaded": 15,
     "latency": {
       "ok": true,
-      "p99_first_us": 508,
-      "p99_last_us": 628,
+      "p99_first_us": 399,
+      "p99_last_us": 368,
       "summary": {
         "count": 1500,
-        "max": 3442,
-        "mean": 234,
-        "min": 77,
-        "p50": 195,
-        "p95": 462,
-        "p99": 576
+        "max": 1142,
+        "mean": 161,
+        "min": 67,
+        "p50": 128,
+        "p95": 308,
+        "p99": 396
       }
     },
     "reactor": {
+      "bravo": {
+        "mode": "Balanced",
+        "rollbacks": 0,
+        "transitions": 0,
+        "writer_recovery_remaining": 0
+      },
       "enabled": true,
       "max_queue_depths": [
         0,
@@ -200,17 +206,11 @@
       ],
       "rejected_enqueues": 0,
       "s3fifo": {
-        "mode": "Active",
-        "fallback_reason": null,
         "fairness_budget_rejections": 0,
         "fallback_event_total": 0,
-        "lane_overflow_rejections": 0
-      },
-      "bravo": {
-        "mode": "Balanced",
-        "transitions": 0,
-        "rollbacks": 0,
-        "writer_recovery_remaining": 0
+        "fallback_reason": null,
+        "lane_overflow_rejections": 0,
+        "mode": "Active"
       },
       "shard_count": 4,
       "stall_reasons": {},
@@ -223,13 +223,13 @@
       ]
     },
     "rss": {
-      "growth_pct": 0.0,
-      "initial_kb": 63160320,
-      "max_kb": 63160320,
+      "growth_pct": 0.0025331030512377663,
+      "initial_kb": 35573760,
+      "max_kb": 35663872,
       "ok": true
     },
     "sample_errors": []
   },
-  "run_id": "local-20260501T0324",
+  "run_id": "bd-2zcs5.71-darkgoose-20260510T0058Z",
   "schema": "pi.ext.stress_triage.v1"
 }
