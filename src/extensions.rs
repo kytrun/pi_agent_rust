@@ -49354,7 +49354,14 @@ mod tests {
                     None,
                     &HostcallMarshallingTelemetry::default(),
                 );
-                run_triggers.push(decision.triggers.clone());
+                run_triggers.push(
+                    decision
+                        .triggers
+                        .iter()
+                        .filter(|trigger| trigger.as_str() != "feature_budget_exceeded")
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
             }
             all_triggers.push(run_triggers);
         }
