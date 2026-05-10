@@ -1016,11 +1016,11 @@ mod tests {
         ];
         let plan = executor.plan_batch(requests);
         assert_eq!(plan.groups.len(), 1);
-        assert!(
-            plan.decisions[0]
-                == AmacToggleDecision::Sequential {
-                    reason: "ordering_dependency"
-                }
+        assert_eq!(
+            plan.decisions[0],
+            AmacToggleDecision::Sequential {
+                reason: "ordering_dependency"
+            }
         );
     }
 

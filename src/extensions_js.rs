@@ -26340,10 +26340,10 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             assert_eq!(r["arch"], serde_json::json!(expected_arch));
             assert!(r["version"].is_string());
             assert_eq!(r["pid"], serde_json::json!(1));
-            assert!(r["hasEnv"] == serde_json::json!(true));
-            assert!(r["hasStdout"] == serde_json::json!(true));
-            assert!(r["hasStderr"] == serde_json::json!(true));
-            assert!(r["hasNextTick"] == serde_json::json!(true));
+            assert_eq!(r["hasEnv"], serde_json::json!(true));
+            assert_eq!(r["hasStdout"], serde_json::json!(true));
+            assert_eq!(r["hasStderr"], serde_json::json!(true));
+            assert_eq!(r["hasNextTick"], serde_json::json!(true));
             // nextTick is scheduled as microtask — should have run
             assert_eq!(r["nextTickRan"], serde_json::json!(true));
             assert_eq!(r["hrtimeIsArray"], serde_json::json!(true));

@@ -344,14 +344,14 @@ mod tests {
                     "empty/whitespace should default to 'auto', got '{}'",
                     resolved.requested,
                 );
-                assert!(resolved.requested_source == "default");
+                assert_eq!(resolved.requested_source, "default");
             }
 
             #[test]
             fn resolve_allocator_none_defaults_to_auto(_dummy in Just(())) {
                 let resolved = resolve_bench_allocator_from(None);
-                assert!(resolved.requested == "auto");
-                assert!(resolved.requested_source == "default");
+                assert_eq!(resolved.requested, "auto");
+                assert_eq!(resolved.requested_source, "default");
                 assert!(resolved.fallback_reason.is_none());
             }
 

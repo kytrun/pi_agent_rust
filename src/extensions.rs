@@ -42068,7 +42068,7 @@ mod tests {
             .expect("submit");
         }
 
-        assert!(mesh.total_depth() == 3);
+        assert_eq!(mesh.total_depth(), 3);
 
         let batch = mesh.drain_shard(0, 10);
         assert!(!batch.is_empty(), "should have items in shard 0");
@@ -43556,9 +43556,9 @@ mod tests {
         for _ in 0..10 {
             state.record(false);
         }
-        assert!(state.total() == 10);
+        assert_eq!(state.total(), 10);
         state.reset();
-        assert!(state.total() == 0);
+        assert_eq!(state.total(), 0);
         assert!((state.empirical_error_rate() - 0.0).abs() < f64::EPSILON);
     }
 
