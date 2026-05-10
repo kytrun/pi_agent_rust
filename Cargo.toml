@@ -305,11 +305,19 @@ sqlite-sessions = []
 syntax-highlighting = ["rich_rust/syntax"]
 ext-conformance = []
 fuzzing = []
+# Opt-in loom model-checking lane. These tests are excluded from default
+# all-target gates because loom explores scheduler interleavings aggressively.
+loom-tests = []
 # Opt-in wall-clock/process timing regressions. These are intentionally
 # excluded from default test gates because scheduler-sensitive coverage should
 # use deterministic clocks.
 manual-timing-tests = []
 jemalloc = ["dep:tikv-jemallocator"]
+
+[[test]]
+name = "hostcall_queue_loom"
+path = "tests/hostcall_queue_loom.rs"
+required-features = ["loom-tests"]
 
 [profile.release]
 opt-level = "z"

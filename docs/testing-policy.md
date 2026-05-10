@@ -86,6 +86,10 @@ All tests belong to exactly one of three suites:
 cargo test --all-targets --lib          # inline #[cfg(test)] modules only
 cargo test --all-targets --test model_serialization --test config_precedence \
   --test session_conformance --test error_types     # curated integration subset
+
+# Opt-in loom model checks for hostcall queue concurrency invariants.
+rch exec -- cargo test --features loom-tests --test hostcall_queue_loom
+rch exec -- cargo test --features loom-tests --lib hostcall_queue::tests::loom_
 ```
 
 **Identifying tests in this suite:** Tests live in `#[cfg(test)]` modules inside `src/*.rs` or in

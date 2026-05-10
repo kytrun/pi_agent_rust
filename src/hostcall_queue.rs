@@ -197,7 +197,7 @@ impl BravoContentionState {
                 self.consecutive_read_bias_windows =
                     self.consecutive_read_bias_windows.saturating_add(1);
 
-                let starvation = signature == ContentionSignature::WriterStarvationRisk;
+                let starvation = matches!(signature, ContentionSignature::WriterStarvationRisk);
                 let fairness_budget_exhausted = self.consecutive_read_bias_windows
                     >= self.config.max_consecutive_read_bias_windows.max(1);
 
@@ -219,7 +219,7 @@ impl BravoContentionState {
             }
             BravoBiasMode::WriterRecovery => {
                 self.consecutive_read_bias_windows = 0;
-                if signature == ContentionSignature::WriterStarvationRisk {
+                if matches!(signature, ContentionSignature::WriterStarvationRisk) {
                     self.writer_recovery_remaining = self.config.writer_recovery_windows.max(1);
                 } else if self.writer_recovery_remaining > 0 {
                     self.writer_recovery_remaining -= 1;
@@ -230,7 +230,8 @@ impl BravoContentionState {
             }
         }
 
-        if self.mode != previous_mode {
+        let switched = Self::mode_changed(self.mode, previous_mode);
+        if switched {
             self.transitions = self.transitions.saturating_add(1);
         }
         self.last_signature = signature;
@@ -239,9 +240,18 @@ impl BravoContentionState {
             previous_mode,
             next_mode: self.mode,
             signature,
-            switched: self.mode != previous_mode,
+            switched,
             rollback_triggered,
         }
+    }
+
+    const fn mode_changed(current: BravoBiasMode, previous: BravoBiasMode) -> bool {
+        !matches!(
+            (current, previous),
+            (BravoBiasMode::Balanced, BravoBiasMode::Balanced)
+                | (BravoBiasMode::ReadBiased, BravoBiasMode::ReadBiased)
+                | (BravoBiasMode::WriterRecovery, BravoBiasMode::WriterRecovery)
+        )
     }
 
     #[must_use]
@@ -2026,11 +2036,40 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bd-8t27h.6: loom model checker SIGSEGV; spin-wait loops exhaust state space"]
+    #[cfg(feature = "loom-tests")]
     fn loom_epoch_pin_blocks_reclamation_until_release() {
-        use loom::sync::atomic::{AtomicBool, Ordering as LoomOrdering};
-        use loom::sync::{Arc, Mutex};
+        use loom::sync::{Arc, Condvar, Mutex};
         use loom::thread;
+
+        struct PinGate {
+            pin_ready: bool,
+            release_pin: bool,
+        }
+
+        fn wait_until_pin_ready(sync: &Arc<(Mutex<PinGate>, Condvar)>) {
+            let (lock, cvar) = &**sync;
+            let mut gate = lock.lock().expect("lock pin gate");
+            while !gate.pin_ready {
+                gate = cvar.wait(gate).expect("wait for pin");
+            }
+        }
+
+        fn mark_pin_ready(sync: &Arc<(Mutex<PinGate>, Condvar)>) {
+            let (lock, cvar) = &**sync;
+            let mut gate = lock.lock().expect("lock pin gate");
+            gate.pin_ready = true;
+            cvar.notify_all();
+            while !gate.release_pin {
+                gate = cvar.wait(gate).expect("wait for pin release");
+            }
+        }
+
+        fn release_pin(sync: &Arc<(Mutex<PinGate>, Condvar)>) {
+            let (lock, cvar) = &**sync;
+            let mut gate = lock.lock().expect("lock pin gate");
+            gate.release_pin = true;
+            cvar.notify_all();
+        }
 
         loom::model(|| {
             let queue = Arc::new(Mutex::new(HostcallRequestQueue::with_mode(
@@ -2038,30 +2077,29 @@ mod tests {
                 2,
                 HostcallQueueMode::Ebr,
             )));
-            let pin_ready = Arc::new(AtomicBool::new(false));
-            let release_pin = Arc::new(AtomicBool::new(false));
+            let pin_gate = Arc::new((
+                Mutex::new(PinGate {
+                    pin_ready: false,
+                    release_pin: false,
+                }),
+                Condvar::new(),
+            ));
 
             let queue_for_pin = Arc::clone(&queue);
-            let pin_ready_for_thread = Arc::clone(&pin_ready);
-            let release_pin_for_thread = Arc::clone(&release_pin);
+            let pin_gate_for_thread = Arc::clone(&pin_gate);
             let pin_thread = thread::spawn(move || {
                 let pin = queue_for_pin
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .pin_epoch();
-                pin_ready_for_thread.store(true, LoomOrdering::SeqCst);
-                while !release_pin_for_thread.load(LoomOrdering::SeqCst) {
-                    thread::yield_now();
-                }
+                mark_pin_ready(&pin_gate_for_thread);
                 drop(pin);
             });
 
             let queue_for_worker = Arc::clone(&queue);
-            let pin_ready_for_worker = Arc::clone(&pin_ready);
+            let pin_gate_for_worker = Arc::clone(&pin_gate);
             let worker = thread::spawn(move || {
-                while !pin_ready_for_worker.load(LoomOrdering::SeqCst) {
-                    thread::yield_now();
-                }
+                wait_until_pin_ready(&pin_gate_for_worker);
 
                 let mut queue = queue_for_worker
                     .lock()
@@ -2076,10 +2114,11 @@ mod tests {
                 assert!(snapshot.retired_backlog >= 2);
                 assert_eq!(snapshot.reclaimed_total, 0);
                 drop(queue);
+
+                release_pin(&pin_gate_for_worker);
             });
 
             worker.join().expect("worker join");
-            release_pin.store(true, LoomOrdering::SeqCst);
             pin_thread.join().expect("pin thread join");
 
             let mut queue = queue
@@ -2094,7 +2133,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bd-8t27h.6: loom model checker SIGSEGV; needs cfg(loom) opt-in lane"]
+    #[cfg(feature = "loom-tests")]
     fn loom_concurrent_enqueue_dequeue_keeps_values_unique() {
         use loom::sync::{Arc, Mutex};
         use loom::thread;
