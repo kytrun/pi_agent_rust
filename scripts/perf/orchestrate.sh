@@ -37,6 +37,8 @@
 #                             Cross-env spread threshold percent (default: 10.0)
 #   PERF_CROSS_ENV_ENFORCE    If 1, fail run when cross-env diagnosis emits alerts
 #   PERF_REMOTE_TARGET_DIR    Optional remote CARGO_TARGET_DIR prefix recorded in artifact staging manifests
+#   PERF_EVIDENCE_DIR         Optional repo-visible staged evidence root consumed by perf_budgets report generation
+#   PERF_EVIDENCE_DIRS        Optional path-list of additional staged evidence roots
 #   PERF_EVIDENCE_CACHE_DIR   Optional perf evidence cache directory (default: $CARGO_TARGET_DIR/perf/evidence_cache)
 #   PI_PERF_EVIDENCE_CACHE_TTL_HOURS
 #                             Maximum reusable perf evidence cache TTL in hours (default: 168)

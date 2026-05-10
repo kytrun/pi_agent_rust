@@ -87,6 +87,57 @@ def resolve_target_dir(repo_root: Path, raw_target_dir: str | None) -> Path:
     return repo_root / "target"
 
 
+def resolve_env_path(repo_root: Path, raw_path: str) -> Path | None:
+    raw_path = raw_path.strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    return repo_root / path
+
+
+def dedupe_paths(paths: list[Path] | tuple[Path, ...]) -> tuple[Path, ...]:
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return tuple(deduped)
+
+
+def perf_evidence_dirs(repo_root: Path) -> tuple[Path, ...]:
+    dirs: list[Path] = []
+    raw_single = os.environ.get("PERF_EVIDENCE_DIR")
+    if raw_single:
+        path = resolve_env_path(repo_root, raw_single)
+        if path is not None:
+            dirs.append(path)
+    raw_many = os.environ.get("PERF_EVIDENCE_DIRS")
+    if raw_many:
+        for raw_path in raw_many.split(os.pathsep):
+            path = resolve_env_path(repo_root, raw_path)
+            if path is not None:
+                dirs.append(path)
+    return dedupe_paths(dirs)
+
+
+def evidence_then_target_paths(
+    repo_root: Path,
+    target_dir: Path,
+    evidence_relative_paths: tuple[str, ...],
+    target_relative_paths: tuple[str, ...],
+) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    for evidence_dir in perf_evidence_dirs(repo_root):
+        paths.extend(evidence_dir / relative for relative in evidence_relative_paths)
+    paths.extend(target_dir / relative for relative in target_relative_paths)
+    return dedupe_paths(paths)
+
+
 def rel_or_abs(repo_root: Path, path: Path) -> str:
     try:
         return path.resolve().relative_to(repo_root.resolve()).as_posix()
@@ -786,9 +837,30 @@ def glob_estimates(base: Path) -> tuple[Path, ...]:
     return matches or (base,)
 
 
-def pijs_candidates(target_dir: Path) -> tuple[Path, ...]:
-    perf_dir = target_dir / "perf"
+def pijs_candidates_in_evidence_dir(evidence_dir: Path) -> tuple[Path, ...]:
     return tuple(
+        evidence_dir / relative
+        for relative in (
+            "pijs_workload_perf.jsonl",
+            "pijs_workload_release.jsonl",
+            "pijs_workload_debug.jsonl",
+            "pijs_workload.jsonl",
+            "results/pijs_workload.jsonl",
+            "perf/pijs_workload_perf.jsonl",
+            "perf/pijs_workload_release.jsonl",
+            "perf/pijs_workload_debug.jsonl",
+            "perf/pijs_workload.jsonl",
+            "perf/results/pijs_workload.jsonl",
+        )
+    )
+
+
+def pijs_candidates(repo_root: Path, target_dir: Path) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    for evidence_dir in perf_evidence_dirs(repo_root):
+        paths.extend(pijs_candidates_in_evidence_dir(evidence_dir))
+    perf_dir = target_dir / "perf"
+    paths.extend(
         perf_dir / relative
         for relative in (
             "perf/pijs_workload_perf.jsonl",
@@ -798,21 +870,21 @@ def pijs_candidates(target_dir: Path) -> tuple[Path, ...]:
             "results/pijs_workload.jsonl",
         )
     )
+    return dedupe_paths(paths)
 
 
-def binary_candidates(target_dir: Path, release_override: str | None) -> tuple[Path, ...]:
+def binary_candidates(
+    repo_root: Path,
+    target_dir: Path,
+    release_override: str | None,
+) -> tuple[Path, ...]:
     paths: list[Path] = []
     if release_override:
         paths.append(Path(release_override).expanduser())
+    for evidence_dir in perf_evidence_dirs(repo_root):
+        paths.extend((evidence_dir / "release" / "pi", evidence_dir / "perf" / "pi"))
     paths.extend((target_dir / "release" / "pi", target_dir / "perf" / "pi"))
-    deduped: list[Path] = []
-    seen: set[str] = set()
-    for path in paths:
-        key = str(path)
-        if key not in seen:
-            seen.add(key)
-            deduped.append(path)
-    return tuple(deduped)
+    return dedupe_paths(paths)
 
 
 def artifact_groups(repo_root: Path, target_dir: Path) -> list[ArtifactGroup]:
@@ -822,23 +894,37 @@ def artifact_groups(repo_root: Path, target_dir: Path) -> list[ArtifactGroup]:
         'mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR"'
     )
     bench_prefix = f"{cargo_env} && rch exec -- cargo"
+    evidence_env = (
+        'PERF_EVIDENCE_DIR="${PERF_EVIDENCE_DIR:-tests/perf/reports}" '
+        "rch exec -- cargo"
+    )
     return [
         ArtifactGroup(
             contract_id="startup_version_p95",
             budget_names=("startup_version_p95",),
-            candidates=(target_dir / "criterion/startup/version/warm/new/estimates.json",),
+            candidates=evidence_then_target_paths(
+                repo_root,
+                target_dir,
+                ("criterion/startup/version/warm/new/estimates.json",),
+                ("criterion/startup/version/warm/new/estimates.json",),
+            ),
             suggested_commands=(
                 f"{bench_prefix} bench --bench system --profile perf startup",
             ),
             reason="startup/version Criterion estimate required by tests/perf_budgets.rs",
-            expected_outputs=(target_dir / "criterion/startup/version/warm/new/estimates.json",),
+            expected_outputs=(
+                target_dir / "criterion/startup/version/warm/new/estimates.json",
+                repo_root / "tests/perf/reports/criterion/startup/version/warm/new/estimates.json",
+            ),
         ),
         ArtifactGroup(
             contract_id="extension_criterion_load_init",
             budget_names=("ext_cold_load_simple_p95",),
-            candidates=(
-                target_dir
-                / "criterion/ext_load_init/load_init_cold/hello/new/estimates.json",
+            candidates=evidence_then_target_paths(
+                repo_root,
+                target_dir,
+                ("criterion/ext_load_init/load_init_cold/hello/new/estimates.json",),
+                ("criterion/ext_load_init/load_init_cold/hello/new/estimates.json",),
             ),
             suggested_commands=(
                 f"{bench_prefix} bench --bench extension_budget_inputs --profile perf ext_load_init",
@@ -847,64 +933,113 @@ def artifact_groups(repo_root: Path, target_dir: Path) -> list[ArtifactGroup]:
             expected_outputs=(
                 target_dir
                 / "criterion/ext_load_init/load_init_cold/hello/new/estimates.json",
+                repo_root
+                / "tests/perf/reports/criterion/ext_load_init/load_init_cold/hello/new/estimates.json",
             ),
             blocker=EXTENSION_BLOCKER_BEAD,
         ),
         ArtifactGroup(
             contract_id="pijs_workload",
             budget_names=("tool_call_latency_p99", "tool_call_throughput_min"),
-            candidates=pijs_candidates(target_dir),
+            candidates=pijs_candidates(repo_root, target_dir),
             suggested_commands=(
-                f"{bench_prefix} build --profile perf --no-default-features --bin pijs_workload",
+                f"{bench_prefix} build --profile perf --no-default-features --example pijs_workload",
                 f"{cargo_env} && BENCH_CARGO_RUNNER=rch ./scripts/bench_extension_workloads.sh",
             ),
             reason="pijs_workload JSONL required for tool-call latency and throughput budgets",
-            expected_outputs=pijs_candidates(target_dir),
+            expected_outputs=pijs_candidates(repo_root, target_dir),
         ),
         ArtifactGroup(
             contract_id="extension_criterion_policy",
             budget_names=("policy_eval_p99",),
-            candidates=glob_estimates(target_dir / "criterion/ext_policy/evaluate"),
+            candidates=dedupe_paths(
+                [
+                    candidate
+                    for base in evidence_then_target_paths(
+                        repo_root,
+                        target_dir,
+                        ("criterion/ext_policy/evaluate",),
+                        ("criterion/ext_policy/evaluate",),
+                    )
+                    for candidate in glob_estimates(base)
+                ]
+            ),
             suggested_commands=(
                 f"{bench_prefix} bench --bench extension_budget_inputs --profile perf ext_policy",
             ),
             reason="ext_policy/evaluate Criterion estimates required by tests/perf_budgets.rs",
-            expected_outputs=(target_dir / "criterion/ext_policy/evaluate/*/new/estimates.json",),
+            expected_outputs=(
+                target_dir / "criterion/ext_policy/evaluate/*/new/estimates.json",
+                repo_root / "tests/perf/reports/criterion/ext_policy/evaluate/*/new/estimates.json",
+            ),
             blocker=EXTENSION_BLOCKER_BEAD,
         ),
         ArtifactGroup(
             contract_id="release_binary",
             budget_names=("binary_size_release",),
-            candidates=binary_candidates(target_dir, os.environ.get("PERF_RELEASE_BINARY_PATH")),
+            candidates=binary_candidates(
+                repo_root,
+                target_dir,
+                os.environ.get("PERF_RELEASE_BINARY_PATH"),
+            ),
             suggested_commands=(
                 f"{bench_prefix} build --bin pi --release",
             ),
             reason="release pi binary required for binary_size_release budget",
-            expected_outputs=(target_dir / "release/pi",),
+            expected_outputs=(target_dir / "release/pi", repo_root / "tests/perf/reports/release/pi"),
         ),
         ArtifactGroup(
             contract_id="extension_criterion_protocol",
             budget_names=("protocol_parse_p99",),
-            candidates=glob_estimates(target_dir / "criterion/ext_protocol/parse_and_validate"),
+            candidates=dedupe_paths(
+                [
+                    candidate
+                    for base in evidence_then_target_paths(
+                        repo_root,
+                        target_dir,
+                        ("criterion/ext_protocol/parse_and_validate",),
+                        ("criterion/ext_protocol/parse_and_validate",),
+                    )
+                    for candidate in glob_estimates(base)
+                ]
+            ),
             suggested_commands=(
                 f"{bench_prefix} bench --bench extension_budget_inputs --profile perf ext_protocol",
             ),
             reason="ext_protocol/parse_and_validate Criterion estimates required by tests/perf_budgets.rs",
             expected_outputs=(
                 target_dir / "criterion/ext_protocol/parse_and_validate/*/new/estimates.json",
+                repo_root
+                / "tests/perf/reports/criterion/ext_protocol/parse_and_validate/*/new/estimates.json",
             ),
             blocker=EXTENSION_BLOCKER_BEAD,
         ),
         ArtifactGroup(
             contract_id="extension_benchmark_stratification",
             budget_names=(),
-            candidates=(
-                target_dir / "perf/extension_benchmark_stratification.json",
-                target_dir / "perf/results/extension_benchmark_stratification.json",
+            candidates=dedupe_paths(
+                list(
+                    evidence_then_target_paths(
+                        repo_root,
+                        target_dir,
+                        (
+                            "extension_benchmark_stratification.json",
+                            "perf/extension_benchmark_stratification.json",
+                            "results/extension_benchmark_stratification.json",
+                            "perf/results/extension_benchmark_stratification.json",
+                        ),
+                        (
+                            "perf/extension_benchmark_stratification.json",
+                            "perf/results/extension_benchmark_stratification.json",
+                        ),
+                    )
+                )
+                + [
                 repo_root / "tests/perf/reports/extension_benchmark_stratification.json",
+                ]
             ),
             suggested_commands=(
-                f"{bench_prefix} test --test perf_budgets --profile perf generate_budget_report -- --nocapture",
+                f"{evidence_env} test --test perf_budgets --profile perf generate_budget_report -- --nocapture",
             ),
             reason="global extension claim data contract consumed by collect_data_contract_failures",
             expected_outputs=(
@@ -915,12 +1050,25 @@ def artifact_groups(repo_root: Path, target_dir: Path) -> list[ArtifactGroup]:
         ArtifactGroup(
             contract_id="phase1_matrix_validation",
             budget_names=(),
-            candidates=(
-                target_dir / "perf/results/phase1_matrix_validation.json",
+            candidates=dedupe_paths(
+                list(
+                    evidence_then_target_paths(
+                        repo_root,
+                        target_dir,
+                        (
+                            "phase1_matrix_validation.json",
+                            "results/phase1_matrix_validation.json",
+                            "perf/results/phase1_matrix_validation.json",
+                        ),
+                        ("perf/results/phase1_matrix_validation.json",),
+                    )
+                )
+                + [
                 repo_root / "tests/perf/reports/phase1_matrix_validation.json",
+                ]
             ),
             suggested_commands=(
-                f"{bench_prefix} test --test perf_budgets --profile perf generate_budget_report -- --nocapture",
+                f"{evidence_env} test --test perf_budgets --profile perf generate_budget_report -- --nocapture",
             ),
             reason="phase1 weighted attribution data contract consumed by collect_data_contract_failures",
             expected_outputs=(
@@ -1140,6 +1288,7 @@ def build_report(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "safety_notes": [
             "All CPU-intensive cargo refresh commands must be run through rch exec -- ...",
             "Set CARGO_TARGET_DIR and TMPDIR to /data/tmp/pi_agent_rust_cargo/${USER:-agent}/... before refreshing evidence.",
+            "For RCH report generation, stage required artifacts into a repo-visible evidence root and set PERF_EVIDENCE_DIR for cargo test --test perf_budgets generate_budget_report.",
             "Cached perf evidence is reusable only when commit, build profile, TTL, lineage, schema, and checksum validation pass; reused entries are labeled source_kind=cache.",
             "Do not refresh tests/perf/reports/budget_summary.json until missing_budget_artifacts and stale_artifacts are empty.",
         ],

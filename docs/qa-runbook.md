@@ -122,6 +122,20 @@ preflight and staging JSON label reused artifacts with `source_kind=cache` or
 `rejected_evidence_cache_entries`. Use `PI_PERF_EVIDENCE_CACHE_TTL_HOURS` to
 shorten the maximum accepted cache lifetime.
 
+When a cargo target directory lives outside the repository, do not ask an RCH
+worker to infer budget inputs from that local path. Stage the required JSON,
+JSONL, Criterion, and release-binary evidence under a repo-visible evidence root
+and run the report with `PERF_EVIDENCE_DIR`:
+
+```bash
+PERF_EVIDENCE_DIR=tests/perf/reports \
+  rch exec -- cargo test --test perf_budgets --profile perf generate_budget_report -- --nocapture
+```
+
+`tests/perf_budgets.rs` checks `PERF_EVIDENCE_DIR`/`PERF_EVIDENCE_DIRS` before
+`CARGO_TARGET_DIR`, so the report can consume staged evidence that RCH actually
+syncs instead of an unsynced local target directory.
+
 The orchestrator's `env_fingerprint.json` is cgroup-aware. It records cgroup v2
 CPU quota, cpuset size, memory limit, NUMA node count, host-vs-container
 caveats, and a `budget_profile` whose target CPU/memory values use constrained

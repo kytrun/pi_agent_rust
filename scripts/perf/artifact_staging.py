@@ -473,6 +473,7 @@ def build_staging_manifest(
         "blockers": blockers,
         "safety_notes": [
             "Do not refresh tests/perf/reports/budget_summary.json while this manifest status is blocked.",
+            "For RCH report generation, copy ready artifacts into a repo-visible evidence root and run perf_budgets with PERF_EVIDENCE_DIR pointing at that root.",
             "Cached perf evidence is reused only after commit, build profile, TTL, lineage, schema, and checksum validation pass; reused entries are labeled evidence_source=cache.",
             "For RCH runs, remote_source_path is explicit only when PERF_REMOTE_TARGET_DIR is provided; "
             "otherwise it records the local post-RCH source path.",
