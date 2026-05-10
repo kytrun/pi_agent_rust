@@ -3,6 +3,12 @@
 Generated: `2026-02-10T04:35:00Z`
 Upstream snapshot: `bd-3uqg.1.1` (93 canonical provider IDs)
 
+> Historical snapshot only. Current source truth is `docs/providers.md` plus
+> `tests/traceability_staleness.rs::native_provider_module_inventory_matches_provider_docs`,
+> which checks the live `src/providers/*.rs` inventory. The partially supported
+> and missing-provider sections below predate the Bedrock, Vertex, GitHub
+> Copilot, and GitLab native modules and must not be read as current status.
+
 ## Executive Summary
 
 | Category | Count | % of 93 upstream |

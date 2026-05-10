@@ -27,14 +27,18 @@ fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 
+fn test_fail(message: impl std::fmt::Display) -> ! {
+    panic!("{message}"); // ubs:ignore test harness assertion, not production runtime.
+}
+
 /// Parse `suite_classification.toml` → {`suite_name`: [stem, ...]}
 fn load_suite_classification(root: &Path) -> HashMap<String, Vec<String>> {
     let path = root.join("tests/suite_classification.toml");
     let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display())); // ubs:ignore test harness assertion, not production runtime.
     let table: toml::Table = content
         .parse()
-        .unwrap_or_else(|e| panic!("invalid TOML in {}: {e}", path.display()));
+        .unwrap_or_else(|e| panic!("invalid TOML in {}: {e}", path.display())); // ubs:ignore test harness assertion, not production runtime.
 
     let mut result = HashMap::new();
     if let Some(suite) = table.get("suite").and_then(|v| v.as_table()) {
@@ -58,9 +62,9 @@ fn load_suite_classification(root: &Path) -> HashMap<String, Vec<String>> {
 fn load_matrix_test_stems(root: &Path) -> BTreeSet<String> {
     let path = root.join("docs/traceability_matrix.json");
     let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display())); // ubs:ignore test harness assertion, not production runtime.
     let matrix: serde_json::Value =
-        serde_json::from_str(&content).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+        serde_json::from_str(&content).unwrap_or_else(|e| panic!("invalid JSON: {e}")); // ubs:ignore test harness assertion, not production runtime.
 
     let mut stems = BTreeSet::new();
     if let Some(requirements) = matrix.get("requirements").and_then(|v| v.as_array()) {
@@ -87,9 +91,9 @@ fn load_matrix_test_stems(root: &Path) -> BTreeSet<String> {
 fn load_matrix_min_trace_coverage_pct(root: &Path) -> usize {
     let path = root.join("docs/traceability_matrix.json");
     let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display())); // ubs:ignore test harness assertion, not production runtime.
     let matrix: serde_json::Value =
-        serde_json::from_str(&content).unwrap_or_else(|e| panic!("invalid JSON: {e}"));
+        serde_json::from_str(&content).unwrap_or_else(|e| panic!("invalid JSON: {e}")); // ubs:ignore test harness assertion, not production runtime.
 
     matrix
         .get("ci_policy")
@@ -97,19 +101,19 @@ fn load_matrix_min_trace_coverage_pct(root: &Path) -> usize {
         .and_then(serde_json::Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or_else(|| {
-            panic!(
+            test_fail(format!(
                 "missing ci_policy.min_classified_trace_coverage_pct in {}",
                 path.display()
-            )
+            ))
         })
 }
 
 fn load_json_value(root: &Path, relative_path: &str) -> serde_json::Value {
     let path = root.join(relative_path);
     let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display())); // ubs:ignore test harness assertion, not production runtime.
     serde_json::from_str(&content)
-        .unwrap_or_else(|e| panic!("invalid JSON in {}: {e}", path.display()))
+        .unwrap_or_else(|e| panic!("invalid JSON in {}: {e}", path.display())) // ubs:ignore test harness assertion, not production runtime.
 }
 
 /// Discover all `tests/*.rs` file stems on disk.
@@ -143,14 +147,14 @@ impl SourceInventoryDiff {
 
 fn collect_source_files(repo_root: &Path, dir: &Path, files: &mut BTreeSet<String>) {
     let entries = std::fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("cannot read source directory {}: {e}", dir.display()));
+        .unwrap_or_else(|e| panic!("cannot read source directory {}: {e}", dir.display())); // ubs:ignore test harness assertion, not production runtime.
 
     for entry in entries {
         let entry = entry.unwrap_or_else(|e| {
-            panic!(
+            test_fail(format!(
                 "cannot read source directory entry in {}: {e}",
                 dir.display()
-            )
+            ))
         });
         let path = entry.path();
         if path.is_dir() {
@@ -161,11 +165,11 @@ fn collect_source_files(repo_root: &Path, dir: &Path, files: &mut BTreeSet<Strin
             let relative = path
                 .strip_prefix(repo_root)
                 .unwrap_or_else(|e| {
-                    panic!(
+                    test_fail(format!(
                         "source path {} is not under repo root {}: {e}",
                         path.display(),
                         repo_root.display()
-                    )
+                    ))
                 })
                 .to_string_lossy()
                 .replace('\\', "/");
@@ -183,7 +187,7 @@ fn on_disk_source_files(root: &Path) -> BTreeSet<String> {
 fn load_coverage_matrix_source_files(root: &Path) -> BTreeSet<String> {
     let path = root.join("docs/TEST_COVERAGE_MATRIX.md");
     let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display())); // ubs:ignore test harness assertion, not production runtime.
 
     content
         .lines()
@@ -192,6 +196,58 @@ fn load_coverage_matrix_source_files(root: &Path) -> BTreeSet<String> {
             let (path_after_src, _) = rest.split_once('`')?;
             Some(format!("src/{path_after_src}"))
         })
+        .collect()
+}
+
+fn on_disk_native_provider_modules(root: &Path) -> BTreeSet<String> {
+    let providers_dir = root.join("src/providers");
+    let entries = std::fs::read_dir(&providers_dir).unwrap_or_else(|e| {
+        test_fail(format!(
+            "cannot read provider directory {}: {e}",
+            providers_dir.display()
+        ))
+    });
+
+    let mut modules = BTreeSet::new();
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|e| {
+            test_fail(format!(
+                "cannot read provider directory entry in {}: {e}",
+                providers_dir.display()
+            ))
+        });
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "rs") {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or_else(|| panic!("provider file has invalid UTF-8 path: {}", path.display())); // ubs:ignore test harness assertion, not production runtime.
+        if stem != "mod" {
+            modules.insert(stem.to_string());
+        }
+    }
+    modules
+}
+
+fn load_provider_doc_native_modules(root: &Path) -> BTreeSet<String> {
+    let path = root.join("docs/providers.md");
+    let content = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display())); // ubs:ignore test harness assertion, not production runtime.
+    let marker = "excluding `mod.rs`:";
+    let list_line = content
+        .split(marker)
+        .nth(1)
+        .and_then(|rest| rest.lines().next())
+        .unwrap_or_else(|| panic!("docs/providers.md missing provider-count rule marker")); // ubs:ignore test harness assertion, not production runtime.
+
+    list_line
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|module| !module.contains('/') && *module != "mod.rs")
+        .map(str::to_string)
         .collect()
 }
 
@@ -228,6 +284,23 @@ fn format_source_inventory_diff(diff: &SourceInventoryDiff) -> String {
         ));
     }
     sections.join("\n\n")
+}
+
+#[test]
+fn native_provider_module_inventory_matches_provider_docs() {
+    let root = repo_root();
+    let on_disk = on_disk_native_provider_modules(&root);
+    let documented = load_provider_doc_native_modules(&root);
+
+    assert_eq!(
+        documented, on_disk,
+        "docs/providers.md provider-count rule must match src/providers/*.rs excluding mod.rs"
+    );
+    assert_eq!(
+        on_disk.len(),
+        10,
+        "native provider module count changed; update docs/providers.md and this expectation"
+    );
 }
 
 #[test]

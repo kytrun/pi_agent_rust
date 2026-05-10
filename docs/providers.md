@@ -7,10 +7,29 @@ Snapshot basis:
 - `src/models.rs` (`built_in_models`, `ad_hoc_provider_defaults`)
 - `src/auth.rs` (`env_keys_for_provider`)
 - `src/providers/mod.rs` (`create_provider`, API fallback routing)
+- `src/provider_metadata.rs` (`PROVIDER_METADATA`, aliases, onboarding modes)
 - `src/providers/*.rs` native implementations
-- Timestamp: 2026-02-10
+- Original snapshot timestamp: 2026-02-10
+- Last source cross-check: 2026-05-10 (`bd-8t27h.7`)
 
 Provider-count rule: Pi has 10 native provider implementation modules, counted as the Rust files under `src/providers/` excluding `mod.rs`: `anthropic`, `openai`, `openai_responses`, `gemini`, `cohere`, `azure`, `bedrock`, `vertex`, `copilot`, and `gitlab`. User-visible canonical IDs, aliases, OpenAI-compatible presets, VCR coverage families, and extension-provided providers are separate counts.
+
+This rule is guarded by `tests/traceability_staleness.rs::native_provider_module_inventory_matches_provider_docs`, which compares this list against the live `src/providers/*.rs` inventory.
+
+| Native module | Primary user-visible surface | Notes |
+|---------------|------------------------------|-------|
+| `anthropic` | `anthropic` | Anthropic Messages API. |
+| `openai` | `openai` and OpenAI-compatible presets | Chat Completions-compatible runtime path. |
+| `openai_responses` | `openai`, `openai-codex` | Responses/Codex Responses request and streaming path. |
+| `gemini` | `google`, `gemini` | Google Generative AI path. |
+| `cohere` | `cohere` | Cohere chat path. |
+| `azure` | `azure-openai`, `azure`, `azure-cognitive-services` | Azure OpenAI deployment path. |
+| `bedrock` | `amazon-bedrock`, `bedrock` | Amazon Bedrock Converse path. |
+| `vertex` | `google-vertex`, `vertexai` | Vertex AI Gemini/Anthropic publisher path. |
+| `copilot` | `github-copilot`, `copilot` | GitHub Copilot chat/completions path. |
+| `gitlab` | `gitlab`, `gitlab-duo` | GitLab Duo chat path. |
+
+Extension-provided providers route through the extension provider bridge in `src/providers/mod.rs`; they are intentionally excluded from the native module count because they are discovered at runtime.
 
 ## Implementation Modes
 
@@ -282,9 +301,11 @@ Wave C execution status:
 | `vercel` | - | text (+ OAI-compatible tools) | `openai-completions` | `https://ai-gateway.vercel.sh/v1` | `Authorization: Bearer` (`AI_GATEWAY_API_KEY`) | `oai-compatible-preset` | VCR-verified (3 scenarios) | [metadata](../tests/provider_metadata_comprehensive.rs), [factory](../tests/provider_factory.rs), [native-verify](../tests/provider_native_verify.rs), [cassette](../tests/fixtures/vcr/verify_vercel_simple_text.json) |
 | `zenmux` | - | text (Anthropic-compatible) | `anthropic-messages` | `https://zenmux.ai/api/anthropic/v1/messages` | `x-api-key` (`ZENMUX_API_KEY`) | `oai-compatible-preset` | VCR-verified (3 scenarios) | [metadata](../tests/provider_metadata_comprehensive.rs), [factory](../tests/provider_factory.rs), [native-verify](../tests/provider_native_verify.rs), [cassette](../tests/fixtures/vcr/verify_zenmux_simple_text.json) |
 
-## Verification Status Summary
+## Historical Verification Status Summary
 
-All native and preset providers now have at least metadata + factory verification. The current VCR-verified provider count is 29 out of 85 canonical IDs.
+The status table below is historical evidence from `docs/provider-native-parity-report.json` (`report.generated_at`: `2026-02-12T16:45:00Z`). It should not be used as the current native-module inventory. For the current source inventory, use the provider-count rule above and the governance test that checks `src/providers/*.rs`.
+
+At the time of that report, all native and preset providers had at least metadata + factory verification. The VCR-verified provider count in that snapshot was 29 out of 85 canonical IDs.
 
 | Category | Count | VCR Coverage | Status |
 |----------|-------|-------------|--------|
@@ -300,9 +321,9 @@ Consolidated parity report: [`docs/provider-native-parity-report.json`](provider
 
 Full deferred/high-risk inventory lives in `docs/provider-implementation-modes.json`.
 
-## Already-Covered vs Missing Snapshot
+## Historical Already-Covered vs Missing Snapshot
 
-Covered now (85 canonical IDs registered in `PROVIDER_METADATA`):
+Historical snapshot coverage (85 canonical IDs registered in `PROVIDER_METADATA` at report time):
 - 6 native-implemented metadata IDs: `anthropic`, `openai`, `google` (gemini), `cohere`, `azure-openai`, `google-vertex`.
 - 4 native adapter providers with VCR verification: `amazon-bedrock`, `sap-ai-core`, `github-copilot`, `gitlab`.
 - 12 Wave A OpenAI-compatible preset providers: `groq`, `deepinfra`, `cerebras`, `openrouter`, `mistral`, `moonshotai`, `alibaba` (dashscope), `deepseek`, `fireworks`, `togetherai`, `perplexity`, `xai`.
