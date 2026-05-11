@@ -63,6 +63,353 @@
     },
     "total_issues": 2
   },
+  "bottleneck_attribution": {
+    "blocked_inputs": [],
+    "bottlenecks": [
+      {
+        "decision": "backoff",
+        "label": "cargo/RCH admission",
+        "recommended_action": "backoff",
+        "signal": "admission_decision",
+        "slot_pressure": "saturated",
+        "source": "cargo_admission",
+        "surface": "rch_sync_retrieval"
+      },
+      {
+        "active_builds": 8,
+        "label": "RCH queue forecast",
+        "queue_depth": 4,
+        "queued_builds": 4,
+        "recommended_action": "backoff",
+        "signal": "queue_forecast",
+        "source": "cargo_admission",
+        "surface": "queue_pressure"
+      },
+      {
+        "evidence_pointers": [
+          "agent:MagentaOak"
+        ],
+        "label": "swarm activity saturation",
+        "reasons": [
+          "7 coordination events and 1 throughput event"
+        ],
+        "signal": "activity_digest_saturation",
+        "source": "activity_digest",
+        "surface": "queue_pressure"
+      },
+      {
+        "label": "doctor swarm findings",
+        "overall": "warn",
+        "severity_counts": {
+          "warn": 1
+        },
+        "signal": "doctor_swarm_overall",
+        "source": "doctor_swarm",
+        "surface": "cgroup_numa_context"
+      }
+    ],
+    "generated_at": "2026-05-09T09:00:00+00:00",
+    "historical_snapshots": [],
+    "input_classification": [
+      {
+        "classification": "fresh",
+        "freshness_hours": null,
+        "id": "doctor_swarm",
+        "issue": null,
+        "role": "required_surface",
+        "schema": null,
+        "status": "ok",
+        "timestamp": null
+      },
+      {
+        "classification": "fresh",
+        "freshness_hours": null,
+        "id": "smoke_harness",
+        "issue": null,
+        "role": "required_surface",
+        "schema": "pi.swarm.smoke_harness.v1",
+        "status": "ok",
+        "timestamp": null
+      },
+      {
+        "classification": "fresh",
+        "freshness_hours": null,
+        "id": "activity_digest",
+        "issue": null,
+        "role": "required_surface",
+        "schema": "pi.swarm.activity_digest.v1",
+        "status": "ok",
+        "timestamp": null
+      },
+      {
+        "classification": "fresh",
+        "freshness_hours": null,
+        "id": "cargo_admission",
+        "issue": null,
+        "role": "required_surface",
+        "schema": "pi.cargo_headroom.admission.v1",
+        "status": "ok",
+        "timestamp": null
+      },
+      {
+        "classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "tail_latency",
+        "issue": null,
+        "role": "optional_diagnostic",
+        "schema": "pi.operator_tail_latency.v1",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "flight_recorder",
+        "issue": null,
+        "role": "optional_diagnostic",
+        "schema": "pi.swarm.flight_recorder.report.v1",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "host_preflight",
+        "issue": null,
+        "role": "optional_diagnostic",
+        "schema": "pi.doctor.swarm_resource_preflight.v1",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "hostcall_swarm_profile",
+        "issue": null,
+        "role": "optional_diagnostic",
+        "schema": "pi.ext.hostcall_admission_swarm_profile.v1",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "session_recovery_swarm_profile",
+        "issue": null,
+        "role": "optional_diagnostic",
+        "schema": "pi.session_store_v2.recovery_swarm_profile.v1",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "rpc_swarm_e2e",
+        "issue": null,
+        "role": "optional_diagnostic",
+        "schema": "pi.rpc.concurrent_swarm_e2e.v1",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "rch_artifact_sync",
+        "issue": null,
+        "role": "optional_diagnostic",
+        "schema": "pi.rch.artifact_sync_preflight.v1",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      }
+    ],
+    "missing_optional_diagnostics": [],
+    "operator_notes": [
+      "Use this dashboard for swarm bottleneck attribution only.",
+      "Do not turn diagnostic evidence into release-facing performance or drop-in claims without claim-integrity gates."
+    ],
+    "purpose": "operator_diagnostic_not_release_performance_claim",
+    "schema": "pi.swarm.bottleneck_attribution_dashboard.v1",
+    "stale_after_hours": 24,
+    "status": "ready",
+    "surface_coverage": {
+      "cgroup_numa_context": {
+        "classifications": [
+          {
+            "classification": "fresh",
+            "id": "host_preflight",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "doctor_swarm",
+            "issue": null
+          }
+        ],
+        "id": "cgroup_numa_context",
+        "source_ids": [
+          "host_preflight",
+          "doctor_swarm"
+        ],
+        "status": "covered"
+      },
+      "extension_hostcalls": {
+        "classifications": [
+          {
+            "classification": "fresh",
+            "id": "hostcall_swarm_profile",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "tail_latency",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "flight_recorder",
+            "issue": null
+          }
+        ],
+        "id": "extension_hostcalls",
+        "source_ids": [
+          "hostcall_swarm_profile",
+          "tail_latency",
+          "flight_recorder"
+        ],
+        "status": "covered"
+      },
+      "local_tools": {
+        "classifications": [
+          {
+            "classification": "fresh",
+            "id": "smoke_harness",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "flight_recorder",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "rpc_swarm_e2e",
+            "issue": null
+          }
+        ],
+        "id": "local_tools",
+        "source_ids": [
+          "smoke_harness",
+          "flight_recorder",
+          "rpc_swarm_e2e"
+        ],
+        "status": "covered"
+      },
+      "persistence": {
+        "classifications": [
+          {
+            "classification": "fresh",
+            "id": "session_recovery_swarm_profile",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "smoke_harness",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "flight_recorder",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "rpc_swarm_e2e",
+            "issue": null
+          }
+        ],
+        "id": "persistence",
+        "source_ids": [
+          "session_recovery_swarm_profile",
+          "smoke_harness",
+          "flight_recorder",
+          "rpc_swarm_e2e"
+        ],
+        "status": "covered"
+      },
+      "provider_streaming": {
+        "classifications": [
+          {
+            "classification": "fresh",
+            "id": "tail_latency",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "flight_recorder",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "rpc_swarm_e2e",
+            "issue": null
+          }
+        ],
+        "id": "provider_streaming",
+        "source_ids": [
+          "tail_latency",
+          "flight_recorder",
+          "rpc_swarm_e2e"
+        ],
+        "status": "covered"
+      },
+      "queue_pressure": {
+        "classifications": [
+          {
+            "classification": "fresh",
+            "id": "cargo_admission",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "activity_digest",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "hostcall_swarm_profile",
+            "issue": null
+          }
+        ],
+        "id": "queue_pressure",
+        "source_ids": [
+          "cargo_admission",
+          "activity_digest",
+          "hostcall_swarm_profile"
+        ],
+        "status": "covered"
+      },
+      "rch_sync_retrieval": {
+        "classifications": [
+          {
+            "classification": "fresh",
+            "id": "rch_artifact_sync",
+            "issue": null
+          },
+          {
+            "classification": "fresh",
+            "id": "cargo_admission",
+            "issue": null
+          }
+        ],
+        "id": "rch_sync_retrieval",
+        "source_ids": [
+          "rch_artifact_sync",
+          "cargo_admission"
+        ],
+        "status": "covered"
+      }
+    }
+  },
   "doctor_swarm": {
     "agent_mail_build_slots": {
       "data": {
@@ -273,7 +620,61 @@
       "path": "[WORKSPACE]/tail-latency.json",
       "schema": "pi.operator_tail_latency.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 688,
+      "size_bytes": 735,
+      "status": "ok"
+    },
+    {
+      "id": "flight_recorder",
+      "issue": null,
+      "path": "[WORKSPACE]/flight-recorder-report.json",
+      "schema": "pi.swarm.flight_recorder.report.v1",
+      "sha256": "[SHA256]",
+      "size_bytes": 434,
+      "status": "ok"
+    },
+    {
+      "id": "host_preflight",
+      "issue": null,
+      "path": "[WORKSPACE]/host-preflight.json",
+      "schema": "pi.doctor.swarm_resource_preflight.v1",
+      "sha256": "[SHA256]",
+      "size_bytes": 527,
+      "status": "ok"
+    },
+    {
+      "id": "hostcall_swarm_profile",
+      "issue": null,
+      "path": "[WORKSPACE]/hostcall-profile.json",
+      "schema": "pi.ext.hostcall_admission_swarm_profile.v1",
+      "sha256": "[SHA256]",
+      "size_bytes": 343,
+      "status": "ok"
+    },
+    {
+      "id": "session_recovery_swarm_profile",
+      "issue": null,
+      "path": "[WORKSPACE]/session-recovery-profile.json",
+      "schema": "pi.session_store_v2.recovery_swarm_profile.v1",
+      "sha256": "[SHA256]",
+      "size_bytes": 312,
+      "status": "ok"
+    },
+    {
+      "id": "rpc_swarm_e2e",
+      "issue": null,
+      "path": "[WORKSPACE]/rpc-swarm-e2e.json",
+      "schema": "pi.rpc.concurrent_swarm_e2e.v1",
+      "sha256": "[SHA256]",
+      "size_bytes": 260,
+      "status": "ok"
+    },
+    {
+      "id": "rch_artifact_sync",
+      "issue": null,
+      "path": "[WORKSPACE]/rch-artifact-sync.json",
+      "schema": "pi.rch.artifact_sync_preflight.v1",
+      "sha256": "[SHA256]",
+      "size_bytes": 264,
       "status": "ok"
     }
   ],
@@ -445,6 +846,34 @@
       },
       {
         "blockers": [],
+        "detail": "Diagnostic bottleneck attribution must classify source freshness without promoting evidence to release claims.",
+        "evidence_paths": [
+          "bottleneck_attribution.status",
+          "bottleneck_attribution.surface_coverage",
+          "bottleneck_attribution.input_classification",
+          "bottleneck_attribution.operator_notes"
+        ],
+        "green_requires": {
+          "all_required_evidence_present": true,
+          "all_required_sources_ok": true,
+          "no_blockers": true
+        },
+        "id": "bottleneck_attribution_coverage",
+        "max_score": 2,
+        "missing_evidence": [],
+        "required_source_ids": [
+          "doctor_swarm",
+          "smoke_harness",
+          "activity_digest",
+          "cargo_admission"
+        ],
+        "score": 2,
+        "status": "green",
+        "title": "Bottleneck attribution coverage",
+        "warnings": []
+      },
+      {
+        "blockers": [],
         "detail": "The smoke harness must pass and retain artifact-manifest evidence for the operator workflow.",
         "evidence_paths": [
           "smoke_harness.harness_status",
@@ -469,17 +898,18 @@
       }
     ],
     "green_requires_all_required_evidence": true,
-    "max_score": 14,
+    "max_score": 16,
     "overall_status": "degraded",
     "schema": "pi.swarm.safety_scorecard.v1",
     "status_counts": {
-      "green": 2,
+      "green": 3,
       "red": 3,
       "yellow": 2
     },
-    "total_score": 6
+    "total_score": 8
   },
   "tail_latency": {
+    "generated_at": "2026-05-09T09:00:00+00:00",
     "metrics": [
       {
         "count": 3,

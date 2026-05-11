@@ -18,6 +18,7 @@
     "git_state",
     "activity_digest",
     "smoke_harness",
+    "bottleneck_attribution",
     "swarm_scale_safety_scorecard",
     "redaction_summary",
     "operator_next_actions"
@@ -32,7 +33,13 @@
     "git_status"
   ],
   "optional_source_ids": [
-    "tail_latency"
+    "tail_latency",
+    "flight_recorder",
+    "host_preflight",
+    "hostcall_swarm_profile",
+    "session_recovery_swarm_profile",
+    "rpc_swarm_e2e",
+    "rch_artifact_sync"
   ],
   "required_summary_paths": [
     "doctor_swarm.agent_mail_build_slots",
@@ -45,6 +52,12 @@
     "activity_digest.evidence_pointers",
     "smoke_harness.artifact_manifest",
     "smoke_harness.scenario_statuses",
+    "bottleneck_attribution.schema",
+    "bottleneck_attribution.status",
+    "bottleneck_attribution.surface_coverage",
+    "bottleneck_attribution.input_classification",
+    "bottleneck_attribution.bottlenecks",
+    "bottleneck_attribution.operator_notes",
     "swarm_scale_safety_scorecard.overall_status",
     "swarm_scale_safety_scorecard.dimensions",
     "swarm_scale_safety_scorecard.green_requires_all_required_evidence",
@@ -92,6 +105,7 @@
     "dirty_worktree_tolerance",
     "stalled_bead_hygiene",
     "resource_governor_readiness",
+    "bottleneck_attribution_coverage",
     "test_coverage"
   ],
   "must_requirements": [
@@ -119,7 +133,7 @@
     },
     {
       "id": "RUNPACK-MUST-004",
-      "description": "Runpack summaries preserve actionable paths for doctor, Beads, Agent Mail, RCH admission, evidence readiness, git state, activity digest, smoke harness, redaction, and next actions.",
+      "description": "Runpack summaries preserve actionable paths for doctor, Beads, Agent Mail, RCH admission, evidence readiness, git state, activity digest, smoke harness, bottleneck attribution, redaction, and next actions.",
       "validated_by": [
         "required_summary_paths"
       ]
@@ -148,7 +162,7 @@
     },
     {
       "id": "RUNPACK-MUST-007",
-      "description": "Runpack output includes a swarm-scale safety scorecard with coordination health, cargo/RCH posture, perf evidence freshness, dirty-worktree tolerance, stalled-Bead hygiene, resource-governor readiness, and test coverage dimensions; every green dimension must retain required source IDs and evidence paths.",
+      "description": "Runpack output includes a swarm-scale safety scorecard with coordination health, cargo/RCH posture, perf evidence freshness, dirty-worktree tolerance, stalled-Bead hygiene, resource-governor readiness, bottleneck-attribution coverage, and test coverage dimensions; every green dimension must retain required source IDs and evidence paths.",
       "validated_by": [
         "scorecard_schema",
         "required_scorecard_dimensions",
@@ -161,6 +175,15 @@
       "validated_by": [
         "optional_source_ids",
         "optional_summary_paths"
+      ]
+    },
+    {
+      "id": "RUNPACK-MUST-009",
+      "description": "Runpack output includes a diagnostic-only bottleneck-attribution dashboard covering provider streaming, local tools, extension hostcalls, persistence, RCH sync/retrieval, queue pressure, and cgroup/NUMA context; stale optional diagnostics degrade the dashboard and schema mismatches fail closed.",
+      "validated_by": [
+        "required_summary_paths",
+        "optional_source_ids",
+        "required_scorecard_dimensions"
       ]
     }
   ]

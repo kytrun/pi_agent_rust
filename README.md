@@ -1905,6 +1905,14 @@ This harness does more than raw timing:
 
 In plain terms: it helps answer "what should we optimize next?" with data, not guesswork.
 
+For multi-agent operator handoff, `scripts/build_swarm_operator_runpack.py` can
+also project a diagnostic-only `bottleneck_attribution` dashboard from the tail
+latency report, swarm flight recorder report, swarm resource preflight,
+hostcall admission swarm profile, session recovery swarm profile, concurrent
+RPC swarm E2E evidence, and RCH artifact-sync preflight. The dashboard is
+operator evidence only; release-facing speed, drop-in, or performance claims
+still require the claim-integrity gates below to pass.
+
 ### Claim-Integrity Gates for Performance Reporting
 
 Pi's perf pipeline includes strict evidence checks so global speed claims cannot be based on partial or stale data.

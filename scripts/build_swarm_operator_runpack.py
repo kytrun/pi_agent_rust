@@ -28,6 +28,13 @@ RUNPACK_SCHEMA = "pi.swarm.operator_runpack.v1"
 RUNPACK_CONTRACT_SCHEMA = "pi.swarm.operator_runpack_contract.v1"
 SAFETY_SCORECARD_SCHEMA = "pi.swarm.safety_scorecard.v1"
 TAIL_LATENCY_SCHEMA = "pi.operator_tail_latency.v1"
+BOTTLENECK_ATTRIBUTION_SCHEMA = "pi.swarm.bottleneck_attribution_dashboard.v1"
+FLIGHT_RECORDER_REPORT_SCHEMA = "pi.swarm.flight_recorder.report.v1"
+HOST_PREFLIGHT_SCHEMA = "pi.doctor.swarm_resource_preflight.v1"
+HOSTCALL_SWARM_PROFILE_SCHEMA = "pi.ext.hostcall_admission_swarm_profile.v1"
+SESSION_RECOVERY_SWARM_PROFILE_SCHEMA = "pi.session_store_v2.recovery_swarm_profile.v1"
+RPC_SWARM_E2E_SCHEMA = "pi.rpc.concurrent_swarm_e2e.v1"
+RCH_ARTIFACT_SYNC_SCHEMA = "pi.rch.artifact_sync_preflight.v1"
 RUNPACK_CONTRACT_PATH = Path("docs/contracts/swarm-operator-runpack-contract.json")
 GOLDEN_REPORT_DIRECTORY = Path("tests/golden_corpus/swarm_operator_runpack")
 COMPLETE_RUNPACK_GOLDEN = "complete_runpack_projection.json"
@@ -52,6 +59,44 @@ SENSITIVE_VALUE_RE = re.compile(
     r"(?i)\b(bearer\s+[A-Za-z0-9._~+/=-]+|"
     r"(?:api[_-]?key|authorization|password|registration_token|secret|token)"
     r"\s*[:=]\s*[\"']?[^\"'\s,}]+)"
+)
+BOTTLENECK_CORE_SOURCE_IDS = (
+    "doctor_swarm",
+    "smoke_harness",
+    "activity_digest",
+    "cargo_admission",
+)
+BOTTLENECK_OPTIONAL_SOURCE_IDS = (
+    "tail_latency",
+    "flight_recorder",
+    "host_preflight",
+    "hostcall_swarm_profile",
+    "session_recovery_swarm_profile",
+    "rpc_swarm_e2e",
+    "rch_artifact_sync",
+)
+BOTTLENECK_SURFACES: dict[str, tuple[str, ...]] = {
+    "provider_streaming": ("tail_latency", "flight_recorder", "rpc_swarm_e2e"),
+    "local_tools": ("smoke_harness", "flight_recorder", "rpc_swarm_e2e"),
+    "extension_hostcalls": ("hostcall_swarm_profile", "tail_latency", "flight_recorder"),
+    "persistence": (
+        "session_recovery_swarm_profile",
+        "smoke_harness",
+        "flight_recorder",
+        "rpc_swarm_e2e",
+    ),
+    "rch_sync_retrieval": ("rch_artifact_sync", "cargo_admission"),
+    "queue_pressure": ("cargo_admission", "activity_digest", "hostcall_swarm_profile"),
+    "cgroup_numa_context": ("host_preflight", "doctor_swarm"),
+}
+TIMESTAMP_KEYS = (
+    "generated_at",
+    "generatedAt",
+    "timestamp",
+    "created_at",
+    "started_at",
+    "run_started_at",
+    "completed_at",
 )
 
 
@@ -305,6 +350,54 @@ def source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
                 expected_schema=TAIL_LATENCY_SCHEMA,
             )
         )
+    if args.flight_recorder_report_json is not None:
+        sources.append(
+            load_json_source(
+                "flight_recorder",
+                args.flight_recorder_report_json,
+                expected_schema=FLIGHT_RECORDER_REPORT_SCHEMA,
+            )
+        )
+    if args.host_preflight_json is not None:
+        sources.append(
+            load_json_source(
+                "host_preflight",
+                args.host_preflight_json,
+                expected_schema=HOST_PREFLIGHT_SCHEMA,
+            )
+        )
+    if args.hostcall_swarm_profile_json is not None:
+        sources.append(
+            load_json_source(
+                "hostcall_swarm_profile",
+                args.hostcall_swarm_profile_json,
+                expected_schema=HOSTCALL_SWARM_PROFILE_SCHEMA,
+            )
+        )
+    if args.session_recovery_swarm_profile_json is not None:
+        sources.append(
+            load_json_source(
+                "session_recovery_swarm_profile",
+                args.session_recovery_swarm_profile_json,
+                expected_schema=SESSION_RECOVERY_SWARM_PROFILE_SCHEMA,
+            )
+        )
+    if args.rpc_swarm_e2e_json is not None:
+        sources.append(
+            load_json_source(
+                "rpc_swarm_e2e",
+                args.rpc_swarm_e2e_json,
+                expected_schema=RPC_SWARM_E2E_SCHEMA,
+            )
+        )
+    if args.rch_artifact_sync_json is not None:
+        sources.append(
+            load_json_source(
+                "rch_artifact_sync",
+                args.rch_artifact_sync_json,
+                expected_schema=RCH_ARTIFACT_SYNC_SCHEMA,
+            )
+        )
     return sources
 
 
@@ -413,11 +506,418 @@ def summarize_tail_latency(source: SourcePayload, max_items: int) -> dict[str, A
     return {
         "status": source.status,
         "schema": payload.get("schema"),
+        "generated_at": payload.get("generated_at"),
         "purpose": payload.get("purpose"),
         "telemetry_enabled": payload.get("telemetry_enabled"),
         "sample_window": payload.get("sample_window"),
         "redaction_summary": payload.get("redaction_summary"),
         "metrics": bounded(summarized_metrics, max_items),
+    }
+
+
+def top_level_timestamp(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in TIMESTAMP_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def classify_bottleneck_source(
+    source: SourcePayload,
+    *,
+    generated_at: datetime,
+    stale_after_hours: int,
+    required: bool,
+) -> dict[str, Any]:
+    if source.status != "ok":
+        return {
+            "id": source.id,
+            "role": "required_surface" if required else "optional_diagnostic",
+            "status": source.status,
+            "schema": source.schema,
+            "classification": "blocker" if required else "optional_diagnostic",
+            "freshness_hours": None,
+            "timestamp": None,
+            "issue": source.issue or "source was not provided",
+        }
+    timestamp = top_level_timestamp(source.payload)
+    if required and timestamp is None:
+        return {
+            "id": source.id,
+            "role": "required_surface",
+            "status": source.status,
+            "schema": source.schema,
+            "classification": "fresh",
+            "freshness_hours": None,
+            "timestamp": None,
+            "issue": None,
+        }
+    if timestamp is None:
+        return {
+            "id": source.id,
+            "role": "optional_diagnostic",
+            "status": source.status,
+            "schema": source.schema,
+            "classification": "optional_diagnostic",
+            "freshness_hours": None,
+            "timestamp": None,
+            "issue": "provided optional diagnostic is missing a top-level timestamp",
+        }
+    try:
+        source_time = parse_utc(timestamp)
+    except ValueError:
+        return {
+            "id": source.id,
+            "role": "optional_diagnostic",
+            "status": source.status,
+            "schema": source.schema,
+            "classification": "blocker",
+            "freshness_hours": None,
+            "timestamp": timestamp,
+            "issue": "provided optional diagnostic has an invalid timestamp",
+        }
+    age_hours = (generated_at - source_time).total_seconds() / 3600
+    if age_hours < 0:
+        return {
+            "id": source.id,
+            "role": "optional_diagnostic",
+            "status": source.status,
+            "schema": source.schema,
+            "classification": "blocker",
+            "freshness_hours": round(age_hours, 2),
+            "timestamp": source_time.isoformat(),
+            "issue": "provided optional diagnostic timestamp is in the future",
+        }
+    if age_hours > stale_after_hours:
+        return {
+            "id": source.id,
+            "role": "optional_diagnostic",
+            "status": source.status,
+            "schema": source.schema,
+            "classification": "historical_snapshot",
+            "freshness_hours": round(age_hours, 2),
+            "timestamp": source_time.isoformat(),
+            "issue": f"source is older than stale_after_hours={stale_after_hours}",
+        }
+    return {
+        "id": source.id,
+        "role": "optional_diagnostic",
+        "status": source.status,
+        "schema": source.schema,
+        "classification": "fresh",
+        "freshness_hours": round(age_hours, 2),
+        "timestamp": source_time.isoformat(),
+        "issue": None,
+    }
+
+
+def surface_status(classifications: list[dict[str, Any]]) -> str:
+    if any(item.get("classification") == "blocker" for item in classifications):
+        return "blocked"
+    if any(item.get("classification") == "fresh" for item in classifications):
+        return "covered"
+    if any(item.get("classification") == "historical_snapshot" for item in classifications):
+        return "historical_snapshot"
+    return "optional_diagnostic_missing"
+
+
+def summarize_surface(
+    surface_id: str,
+    source_ids: tuple[str, ...],
+    classifications_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    classifications = [
+        classifications_by_id[source_id]
+        for source_id in source_ids
+        if source_id in classifications_by_id
+    ]
+    return {
+        "id": surface_id,
+        "status": surface_status(classifications),
+        "source_ids": list(source_ids),
+        "classifications": [
+            {
+                "id": item.get("id"),
+                "classification": item.get("classification"),
+                "issue": item.get("issue"),
+            }
+            for item in classifications
+        ],
+    }
+
+
+def extract_tail_latency_bottlenecks(
+    source: SourcePayload, max_items: int
+) -> list[dict[str, Any]]:
+    payload = source.payload if isinstance(source.payload, dict) else {}
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), list) else []
+    findings: list[dict[str, Any]] = []
+    for metric in metrics:
+        if not isinstance(metric, dict):
+            continue
+        snapshot = metric.get("snapshot") if isinstance(metric.get("snapshot"), dict) else {}
+        tail = snapshot.get("tail") if isinstance(snapshot.get("tail"), dict) else {}
+        p99 = tail.get("p99_us")
+        p999 = tail.get("p999_us")
+        findings.append(
+            {
+                "surface": "provider_streaming",
+                "source": source.id,
+                "label": metric.get("label") or metric.get("id"),
+                "signal": "tail_latency",
+                "p99_us": p99,
+                "p999_us": p999,
+                "max_us": snapshot.get("max_us"),
+            }
+        )
+    return bounded(findings, max_items)
+
+
+def extract_flight_recorder_bottlenecks(
+    source: SourcePayload, max_items: int
+) -> list[dict[str, Any]]:
+    payload = source.payload if isinstance(source.payload, dict) else {}
+    components = payload.get("dominant_latency_components")
+    if not isinstance(components, list):
+        components = []
+    findings: list[dict[str, Any]] = []
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        findings.append(
+            {
+                "surface": "provider_streaming",
+                "source": source.id,
+                "label": component.get("component") or component.get("name"),
+                "signal": "flight_recorder_dominant_latency_component",
+                "count": component.get("count"),
+                "total_us": component.get("total_us"),
+            }
+        )
+    failures = payload.get("coordination_failures")
+    if isinstance(failures, list) and failures:
+        findings.append(
+            {
+                "surface": "queue_pressure",
+                "source": source.id,
+                "label": "coordination_failures",
+                "signal": "flight_recorder_coordination_failures",
+                "count": len(failures),
+            }
+        )
+    return bounded(findings, max_items)
+
+
+def extract_hostcall_bottlenecks(source: SourcePayload, max_items: int) -> list[dict[str, Any]]:
+    payload = source.payload if isinstance(source.payload, dict) else {}
+    profiles = payload.get("profiles") if isinstance(payload.get("profiles"), list) else []
+    findings: list[dict[str, Any]] = []
+    for profile in profiles:
+        if not isinstance(profile, dict):
+            continue
+        findings.append(
+            {
+                "surface": "extension_hostcalls",
+                "source": source.id,
+                "label": profile.get("mode") or profile.get("name"),
+                "signal": "hostcall_swarm_profile",
+                "accepted_requests": profile.get("accepted_requests"),
+                "completed_requests": profile.get("completed_requests"),
+                "p99_tail_latency_steps": profile.get("p99_tail_latency_steps"),
+                "max_tail_latency_steps": profile.get("max_tail_latency_steps"),
+            }
+        )
+    return bounded(findings, max_items)
+
+
+def extract_session_bottlenecks(source: SourcePayload) -> list[dict[str, Any]]:
+    payload = source.payload if isinstance(source.payload, dict) else {}
+    timings = payload.get("timings_us") if isinstance(payload.get("timings_us"), dict) else {}
+    if not timings:
+        return []
+    slowest = sorted(
+        ((key, value) for key, value in timings.items() if isinstance(value, (int, float))),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if not slowest:
+        return []
+    name, value = slowest[0]
+    return [
+        {
+            "surface": "persistence",
+            "source": source.id,
+            "label": name,
+            "signal": "session_recovery_swarm_profile_slowest_timing",
+            "elapsed_us": value,
+        }
+    ]
+
+
+def extract_rch_sync_bottlenecks(source: SourcePayload) -> list[dict[str, Any]]:
+    payload = source.payload if isinstance(source.payload, dict) else {}
+    violations = payload.get("violations") if isinstance(payload.get("violations"), list) else []
+    status = payload.get("status")
+    if not violations and status in {None, "pass", "ok"}:
+        return []
+    return [
+        {
+            "surface": "rch_sync_retrieval",
+            "source": source.id,
+            "label": "rch_artifact_sync",
+            "signal": "artifact_sync_preflight",
+            "status": status,
+            "violation_count": len(violations),
+        }
+    ]
+
+
+def extract_core_bottlenecks(runpack: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    rch = runpack["rch_admission"]
+    queue_forecast = (
+        rch.get("queue_forecast")
+        if isinstance(rch.get("queue_forecast"), dict)
+        else {}
+    )
+    if rch.get("decision") in {"backoff", "degraded", "deny"}:
+        findings.append(
+            {
+                "surface": "rch_sync_retrieval",
+                "source": "cargo_admission",
+                "label": "cargo/RCH admission",
+                "signal": "admission_decision",
+                "decision": rch.get("decision"),
+                "recommended_action": queue_forecast.get("recommended_action"),
+                "slot_pressure": queue_forecast.get("slot_pressure"),
+            }
+        )
+    if queue_forecast.get("recommended_action") in {"backoff", "split"}:
+        findings.append(
+            {
+                "surface": "queue_pressure",
+                "source": "cargo_admission",
+                "label": "RCH queue forecast",
+                "signal": "queue_forecast",
+                "recommended_action": queue_forecast.get("recommended_action"),
+                "queue_depth": queue_forecast.get("queue_depth"),
+                "active_builds": queue_forecast.get("active_builds"),
+                "queued_builds": queue_forecast.get("queued_builds"),
+            }
+        )
+    activity = runpack["activity_digest"]
+    if activity.get("saturated") is True:
+        findings.append(
+            {
+                "surface": "queue_pressure",
+                "source": "activity_digest",
+                "label": "swarm activity saturation",
+                "signal": "activity_digest_saturation",
+                "reasons": activity.get("reasons"),
+                "evidence_pointers": activity.get("evidence_pointers"),
+            }
+        )
+    doctor = runpack["doctor_swarm"]
+    severity_counts = (
+        doctor.get("severity_counts")
+        if isinstance(doctor.get("severity_counts"), dict)
+        else {}
+    )
+    if doctor.get("overall") in {"warn", "fail"} or severity_counts.get("warn") or severity_counts.get("fail"):
+        findings.append(
+            {
+                "surface": "cgroup_numa_context",
+                "source": "doctor_swarm",
+                "label": "doctor swarm findings",
+                "signal": "doctor_swarm_overall",
+                "overall": doctor.get("overall"),
+                "severity_counts": severity_counts,
+            }
+        )
+    return findings
+
+
+def build_bottleneck_attribution(
+    runpack: dict[str, Any],
+    by_id: dict[str, SourcePayload],
+    *,
+    generated_at: datetime,
+    stale_after_hours: int,
+    max_items: int,
+) -> dict[str, Any]:
+    classifications: list[dict[str, Any]] = []
+    for source_id in BOTTLENECK_CORE_SOURCE_IDS:
+        source = by_id[source_id]
+        classifications.append(
+            classify_bottleneck_source(
+                source,
+                generated_at=generated_at,
+                stale_after_hours=stale_after_hours,
+                required=True,
+            )
+        )
+    for source_id in BOTTLENECK_OPTIONAL_SOURCE_IDS:
+        source = by_id.get(source_id, SourcePayload(source_id, None, "not_provided", None, None))
+        classifications.append(
+            classify_bottleneck_source(
+                source,
+                generated_at=generated_at,
+                stale_after_hours=stale_after_hours,
+                required=False,
+            )
+        )
+    classifications_by_id = {item["id"]: item for item in classifications}
+    surface_coverage = {
+        surface_id: summarize_surface(surface_id, source_ids, classifications_by_id)
+        for surface_id, source_ids in BOTTLENECK_SURFACES.items()
+    }
+    bottlenecks = extract_core_bottlenecks(runpack)
+    if by_id.get("tail_latency") is not None:
+        bottlenecks.extend(extract_tail_latency_bottlenecks(by_id["tail_latency"], max_items))
+    if by_id.get("flight_recorder") is not None:
+        bottlenecks.extend(extract_flight_recorder_bottlenecks(by_id["flight_recorder"], max_items))
+    if by_id.get("hostcall_swarm_profile") is not None:
+        bottlenecks.extend(extract_hostcall_bottlenecks(by_id["hostcall_swarm_profile"], max_items))
+    if by_id.get("session_recovery_swarm_profile") is not None:
+        bottlenecks.extend(extract_session_bottlenecks(by_id["session_recovery_swarm_profile"]))
+    if by_id.get("rch_artifact_sync") is not None:
+        bottlenecks.extend(extract_rch_sync_bottlenecks(by_id["rch_artifact_sync"]))
+    blocked_sources = [
+        item["id"] for item in classifications if item.get("classification") == "blocker"
+    ]
+    historical_sources = [
+        item["id"] for item in classifications if item.get("classification") == "historical_snapshot"
+    ]
+    missing_optional = [
+        item["id"] for item in classifications if item.get("classification") == "optional_diagnostic"
+    ]
+    blocked_surfaces = [
+        surface_id
+        for surface_id, surface in surface_coverage.items()
+        if surface.get("status") == "blocked"
+    ]
+    status = "ready"
+    if blocked_sources or historical_sources or blocked_surfaces:
+        status = "degraded"
+    return {
+        "schema": BOTTLENECK_ATTRIBUTION_SCHEMA,
+        "generated_at": generated_at.isoformat(),
+        "status": status,
+        "purpose": "operator_diagnostic_not_release_performance_claim",
+        "stale_after_hours": stale_after_hours,
+        "surface_coverage": surface_coverage,
+        "input_classification": classifications,
+        "bottlenecks": bounded(bottlenecks, max_items),
+        "missing_optional_diagnostics": missing_optional,
+        "historical_snapshots": historical_sources,
+        "blocked_inputs": blocked_sources,
+        "operator_notes": [
+            "Use this dashboard for swarm bottleneck attribution only.",
+            "Do not turn diagnostic evidence into release-facing performance or drop-in claims without claim-integrity gates.",
+        ],
     }
 
 
@@ -762,6 +1262,21 @@ def build_swarm_scale_safety_scorecard(runpack: dict[str, Any]) -> dict[str, Any
     if not smoke.get("artifact_manifest"):
         coverage_blockers.append("smoke harness artifact manifest is empty")
 
+    bottleneck = runpack["bottleneck_attribution"]
+    bottleneck_blockers: list[str] = []
+    bottleneck_warnings: list[str] = []
+    blocked_inputs = bottleneck.get("blocked_inputs")
+    historical_snapshots = bottleneck.get("historical_snapshots")
+    missing_optional = bottleneck.get("missing_optional_diagnostics")
+    if isinstance(blocked_inputs, list) and blocked_inputs:
+        bottleneck_blockers.append("bottleneck attribution has blocked inputs")
+    if isinstance(historical_snapshots, list) and historical_snapshots:
+        bottleneck_warnings.append("bottleneck attribution includes historical snapshots")
+    if isinstance(missing_optional, list) and missing_optional:
+        bottleneck_warnings.append("bottleneck attribution has missing optional diagnostics")
+    if bottleneck.get("status") != "ready":
+        bottleneck_warnings.append("bottleneck attribution dashboard is degraded")
+
     dimensions = [
         scorecard_dimension(
             runpack=runpack,
@@ -851,6 +1366,26 @@ def build_swarm_scale_safety_scorecard(runpack: dict[str, Any]) -> dict[str, Any
         ),
         scorecard_dimension(
             runpack=runpack,
+            dimension_id="bottleneck_attribution_coverage",
+            title="Bottleneck attribution coverage",
+            required_source_ids=(
+                "doctor_swarm",
+                "smoke_harness",
+                "activity_digest",
+                "cargo_admission",
+            ),
+            evidence_paths=(
+                "bottleneck_attribution.status",
+                "bottleneck_attribution.surface_coverage",
+                "bottleneck_attribution.input_classification",
+                "bottleneck_attribution.operator_notes",
+            ),
+            blockers=bottleneck_blockers,
+            warnings=bottleneck_warnings,
+            detail="Diagnostic bottleneck attribution must classify source freshness without promoting evidence to release claims.",
+        ),
+        scorecard_dimension(
+            runpack=runpack,
             dimension_id="test_coverage",
             title="Test coverage",
             required_source_ids=("smoke_harness",),
@@ -894,6 +1429,8 @@ def derive_status(runpack: dict[str, Any]) -> str:
     if runpack["rch_admission"].get("decision") in {"backoff", "degraded", "deny"}:
         status = "degraded"
     if runpack["smoke_harness"].get("harness_status") == "fail":
+        status = "degraded"
+    if runpack["bottleneck_attribution"].get("status") != "ready":
         status = "degraded"
     scorecard = runpack.get("swarm_scale_safety_scorecard")
     if isinstance(scorecard, dict) and scorecard.get("overall_status") != "ready":
@@ -941,6 +1478,13 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
             by_id["tail_latency"],
             args.max_items,
         )
+    runpack["bottleneck_attribution"] = build_bottleneck_attribution(
+        runpack,
+        by_id,
+        generated_at=generated_at,
+        stale_after_hours=args.stale_after_hours,
+        max_items=args.max_items,
+    )
     runpack["swarm_scale_safety_scorecard"] = build_swarm_scale_safety_scorecard(runpack)
     runpack["status"] = derive_status(runpack)
     runpack["operator_next_actions"] = operator_next_actions(runpack)
@@ -971,6 +1515,11 @@ def operator_next_actions(runpack: dict[str, Any]) -> list[str]:
         actions.append("Use activity-digest saturation evidence to narrow or redirect the swarm")
     if runpack["git_state"].get("dirty"):
         actions.append("Account for dirty files before using the runpack as handoff evidence")
+    bottleneck = runpack.get("bottleneck_attribution")
+    if isinstance(bottleneck, dict) and bottleneck.get("status") != "ready":
+        actions.append(
+            "Review degraded bottleneck attribution dashboard before using it as current diagnostic evidence"
+        )
     scorecard = runpack.get("swarm_scale_safety_scorecard")
     if isinstance(scorecard, dict) and scorecard.get("overall_status") != "ready":
         actions.append("Review degraded swarm-scale safety scorecard dimensions before release runpack signoff")
@@ -1005,6 +1554,7 @@ def render_markdown(runpack: dict[str, Any]) -> str:
     lines.append(f"- Evidence readiness: `{runpack['evidence_readiness'].get('overall_status')}`")
     lines.append(f"- Git dirty: `{runpack['git_state'].get('dirty')}`")
     lines.append(f"- Activity saturated: `{runpack['activity_digest'].get('saturated')}`")
+    lines.append(f"- Bottleneck attribution: `{runpack['bottleneck_attribution'].get('status')}`")
     if isinstance(runpack.get("tail_latency"), dict):
         tail_latency = runpack["tail_latency"]
         lines.append(
@@ -1021,6 +1571,15 @@ def render_markdown(runpack: dict[str, Any]) -> str:
         lines.append(
             f"- `{dimension['id']}`: `{dimension['status']}` "
             f"({dimension['score']}/{dimension['max_score']})"
+        )
+    bottleneck = runpack["bottleneck_attribution"]
+    lines.extend(["", "## Bottleneck Attribution"])
+    for surface_id, surface in bottleneck.get("surface_coverage", {}).items():
+        lines.append(f"- `{surface_id}`: `{surface.get('status')}`")
+    for item in bottleneck.get("bottlenecks", []):
+        lines.append(
+            f"- `{item.get('surface')}` from `{item.get('source')}`: "
+            f"{item.get('signal')}"
         )
     lines.append("")
     return "\n".join(lines)
@@ -1315,6 +1874,7 @@ def run_self_test() -> int:
         workspace / "tail-latency.json",
         {
             "schema": TAIL_LATENCY_SCHEMA,
+            "generated_at": generated_at,
             "purpose": "operator_observability_not_release_performance_claim",
             "telemetry_enabled": True,
             "sample_window": 512,
@@ -1344,6 +1904,92 @@ def run_self_test() -> int:
             ],
         },
     )
+    flight_recorder_path = write_json(
+        workspace / "flight-recorder-report.json",
+        {
+            "schema": FLIGHT_RECORDER_REPORT_SCHEMA,
+            "generated_at": generated_at,
+            "dominant_latency_components": [
+                {"component": "provider_streaming", "count": 3, "total_us": 900},
+                {"component": "tool_execution", "count": 2, "total_us": 250},
+            ],
+            "component_counts": {"provider": 3, "tool": 2, "session": 2},
+            "coordination_failures": [],
+        },
+    )
+    host_preflight_path = write_json(
+        workspace / "host-preflight.json",
+        {
+            "schema": HOST_PREFLIGHT_SCHEMA,
+            "generated_at": generated_at,
+            "status": "pass",
+            "cpu": {
+                "logical": 16,
+                "effective": 8,
+                "cgroup_quota": {"quota_cores": 8.0, "unlimited": False},
+                "cpuset_cpus": 8,
+            },
+            "numa": {"node_count": 2, "nodes": [0, 1]},
+            "memory": {"cgroup_limit_bytes": 34359738368},
+            "recommended_budgets": {"agent_fanout": 4, "rch_verification_fanout": 2},
+            "critical_failures": [],
+        },
+    )
+    hostcall_profile_path = write_json(
+        workspace / "hostcall-profile.json",
+        {
+            "schema": HOSTCALL_SWARM_PROFILE_SCHEMA,
+            "generated_at": generated_at,
+            "agents": 4,
+            "hostcalls_per_agent": 32,
+            "profiles": [
+                {
+                    "mode": "compat",
+                    "accepted_requests": 128,
+                    "completed_requests": 128,
+                    "p99_tail_latency_steps": 4,
+                    "max_tail_latency_steps": 6,
+                }
+            ],
+        },
+    )
+    session_profile_path = write_json(
+        workspace / "session-recovery-profile.json",
+        {
+            "schema": SESSION_RECOVERY_SWARM_PROFILE_SCHEMA,
+            "generated_at": generated_at,
+            "counts": {
+                "base_entries": 200,
+                "tail_entries_appended": 32,
+                "recovered_entries_after_truncation": 200,
+            },
+            "timings_us": {"recover": 800, "index": 1500, "save": 700},
+        },
+    )
+    rpc_swarm_path = write_json(
+        workspace / "rpc-swarm-e2e.json",
+        {
+            "schema": RPC_SWARM_E2E_SCHEMA,
+            "generated_at": generated_at,
+            "status": "pass",
+            "sessions": 3,
+            "command_ids": ["cmd-a", "cmd-b", "cmd-c"],
+            "filesystem_state": "preserved",
+            "session_index": "updated",
+        },
+    )
+    rch_artifact_sync_path = write_json(
+        workspace / "rch-artifact-sync.json",
+        {
+            "schema": RCH_ARTIFACT_SYNC_SCHEMA,
+            "generated_at": generated_at,
+            "status": "pass",
+            "required_paths": [
+                {"path": "tests/perf/reports/bench_schema_registry.json", "included": True}
+            ],
+            "violations": [],
+        },
+    )
 
     args = argparse.Namespace(
         doctor_json=doctor_path,
@@ -1354,6 +2000,12 @@ def run_self_test() -> int:
         beads_json=beads_path,
         git_status_file=git_path,
         tail_latency_json=tail_latency_path,
+        flight_recorder_report_json=flight_recorder_path,
+        host_preflight_json=host_preflight_path,
+        hostcall_swarm_profile_json=hostcall_profile_path,
+        session_recovery_swarm_profile_json=session_profile_path,
+        rpc_swarm_e2e_json=rpc_swarm_path,
+        rch_artifact_sync_json=rch_artifact_sync_path,
         out_json=workspace / "runpack.json",
         out_md=workspace / "runpack.md",
         generated_at=generated_at,
@@ -1370,6 +2022,25 @@ def run_self_test() -> int:
         assert runpack["rch_admission"]["queue_forecast"]["recommended_action"] == "backoff"
         assert runpack["activity_digest"]["saturated"] is True
         assert runpack["git_state"]["dirty"] is True
+        dashboard = runpack["bottleneck_attribution"]
+        assert dashboard["schema"] == BOTTLENECK_ATTRIBUTION_SCHEMA
+        assert dashboard["purpose"] == "operator_diagnostic_not_release_performance_claim"
+        assert dashboard["surface_coverage"]["provider_streaming"]["status"] == "covered"
+        assert dashboard["surface_coverage"]["local_tools"]["status"] == "covered"
+        assert dashboard["surface_coverage"]["extension_hostcalls"]["status"] == "covered"
+        assert dashboard["surface_coverage"]["persistence"]["status"] == "covered"
+        assert dashboard["surface_coverage"]["rch_sync_retrieval"]["status"] == "covered"
+        assert dashboard["surface_coverage"]["queue_pressure"]["status"] == "covered"
+        assert dashboard["surface_coverage"]["cgroup_numa_context"]["status"] == "covered"
+        assert any(
+            item["id"] == "rpc_swarm_e2e" and item["classification"] == "fresh"
+            for item in dashboard["input_classification"]
+        )
+        assert any(
+            item["id"] == "session_recovery_swarm_profile"
+            and item["classification"] == "fresh"
+            for item in dashboard["input_classification"]
+        )
         scorecard = runpack["swarm_scale_safety_scorecard"]
         assert scorecard["schema"] == SAFETY_SCORECARD_SCHEMA
         assert scorecard["overall_status"] == "degraded"
@@ -1383,6 +2054,7 @@ def run_self_test() -> int:
             "dirty_worktree_tolerance",
             "stalled_bead_hygiene",
             "resource_governor_readiness",
+            "bottleneck_attribution_coverage",
             "test_coverage",
         }
         assert scorecard_dimensions["cargo_rch_posture"]["status"] == "red"
@@ -1403,6 +2075,7 @@ def run_self_test() -> int:
         assert runpack["redaction_summary"]["redacted_count"] >= 1
         assert args.out_json.exists() and args.out_md.exists()
         assert "Tail latency telemetry" in args.out_md.read_text(encoding="utf-8")
+        assert "Bottleneck Attribution" in args.out_md.read_text(encoding="utf-8")
         assert_runpack_contract(runpack)
         assert_runpack_golden(runpack, workspace)
         malformed = workspace / "malformed.json"
@@ -1417,7 +2090,58 @@ def run_self_test() -> int:
         no_tail_args = argparse.Namespace(**{**vars(args), "tail_latency_json": None})
         no_tail_runpack = build_runpack(no_tail_args)
         assert "tail_latency" not in no_tail_runpack
+        no_tail_dashboard = no_tail_runpack["bottleneck_attribution"]
+        assert "tail_latency" in no_tail_dashboard["missing_optional_diagnostics"]
         assert_runpack_contract(no_tail_runpack)
+        no_optional_args = argparse.Namespace(
+            **{
+                **vars(args),
+                "tail_latency_json": None,
+                "flight_recorder_report_json": None,
+                "host_preflight_json": None,
+                "hostcall_swarm_profile_json": None,
+                "session_recovery_swarm_profile_json": None,
+                "rpc_swarm_e2e_json": None,
+                "rch_artifact_sync_json": None,
+            }
+        )
+        no_optional_runpack = build_runpack(no_optional_args)
+        assert no_optional_runpack["bottleneck_attribution"]["surface_coverage"][
+            "provider_streaming"
+        ]["status"] == "optional_diagnostic_missing"
+        assert (
+            "flight_recorder"
+            in no_optional_runpack["bottleneck_attribution"]["missing_optional_diagnostics"]
+        )
+        assert_runpack_contract(no_optional_runpack)
+        stale_rpc_path = write_json(
+            workspace / "stale-rpc-swarm-e2e.json",
+            {
+                "schema": RPC_SWARM_E2E_SCHEMA,
+                "generated_at": "2026-05-07T09:00:00+00:00",
+                "status": "pass",
+            },
+        )
+        stale_args = argparse.Namespace(**{**vars(args), "rpc_swarm_e2e_json": stale_rpc_path})
+        stale_runpack = build_runpack(stale_args)
+        assert stale_runpack["bottleneck_attribution"]["status"] == "degraded"
+        assert (
+            "rpc_swarm_e2e"
+            in stale_runpack["bottleneck_attribution"]["historical_snapshots"]
+        )
+        bad_rpc_schema_path = write_json(
+            workspace / "bad-rpc-swarm-e2e.json",
+            {"schema": "pi.rpc.concurrent_swarm_e2e.v0", "generated_at": generated_at},
+        )
+        bad_rpc_schema_args = argparse.Namespace(
+            **{**vars(args), "rpc_swarm_e2e_json": bad_rpc_schema_path}
+        )
+        try:
+            build_runpack(bad_rpc_schema_args)
+        except RunpackError as exc:
+            assert "rpc_swarm_e2e source schema mismatch" in str(exc)
+        else:
+            raise AssertionError("schema-mismatched optional diagnostic should fail closed")
     except (AssertionError, RunpackError) as exc:
         print(f"SELF-TEST FAIL: {exc}")
         return 2
@@ -1428,14 +2152,72 @@ def run_self_test() -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--doctor-json", type=Path, help="JSON from `pi doctor --only swarm --format json`")
-    parser.add_argument("--claim-readiness-json", type=Path, help="JSON from report_swarm_claim_readiness.py")
-    parser.add_argument("--smoke-summary-json", type=Path, help="summary.json from run_swarm_smoke_harness.py")
+    parser.add_argument(
+        "--doctor-json",
+        type=Path,
+        help="JSON from `pi doctor --only swarm --format json`",
+    )
+    parser.add_argument(
+        "--claim-readiness-json",
+        type=Path,
+        help="JSON from report_swarm_claim_readiness.py",
+    )
+    parser.add_argument(
+        "--smoke-summary-json",
+        type=Path,
+        help="summary.json from run_swarm_smoke_harness.py",
+    )
     parser.add_argument("--activity-digest-json", type=Path, help="pi.swarm.activity_digest.v1 JSON")
-    parser.add_argument("--cargo-admission-json", type=Path, help="JSON or JSONL from cargo_headroom.sh --admit-only")
-    parser.add_argument("--beads-json", type=Path, help="JSON from `br list --json` or `br list --status=in_progress --json`")
-    parser.add_argument("--git-status-file", type=Path, help="captured `git status --porcelain` output")
-    parser.add_argument("--tail-latency-json", type=Path, help="pi.operator_tail_latency.v1 JSON from PI_PERF_TELEMETRY")
+    parser.add_argument(
+        "--cargo-admission-json",
+        type=Path,
+        help="JSON or JSONL from cargo_headroom.sh --admit-only",
+    )
+    parser.add_argument(
+        "--beads-json",
+        type=Path,
+        help="JSON from `br list --json` or `br list --status=in_progress --json`",
+    )
+    parser.add_argument(
+        "--git-status-file",
+        type=Path,
+        help="captured `git status --porcelain` output",
+    )
+    parser.add_argument(
+        "--tail-latency-json",
+        type=Path,
+        help="pi.operator_tail_latency.v1 JSON from PI_PERF_TELEMETRY",
+    )
+    parser.add_argument(
+        "--flight-recorder-report-json",
+        type=Path,
+        help="pi.swarm.flight_recorder.report.v1 JSON",
+    )
+    parser.add_argument(
+        "--host-preflight-json",
+        type=Path,
+        help="pi.doctor.swarm_resource_preflight.v1 JSON",
+    )
+    parser.add_argument(
+        "--hostcall-swarm-profile-json",
+        type=Path,
+        help="pi.ext.hostcall_admission_swarm_profile.v1 JSON",
+    )
+    parser.add_argument(
+        "--session-recovery-swarm-profile-json",
+        type=Path,
+        help="pi.session_store_v2.recovery_swarm_profile.v1 JSON",
+    )
+    parser.add_argument(
+        "--rpc-swarm-e2e-json",
+        type=Path,
+        help="pi.rpc.concurrent_swarm_e2e.v1 JSON",
+    )
+    parser.add_argument(
+        "--rch-artifact-sync-json",
+        type=Path,
+        help="pi.rch.artifact_sync_preflight.v1 JSON",
+    )
     parser.add_argument("--out-json", type=Path, help="write runpack JSON; refuses to overwrite")
     parser.add_argument("--out-md", type=Path, help="write runpack Markdown; refuses to overwrite")
     parser.add_argument("--generated-at", help="override generated timestamp for deterministic tests")
