@@ -42,6 +42,7 @@ const SWARM_DOCTOR_STALLED_REAPER_SCHEMA: &str = "pi.doctor.stalled_bead_reaper.
 const SWARM_DOCTOR_NEXT_ACTION_SCHEMA: &str = "pi.doctor.communication_purgatory_next_action.v1";
 const SWARM_DOCTOR_OPERATIONS_DASHBOARD_SCHEMA: &str = "pi.doctor.swarm_operations_dashboard.v1";
 const SWARM_DOCTOR_RCH_AFFINITY_SCHEMA: &str = "pi.doctor.rch_warm_target_affinity.v1";
+const SWARM_RCH_AFFINITY_PLAN_ARTIFACT_SCHEMA: &str = "pi.swarm.rch_affinity_plan.v1";
 const SWARM_DOCTOR_RESERVATION_HEATMAP_SCHEMA: &str =
     "pi.doctor.agent_mail_reservation_conflict_heatmap.v1";
 const SWARM_DOCTOR_CONFLICT_PREDICTOR_SCHEMA: &str = "pi.doctor.cross_agent_conflict_predictor.v1";
@@ -6966,6 +6967,10 @@ struct RchAffinityJobSpec {
     git_commit: Option<String>,
     #[serde(default)]
     features: Vec<String>,
+    #[serde(default)]
+    worker_available: Option<bool>,
+    #[serde(default)]
+    target_available_kb: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -6983,6 +6988,8 @@ struct RchAffinityJob {
     id: String,
     command: String,
     key: RchAffinityKey,
+    worker_available: Option<bool>,
+    target_available_kb: Option<u64>,
     reasons: Vec<String>,
 }
 
@@ -7101,16 +7108,15 @@ fn build_rch_affinity_plan_from_specs(
         {
             reasons.push("uses_recommended_target_dir".to_string());
         }
-        if !path_under_swarm_scratch_root(Path::new(&target_dir)) {
-            blockers.push(format!("{id}:target_dir_outside_swarm_scratch_root"));
-            reasons.push("target_dir_outside_swarm_scratch_root".to_string());
-        }
-        if current_git_commit
-            .as_deref()
-            .is_some_and(|current| git_commit != current)
-        {
-            reasons.push("git_commit_differs_from_current_checkout".to_string());
-        }
+        let (safety_blockers, safety_reasons) = rch_affinity_job_safety_findings(
+            id,
+            &spec,
+            &target_dir,
+            &git_commit,
+            current_git_commit.as_deref(),
+        );
+        blockers.extend(safety_blockers);
+        reasons.extend(safety_reasons);
 
         jobs.push(RchAffinityJob {
             id: id.to_string(),
@@ -7123,6 +7129,8 @@ fn build_rch_affinity_plan_from_specs(
                 profile,
                 features,
             },
+            worker_available: spec.worker_available,
+            target_available_kb: spec.target_available_kb,
             reasons,
         });
     }
@@ -7145,6 +7153,39 @@ fn build_rch_affinity_plan_from_specs(
         blockers,
         notes,
     }
+}
+
+fn rch_affinity_job_safety_findings(
+    id: &str,
+    spec: &RchAffinityJobSpec,
+    target_dir: &str,
+    git_commit: &str,
+    current_git_commit: Option<&str>,
+) -> (Vec<String>, Vec<String>) {
+    let mut blockers = Vec::new();
+    let mut reasons = Vec::new();
+
+    if spec.worker_available == Some(false) {
+        blockers.push(format!("{id}:worker_unavailable"));
+        reasons.push("worker_unavailable".to_string());
+    }
+    if !path_under_swarm_scratch_root(Path::new(target_dir)) {
+        blockers.push(format!("{id}:target_dir_outside_swarm_scratch_root"));
+        reasons.push("target_dir_outside_swarm_scratch_root".to_string());
+    }
+    if current_git_commit.is_some_and(|current| git_commit != current) {
+        blockers.push(format!("{id}:git_commit_differs_from_current_checkout"));
+        reasons.push("git_commit_differs_from_current_checkout".to_string());
+    }
+    if spec
+        .target_available_kb
+        .is_some_and(|available| available < SWARM_DISK_WARN_AVAILABLE_KB)
+    {
+        blockers.push(format!("{id}:retrieval_headroom_low"));
+        reasons.push("retrieval_headroom_low".to_string());
+    }
+
+    (blockers, reasons)
 }
 
 fn rch_affinity_groups(jobs: &[RchAffinityJob]) -> Vec<RchAffinityGroup> {
@@ -7270,6 +7311,7 @@ fn rch_affinity_plan_data(plan: &RchAffinityPlan) -> serde_json::Value {
         "groups": plan.groups.iter().enumerate().map(rch_affinity_group_json).collect::<Vec<_>>(),
         "blockers": &plan.blockers,
         "notes": &plan.notes,
+        "proof_gate": rch_affinity_proof_gate_json(plan),
         "template": {
             "id": "cargo-test-tools",
             "command": "rch exec -- cargo test --test tools_conformance",
@@ -7291,6 +7333,8 @@ fn rch_affinity_job_json(job: &RchAffinityJob) -> serde_json::Value {
         "command_family": &job.key.command_family,
         "profile": &job.key.profile,
         "features": &job.key.features,
+        "worker_available": job.worker_available,
+        "target_available_kb": job.target_available_kb,
         "reasons": &job.reasons,
     })
 }
@@ -7308,6 +7352,166 @@ fn rch_affinity_group_json((idx, group): (usize, &RchAffinityGroup)) -> serde_js
         "recommendation": group.recommendation,
         "reasons": &group.reasons,
     })
+}
+
+fn rch_affinity_proof_gate_json(plan: &RchAffinityPlan) -> serde_json::Value {
+    serde_json::json!({
+        "schema": SWARM_RCH_AFFINITY_PLAN_ARTIFACT_SCHEMA,
+        "diagnostic_only": true,
+        "mutation_performed": false,
+        "source": plan.source,
+        "safe_to_launch": plan.source != "no_job_specs" && plan.blockers.is_empty(),
+        "current_git_commit": &plan.current_git_commit,
+        "recommended_target_dir": &plan.recommended_target_dir,
+        "cache_reuse": plan
+            .groups
+            .iter()
+            .enumerate()
+            .map(rch_affinity_cache_reuse_json)
+            .collect::<Vec<_>>(),
+        "isolation": rch_affinity_isolation_decisions(plan),
+        "blockers": plan
+            .blockers
+            .iter()
+            .map(|blocker| rch_affinity_blocker_json(blocker))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn rch_affinity_cache_reuse_json((idx, group): (usize, &RchAffinityGroup)) -> serde_json::Value {
+    let safe_to_reuse = group.recommendation == "share_warm_target"
+        && !group
+            .reasons
+            .iter()
+            .any(|reason| rch_affinity_reason_blocks_reuse(reason));
+    let decision = if safe_to_reuse {
+        "reuse_warm_target"
+    } else if group.recommendation == "share_warm_target" {
+        "block_reuse_until_inputs_are_safe"
+    } else {
+        "isolate_or_wait_for_compatible_peer"
+    };
+
+    serde_json::json!({
+        "group_id": format!("rch-affinity-{}", idx + 1),
+        "decision": decision,
+        "safe_to_reuse": safe_to_reuse,
+        "job_ids": &group.job_ids,
+        "worker": &group.key.worker,
+        "target_dir": &group.key.target_dir,
+        "git_commit": &group.key.git_commit,
+        "command_family": &group.key.command_family,
+        "profile": &group.key.profile,
+        "features": &group.key.features,
+        "reasons": &group.reasons,
+    })
+}
+
+fn rch_affinity_isolation_decisions(plan: &RchAffinityPlan) -> Vec<serde_json::Value> {
+    let mut decisions = plan
+        .blockers
+        .iter()
+        .filter_map(|blocker| {
+            blocker
+                .strip_prefix("target_dir_conflict:")
+                .map(|target_dir| {
+                    serde_json::json!({
+                        "reason": "target_dir_conflict",
+                        "target_dir": target_dir,
+                        "recommended_action": "assign distinct target dirs or align commit/profile/features before reuse"
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+
+    decisions.extend(
+        plan.groups
+            .iter()
+            .enumerate()
+            .filter(|(_, group)| group.recommendation != "share_warm_target")
+            .map(|(idx, group)| {
+                serde_json::json!({
+                    "reason": "no_compatible_peer",
+                    "group_id": format!("rch-affinity-{}", idx + 1),
+                    "job_ids": &group.job_ids,
+                    "target_dir": &group.key.target_dir,
+                    "recommended_action": "keep isolated or wait for another job with matching worker, target, commit, profile, command family, and features"
+                })
+            }),
+    );
+
+    decisions
+}
+
+fn rch_affinity_blocker_json(blocker: &str) -> serde_json::Value {
+    let family = rch_affinity_blocker_family(blocker);
+    serde_json::json!({
+        "id": blocker,
+        "family": family,
+        "recommended_action": rch_affinity_blocker_action(family),
+    })
+}
+
+fn rch_affinity_blocker_family(blocker: &str) -> &'static str {
+    if blocker == "no_job_specs" {
+        return "no_job_specs";
+    }
+    if blocker == "no_valid_jobs" {
+        return "no_valid_jobs";
+    }
+    if blocker.starts_with("target_dir_conflict:") {
+        return "target_dir_conflict";
+    }
+    if blocker.ends_with(":target_dir_outside_swarm_scratch_root") {
+        return "target_dir_outside_swarm_scratch_root";
+    }
+    if blocker.ends_with(":git_commit_differs_from_current_checkout") {
+        return "stale_git_commit";
+    }
+    if blocker.ends_with(":worker_unavailable") {
+        return "worker_unavailable";
+    }
+    if blocker.ends_with(":retrieval_headroom_low") {
+        return "retrieval_headroom_low";
+    }
+    if blocker.ends_with(":empty_command") {
+        return "empty_command";
+    }
+    if blocker == "job_with_empty_id" {
+        return "empty_job_id";
+    }
+    "unknown"
+}
+
+fn rch_affinity_blocker_action(family: &str) -> &'static str {
+    match family {
+        "no_job_specs" => "provide job specs before launching an RCH swarm",
+        "no_valid_jobs" => "provide at least one valid cargo job spec",
+        "target_dir_conflict" => {
+            "assign distinct target dirs or align commit/profile/features before reuse"
+        }
+        "target_dir_outside_swarm_scratch_root" => {
+            "move CARGO_TARGET_DIR under /data/tmp/pi_agent_rust_cargo/<agent>/target"
+        }
+        "stale_git_commit" => "rebase or regenerate the job spec for the current checkout",
+        "worker_unavailable" => "assign an available RCH worker or keep the job queued",
+        "retrieval_headroom_low" => {
+            "switch to a target dir with enough local retrieval headroom before launch"
+        }
+        "empty_command" => "fill in the cargo command for this job",
+        "empty_job_id" => "give every job a stable id before planning",
+        _ => "inspect the raw blocker before launching RCH work",
+    }
+}
+
+fn rch_affinity_reason_blocks_reuse(reason: &str) -> bool {
+    matches!(
+        reason,
+        "worker_unavailable"
+            | "target_dir_outside_swarm_scratch_root"
+            | "git_commit_differs_from_current_checkout"
+            | "retrieval_headroom_low"
+    )
 }
 
 fn rch_affinity_command_family(command: &str) -> String {
@@ -9744,6 +9948,8 @@ not-json
                 target_dir: Some(target.clone()),
                 git_commit: Some("abc123".to_string()),
                 features: vec!["default".to_string()],
+                worker_available: Some(true),
+                target_available_kb: Some(SWARM_DISK_WARN_AVAILABLE_KB),
             },
             RchAffinityJobSpec {
                 id: "tools-b".to_string(),
@@ -9752,6 +9958,8 @@ not-json
                 target_dir: Some(target),
                 git_commit: Some("abc123".to_string()),
                 features: vec!["default".to_string()],
+                worker_available: Some(true),
+                target_available_kb: Some(SWARM_DISK_WARN_AVAILABLE_KB),
             },
         ];
 
@@ -9773,6 +9981,22 @@ not-json
             data["groups"][0]["job_ids"],
             serde_json::json!(["tools-a", "tools-b"])
         );
+        assert_eq!(
+            data["proof_gate"]["schema"],
+            SWARM_RCH_AFFINITY_PLAN_ARTIFACT_SCHEMA
+        );
+        assert_eq!(
+            data["proof_gate"]["safe_to_launch"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            data["proof_gate"]["cache_reuse"][0]["decision"],
+            "reuse_warm_target"
+        );
+        assert_eq!(
+            data["proof_gate"]["cache_reuse"][0]["safe_to_reuse"],
+            serde_json::json!(true)
+        );
     }
 
     #[test]
@@ -9786,6 +10010,8 @@ not-json
                 target_dir: Some(target.clone()),
                 git_commit: Some("abc123".to_string()),
                 features: vec!["default".to_string()],
+                worker_available: Some(true),
+                target_available_kb: Some(SWARM_DISK_WARN_AVAILABLE_KB),
             },
             RchAffinityJobSpec {
                 id: "all-features".to_string(),
@@ -9794,6 +10020,8 @@ not-json
                 target_dir: Some(target.clone()),
                 git_commit: Some("abc123".to_string()),
                 features: Vec::new(),
+                worker_available: Some(true),
+                target_available_kb: Some(SWARM_DISK_WARN_AVAILABLE_KB),
             },
         ];
 
@@ -9811,6 +10039,138 @@ not-json
                 .contains(&format!("target_dir_conflict:{target}"))
         );
         assert_eq!(data["blockers"][0], format!("target_dir_conflict:{target}"));
+        assert_eq!(
+            data["proof_gate"]["safe_to_launch"],
+            serde_json::json!(false)
+        );
+        assert!(
+            data["proof_gate"]["isolation"]
+                .as_array()
+                .is_some_and(|entries| entries
+                    .iter()
+                    .any(|entry| entry["reason"] == "target_dir_conflict"
+                        && entry["target_dir"] == target))
+        );
+    }
+
+    fn rch_affinity_proof_gate_has_blocker_family(data: &serde_json::Value, family: &str) -> bool {
+        data["proof_gate"]["blockers"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().any(|entry| entry["family"] == family))
+    }
+
+    #[test]
+    fn swarm_rch_affinity_blocks_stale_commit_specs() {
+        let target = "/data/tmp/pi_agent_rust_cargo/goldenglacier/target".to_string();
+        let specs = vec![RchAffinityJobSpec {
+            id: "stale-check".to_string(),
+            command: "cargo check --all-targets".to_string(),
+            worker: Some("vmi-a".to_string()),
+            target_dir: Some(target),
+            git_commit: Some("old-commit".to_string()),
+            features: vec!["default".to_string()],
+            worker_available: Some(true),
+            target_available_kb: Some(SWARM_DISK_WARN_AVAILABLE_KB),
+        }];
+
+        let plan = build_rch_affinity_plan_from_specs(
+            specs,
+            Some("abc123".to_string()),
+            "/data/tmp/pi_agent_rust_cargo/goldenglacier/target".to_string(),
+        );
+        let finding = classify_rch_affinity_plan(&plan);
+        let data = finding_data(&finding);
+
+        assert_eq!(finding.severity, Severity::Warn);
+        assert!(
+            plan.blockers
+                .iter()
+                .any(|blocker| blocker == "stale-check:git_commit_differs_from_current_checkout")
+        );
+        assert_eq!(
+            data["proof_gate"]["safe_to_launch"],
+            serde_json::json!(false)
+        );
+        assert!(rch_affinity_proof_gate_has_blocker_family(
+            data,
+            "stale_git_commit"
+        ));
+    }
+
+    #[test]
+    fn swarm_rch_affinity_blocks_unavailable_workers() {
+        let target = "/data/tmp/pi_agent_rust_cargo/goldenglacier/target".to_string();
+        let specs = vec![RchAffinityJobSpec {
+            id: "worker-down".to_string(),
+            command: "cargo test provider_streaming".to_string(),
+            worker: Some("vmi-down".to_string()),
+            target_dir: Some(target),
+            git_commit: Some("abc123".to_string()),
+            features: vec!["default".to_string()],
+            worker_available: Some(false),
+            target_available_kb: Some(SWARM_DISK_WARN_AVAILABLE_KB),
+        }];
+
+        let plan = build_rch_affinity_plan_from_specs(
+            specs,
+            Some("abc123".to_string()),
+            "/data/tmp/pi_agent_rust_cargo/goldenglacier/target".to_string(),
+        );
+        let finding = classify_rch_affinity_plan(&plan);
+        let data = finding_data(&finding);
+
+        assert_eq!(finding.severity, Severity::Warn);
+        assert!(
+            plan.blockers
+                .iter()
+                .any(|blocker| blocker == "worker-down:worker_unavailable")
+        );
+        assert!(rch_affinity_proof_gate_has_blocker_family(
+            data,
+            "worker_unavailable"
+        ));
+        assert_eq!(
+            data["jobs"][0]["worker_available"],
+            serde_json::json!(false)
+        );
+    }
+
+    #[test]
+    fn swarm_rch_affinity_blocks_low_retrieval_headroom() {
+        let target = "/data/tmp/pi_agent_rust_cargo/goldenglacier/target".to_string();
+        let specs = vec![RchAffinityJobSpec {
+            id: "low-headroom".to_string(),
+            command: "cargo clippy --all-targets -- -D warnings".to_string(),
+            worker: Some("vmi-a".to_string()),
+            target_dir: Some(target),
+            git_commit: Some("abc123".to_string()),
+            features: vec!["default".to_string()],
+            worker_available: Some(true),
+            target_available_kb: Some(SWARM_DISK_WARN_AVAILABLE_KB - 1),
+        }];
+
+        let plan = build_rch_affinity_plan_from_specs(
+            specs,
+            Some("abc123".to_string()),
+            "/data/tmp/pi_agent_rust_cargo/goldenglacier/target".to_string(),
+        );
+        let finding = classify_rch_affinity_plan(&plan);
+        let data = finding_data(&finding);
+
+        assert_eq!(finding.severity, Severity::Warn);
+        assert!(
+            plan.blockers
+                .iter()
+                .any(|blocker| blocker == "low-headroom:retrieval_headroom_low")
+        );
+        assert!(rch_affinity_proof_gate_has_blocker_family(
+            data,
+            "retrieval_headroom_low"
+        ));
+        assert_eq!(
+            data["jobs"][0]["target_available_kb"],
+            serde_json::json!(SWARM_DISK_WARN_AVAILABLE_KB - 1)
+        );
     }
 
     #[test]
