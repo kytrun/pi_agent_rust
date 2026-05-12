@@ -1,6 +1,6 @@
 {
   "schema": "pi.ext.risk_review.v1",
-  "generated_at": "2026-05-02T00:59:32.289037884+00:00",
+  "generated_at": "2026-05-12T19:32:38.050112219+00:00",
   "summary": {
     "total_artifacts": 208,
     "license_clear": 184,
@@ -46,7 +46,7 @@
         "[Info] Buffer.from(: Binary buffer operations"
       ],
       "has_npm_deps": false,
-      "risk_level": "low"
+      "risk_level": "minimal"
     },
     {
       "id": "auto-commit-on-exit",
@@ -56,7 +56,7 @@
       "redistributable": "yes",
       "security_severity": "clean",
       "has_npm_deps": false,
-      "risk_level": "low"
+      "risk_level": "minimal"
     },
     {
       "id": "bash-spawn-hook",
@@ -69,7 +69,7 @@
         "[Info] .env: References .env files"
       ],
       "has_npm_deps": false,
-      "risk_level": "low"
+      "risk_level": "minimal"
     },
     {
       "id": "bookmark",

@@ -10494,7 +10494,10 @@ const __pi_vfs = (() => {
     if (!isDir && !isHostDir && !isFile && !isHostSymlink && !isHostOther) {
       throw new Error(`ENOENT: no such file or directory, stat '${String(path ?? "")}'`);
     }
-    const hostSize = hostStat && Number.isFinite(Number(hostStat.size)) ? Number(hostStat.size) : 0;
+    const hostSize =
+      hostStat && typeof hostStat.size === "number" && Number.isFinite(hostStat.size)
+        ? hostStat.size
+        : 0;
     const size = bytes !== undefined ? bytes.byteLength : hostSize;
     return {
       isFile() { return isFile; },

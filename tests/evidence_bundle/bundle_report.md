@@ -1,8 +1,8 @@
 # Unified CI Evidence Bundle
 
-> Generated: 2026-05-10T23:08:53Z
-> Git ref: d57323bf2
-> CI run: local-20260510T230852Z
+> Generated: 2026-05-12T19:26:21Z
+> Git ref: 80edf7ef9
+> CI run: local-20260512T192621Z
 > Verdict: **COMPLETE**
 
 ## Summary
@@ -14,7 +14,7 @@
 | Missing | 0 |
 | Invalid | 0 |
 | Total artifacts | 2004 |
-| Total size | 181069.3 KB |
+| Total size | 181069.7 KB |
 | Required present | 12/12 |
 
 ## Conformance (6)
@@ -39,7 +39,7 @@
 | Provider compatibility matrix | PASS | 753 | 375207 B | `tests/ext_conformance/reports/provider_compat` |
 | Sharded extension matrix reports | PASS | 12 | 280518 B | `tests/ext_conformance/reports/sharded` |
 | Extension journey report | PASS | 1 | 14742 B | `tests/ext_conformance/reports/journeys/journey_report.json` |
-| Auto-repair summary | PASS | 1 | 57476 B | `tests/ext_conformance/reports/auto_repair_summary.json` |
+| Auto-repair summary | PASS | 1 | 56700 B | `tests/ext_conformance/reports/auto_repair_summary.json` |
 
 ## E2e (1)
 
@@ -76,7 +76,7 @@
 
 | Section | Status | Files | Size | Path |
 |---------|--------|-------|------|------|
-| Requirement-to-test traceability matrix | PASS | 1 | 88890 B | `docs/traceability_matrix.json` |
+| Requirement-to-test traceability matrix | PASS | 1 | 89373 B | `docs/traceability_matrix.json` |
 | High-value suite artifact inventory | PASS | 1 | 11209 B | `docs/evidence/high-value-suite-artifact-inventory.json` |
 
 ## Inventory (2)
@@ -84,5 +84,5 @@
 | Section | Status | Files | Size | Path |
 |---------|--------|-------|------|------|
 | Extension inventory | PASS | 1 | 89349 B | `tests/ext_conformance/reports/inventory.json` |
-| Extension inclusion manifest | PASS | 4 | 405318 B | `tests/ext_conformance/reports/inclusion_manifest` |
+| Extension inclusion manifest | PASS | 4 | 406062 B | `tests/ext_conformance/reports/inclusion_manifest` |
 

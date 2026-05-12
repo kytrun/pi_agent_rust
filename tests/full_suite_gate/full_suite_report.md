@@ -1,6 +1,6 @@
 # Full-Suite CI Gate Report
 
-> Generated: 2026-05-10T23:08:53Z
+> Generated: 2026-05-12T19:26:21Z
 > Verdict: **FAIL**
 
 ## Summary

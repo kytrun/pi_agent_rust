@@ -1253,7 +1253,17 @@ fn fs_stat_host_fallback() {
         let size: serde_json::Value = runtime.read_global_json("hostStatSize").await.unwrap();
         let expected_size =
             u64::try_from("host-fallback".len()).expect("test fixture size fits in u64");
-        assert_eq!(size.as_u64().expect("numeric hostStatSize"), expected_size);
+        let observed_size = size
+            .as_u64()
+            .or_else(|| {
+                let value = size.as_f64()?;
+                if !value.is_finite() || value.fract() != 0.0 || value < 0.0 {
+                    return None;
+                }
+                format!("{value:.0}").parse::<u64>().ok()
+            })
+            .expect("numeric hostStatSize");
+        assert_eq!(observed_size, expected_size);
 
         let outside_exists: serde_json::Value =
             runtime.read_global_json("outsideExists").await.unwrap();
