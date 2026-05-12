@@ -7114,6 +7114,17 @@ mod tests {
                 event.get("bead").and_then(serde_json::Value::as_str),
                 Some("bd-dklqn.1")
             );
+            let related_beads = event
+                .get("related_beads")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| format!("missing related_beads at line {}", line_number + 1))?;
+            assert!(
+                related_beads
+                    .iter()
+                    .any(|bead| bead.as_str() == Some("bd-dklqn.2")),
+                "evidence line {} must cover bd-dklqn.2",
+                line_number + 1
+            );
 
             let tool = event
                 .get("tool")
