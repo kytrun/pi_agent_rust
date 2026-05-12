@@ -1,0 +1,115 @@
+{
+  "schema": "pi.swarm.autopilot_input_pack_contract.v1",
+  "input_pack_schema": "pi.swarm.autopilot_input_pack.v1",
+  "purpose": "dry_run_swarm_autopilot_input_not_source_of_truth",
+  "minimum_redacted_count": 1,
+  "required_top_level_keys": [
+    "schema",
+    "generated_at",
+    "status",
+    "purpose",
+    "stale_after_hours",
+    "capture",
+    "source_statuses",
+    "source_classification",
+    "command_provenance",
+    "normalized_inputs",
+    "redaction_summary",
+    "degraded_reasons"
+  ],
+  "required_source_ids": [
+    "doctor_swarm",
+    "cargo_admission",
+    "beads",
+    "agent_mail_status",
+    "agent_mail_reservations",
+    "git_status"
+  ],
+  "optional_source_ids": [
+    "activity_digest",
+    "operator_runpack"
+  ],
+  "required_summary_paths": [
+    "normalized_inputs.doctor_swarm.status",
+    "normalized_inputs.cargo_admission.status",
+    "normalized_inputs.beads.status",
+    "normalized_inputs.beads.active_count",
+    "normalized_inputs.agent_mail.status",
+    "normalized_inputs.agent_mail.read_status",
+    "normalized_inputs.agent_mail.reservation_status",
+    "normalized_inputs.git_state.status",
+    "normalized_inputs.git_state.dirty",
+    "normalized_inputs.activity_digest.status",
+    "normalized_inputs.operator_runpack.status",
+    "redaction_summary.redacted_count",
+    "degraded_reasons"
+  ],
+  "required_source_status_fields": [
+    "size_bytes",
+    "sha256"
+  ],
+  "required_redacted_fields": [
+    "doctor_swarm.findings[0].detail"
+  ],
+  "allowed_statuses": [
+    "ready",
+    "degraded"
+  ],
+  "allowed_classifications": [
+    "fresh",
+    "freshness_unknown",
+    "stale",
+    "blocker",
+    "optional_missing"
+  ],
+  "must_requirements": [
+    {
+      "id": "AUTOPILOT-INPUT-MUST-001",
+      "description": "The input pack declares the autopilot input schema and dry-run, non-source-of-truth purpose.",
+      "validated_by": [
+        "schema",
+        "purpose"
+      ]
+    },
+    {
+      "id": "AUTOPILOT-INPUT-MUST-002",
+      "description": "Every required planner evidence source has a source-status entry with deterministic fingerprints when provided.",
+      "validated_by": [
+        "required_source_ids",
+        "required_source_status_fields"
+      ]
+    },
+    {
+      "id": "AUTOPILOT-INPUT-MUST-003",
+      "description": "Agent Mail read and reservation state are normalized separately so degraded coordination can fall back to Beads ownership evidence.",
+      "validated_by": [
+        "required_summary_paths"
+      ]
+    },
+    {
+      "id": "AUTOPILOT-INPUT-MUST-004",
+      "description": "Command provenance is preserved as redacted capture summaries instead of optimistic inferred status.",
+      "validated_by": [
+        "command_provenance",
+        "redaction_summary"
+      ]
+    },
+    {
+      "id": "AUTOPILOT-INPUT-MUST-005",
+      "description": "Missing, malformed, stale, or degraded required inputs make the pack degraded and produce explicit degraded reasons.",
+      "validated_by": [
+        "allowed_statuses",
+        "allowed_classifications",
+        "degraded_reasons"
+      ]
+    },
+    {
+      "id": "AUTOPILOT-INPUT-MUST-006",
+      "description": "Optional activity digest and operator runpack evidence may enrich the planner input but do not replace required source statuses.",
+      "validated_by": [
+        "optional_source_ids",
+        "required_summary_paths"
+      ]
+    }
+  ]
+}

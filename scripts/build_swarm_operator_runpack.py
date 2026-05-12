@@ -112,8 +112,6 @@ AUTOPILOT_REQUIRED_SOURCE_IDS = (
 AUTOPILOT_OPTIONAL_SOURCE_IDS = (
     "activity_digest",
     "operator_runpack",
-    "claim_readiness",
-    "smoke_harness",
 )
 AUTOPILOT_SOURCE_COMMAND_IDS: dict[str, tuple[str, ...]] = {
     "doctor_swarm": ("doctor_swarm",),
@@ -132,8 +130,6 @@ AUTOPILOT_SOURCE_COMMAND_IDS: dict[str, tuple[str, ...]] = {
     ),
     "activity_digest": (),
     "operator_runpack": (),
-    "claim_readiness": ("claim_readiness",),
-    "smoke_harness": (),
 }
 AUTOPILOT_FORBIDDEN_ACTIONS = (
     "git reset --hard",
@@ -641,16 +637,6 @@ def autopilot_source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
             "operator_runpack",
             operator_runpack_json,
             expected_schema=RUNPACK_SCHEMA,
-        ),
-        load_json_source(
-            "claim_readiness",
-            args.claim_readiness_json,
-            expected_schema="pi.swarm.claim_readiness_report.v1",
-        ),
-        load_json_source(
-            "smoke_harness",
-            args.smoke_summary_json,
-            expected_schema="pi.swarm.smoke_harness.v1",
         ),
     ]
 
@@ -1918,6 +1904,7 @@ def command_provenance(
                 "id": command.get("id"),
                 "command": command.get("command"),
                 "cwd": command.get("cwd"),
+                "started_at": command.get("started_at"),
                 "status": command.get("status"),
                 "exit_code": command.get("exit_code"),
                 "issue": command.get("issue"),
@@ -1956,7 +1943,36 @@ def command_status(commands: list[dict[str, Any]], command_id: str) -> str:
     return "not_captured"
 
 
+def agent_mail_source_status(source: SourcePayload) -> str:
+    if source.status != "ok":
+        return source.status
+    payload = source.payload
+    if not isinstance(payload, dict):
+        return "ok"
+    health_level = str(payload.get("health_level") or "").lower()
+    status = str(payload.get("status") or payload.get("overall_status") or "ok").lower()
+    if health_level in {"red", "error", "critical"}:
+        return "degraded"
+    if status in {"error", "failed", "fail", "degraded", "red"}:
+        return "degraded"
+    return status
+
+
+def reservation_items(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in ("reservations", "active_reservations", "granted", "items", "result"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
 def summarize_agent_mail_autopilot(
+    status_source: SourcePayload,
+    reservations_source: SourcePayload,
     capture_summary: dict[str, Any],
     max_items: int,
 ) -> dict[str, Any]:
@@ -1974,11 +1990,23 @@ def summarize_agent_mail_autopilot(
         status = "degraded"
     else:
         status = "not_available"
+    read_status = agent_mail_source_status(status_source)
+    reservation_status = agent_mail_source_status(reservations_source)
+    if status_source.status == "ok" or reservations_source.status == "ok":
+        status = "ok"
+        if read_status != "ok" or reservation_status != "ok":
+            status = "degraded"
+    reservations = reservation_items(reservations_source.payload)
+    active_reservations = [
+        item for item in reservations if item.get("released_ts") in {None, ""}
+    ]
     return {
         "status": status,
         "capture_mode": capture_summary.get("mode"),
-        "read_status": command_status(commands, "agent_mail_status"),
-        "reservation_status": command_status(commands, "agent_mail_reservations"),
+        "read_status": read_status,
+        "reservation_status": reservation_status,
+        "reservation_count": len(reservations),
+        "active_reservation_count": len(active_reservations),
         "fallback_action": "use_beads_soft_lock" if status != "ok" else None,
         "commands": commands,
     }
