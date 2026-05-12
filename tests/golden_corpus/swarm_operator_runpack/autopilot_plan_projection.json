@@ -1,6 +1,55 @@
 {
   "actions": [
     {
+      "action": "adjust_swarm_budget",
+      "commands": [
+        {
+          "command": "python3 -m json.tool <autopilot-input-pack.json>",
+          "purpose": "Inspect budget drift"
+        },
+        {
+          "command": "pi doctor --only swarm --format json",
+          "purpose": "Refresh swarm resource preflight"
+        },
+        {
+          "command": "./scripts/cargo_headroom.sh --runner rch --admit-only check --all-targets",
+          "purpose": "Refresh cargo admission"
+        },
+        {
+          "command": "br list --status=in_progress --json",
+          "purpose": "Inspect active ownership"
+        }
+      ],
+      "confidence": "high",
+      "evidence_paths": [
+        "normalized_inputs.budget_drift.status",
+        "normalized_inputs.budget_drift.signals",
+        "normalized_inputs.budget_drift.recommended_adjustments"
+      ],
+      "forbidden_actions": [
+        "local heavyweight cargo fallback"
+      ],
+      "id": "AUTO-001-adjust_swarm_budget",
+      "omitted_commands": [
+        {
+          "action": "increase swarm fanout",
+          "reason": "live budget drift is not stable"
+        },
+        {
+          "action": "start broad cargo validation",
+          "reason": "admission must match the adjusted fanout first"
+        }
+      ],
+      "preconditions": [
+        "Do not raise fanout from stale startup preflight evidence.",
+        "Hold reduced fanout until the drift watcher sees two stable samples."
+      ],
+      "rank": 1,
+      "rationale": "budget_drift status=deny_new_work; admit_new_agents=0; rch_verification_fanout=0",
+      "severity": "critical",
+      "title": "Reduce swarm fanout based on live budget drift"
+    },
+    {
       "action": "wait_for_rch",
       "commands": [
         {
@@ -25,7 +74,7 @@
       "forbidden_actions": [
         "local heavyweight cargo fallback"
       ],
-      "id": "AUTO-001-wait_for_rch",
+      "id": "AUTO-002-wait_for_rch",
       "omitted_commands": [
         {
           "action": "cargo check --all-targets",
@@ -36,7 +85,7 @@
         "Do not run heavyweight cargo locally during swarm contention.",
         "Recheck admission before starting check, clippy, test, or release builds."
       ],
-      "rank": 1,
+      "rank": 2,
       "rationale": "cargo decision=backoff; queue recommended_action=backoff",
       "severity": "high",
       "title": "Back off heavyweight Cargo work until RCH recovers"
@@ -67,7 +116,7 @@
       "forbidden_actions": [
         "automatic file reservation"
       ],
-      "id": "AUTO-002-use_beads_soft_lock",
+      "id": "AUTO-003-use_beads_soft_lock",
       "omitted_commands": [
         {
           "action": "Agent Mail reservation",
@@ -78,7 +127,7 @@
         "Agent Mail read/reservation status is degraded or unavailable.",
         "Announce/reserve through Agent Mail only after health recovers."
       ],
-      "rank": 2,
+      "rank": 3,
       "rationale": "Agent Mail status=degraded; fallback=use_beads_soft_lock",
       "severity": "high",
       "title": "Use Beads assignment as the coordination lock"
@@ -107,7 +156,7 @@
       "forbidden_actions": [
         "destructive cleanup of another agent worktree"
       ],
-      "id": "AUTO-003-reopen_stale_bead_candidate",
+      "id": "AUTO-004-reopen_stale_bead_candidate",
       "omitted_commands": [
         {
           "action": "force-release unrelated reservations",
@@ -118,51 +167,116 @@
         "Confirm no recent human or agent work exists for the stale assignee.",
         "Do not reopen work that has fresh commits, comments, or reservations."
       ],
-      "rank": 3,
+      "rank": 4,
       "rationale": "bd-stale is in_progress and age_hours=33.0",
       "severity": "medium",
       "title": "Review stale in-progress bead bd-stale"
-    },
-    {
-      "action": "capture_handoff",
-      "commands": [
-        {
-          "command": "git status --short --branch",
-          "purpose": "Inspect dirty files"
-        },
-        {
-          "command": "python3 scripts/build_swarm_operator_runpack.py --capture-current --capture-dir <capture-dir> --out-json <capture-dir>/operator-runpack.json --out-autopilot-input-pack-json <capture-dir>/autopilot-input-pack.json --out-autopilot-plan-json <capture-dir>/autopilot-plan.json",
-          "purpose": "Capture handoff bundle"
-        }
-      ],
-      "confidence": "high",
-      "evidence_paths": [
-        "normalized_inputs.git_state.dirty",
-        "normalized_inputs.git_state.sample",
-        "normalized_inputs.git_state.upstream"
-      ],
-      "forbidden_actions": [
-        "destructive git cleanup"
-      ],
-      "id": "AUTO-004-capture_handoff",
-      "omitted_commands": [
-        {
-          "action": "workspace cleanup",
-          "reason": "dirty files may belong to another active agent"
-        }
-      ],
-      "preconditions": [
-        "Treat dirty files as concurrent work unless they directly overlap the active bead.",
-        "Stage only the files changed for the current bead."
-      ],
-      "rank": 4,
-      "rationale": "git_state reports 2 dirty paths.",
-      "severity": "medium",
-      "title": "Capture handoff context before changing dirty worktree state"
     }
   ],
+  "budget_drift": {
+    "accepted_profile": {
+      "critical_failures": [],
+      "effective_cpu_cores": 8.0,
+      "effective_memory_bytes": 34359738368.0,
+      "generated_at": "2026-05-09T09:00:00+00:00",
+      "headroom_paths": {
+        "CARGO_TARGET_DIR": {
+          "available_kb": 52428800,
+          "path": "/data/tmp/pi_agent_rust_cargo/test/target",
+          "problem": null,
+          "ready": true
+        },
+        "TMPDIR": {
+          "available_kb": 52428800,
+          "path": "/data/tmp/pi_agent_rust_cargo/test/tmp",
+          "problem": null,
+          "ready": true
+        }
+      },
+      "recommended_budgets": {
+        "agent_concurrency": 4,
+        "max_queue_depth": 2,
+        "max_rss_bytes": 17179869184,
+        "rch_verification_fanout": 2
+      },
+      "source_errors": [],
+      "status": "pass"
+    },
+    "current_observation": {
+      "active_agents": 1,
+      "active_builds": 8,
+      "active_reservations": 1,
+      "cargo_target_dir": "/data/tmp/pi_agent_rust_cargo/test/target",
+      "queue_depth": 4,
+      "queue_recommended_action": "backoff",
+      "queued_builds": 4,
+      "slot_pressure": "saturated",
+      "tmpdir": "/data/tmp/pi_agent_rust_cargo/test/tmp"
+    },
+    "current_profile": {
+      "critical_failures": [],
+      "effective_cpu_cores": 8.0,
+      "effective_memory_bytes": 34359738368.0,
+      "generated_at": "2026-05-09T09:00:00+00:00",
+      "headroom_paths": {
+        "CARGO_TARGET_DIR": {
+          "available_kb": 52428800,
+          "path": "/data/tmp/pi_agent_rust_cargo/test/target",
+          "problem": null,
+          "ready": true
+        },
+        "TMPDIR": {
+          "available_kb": 52428800,
+          "path": "/data/tmp/pi_agent_rust_cargo/test/tmp",
+          "problem": null,
+          "ready": true
+        }
+      },
+      "recommended_budgets": {
+        "agent_concurrency": 4,
+        "max_queue_depth": 2,
+        "max_rss_bytes": 17179869184,
+        "rch_verification_fanout": 2
+      },
+      "source_errors": [],
+      "status": "pass"
+    },
+    "hysteresis": {
+      "degraded_recovery_policy": "hold reduced fanout until two consecutive stable samples",
+      "stable_samples_required": 2
+    },
+    "profile_status": "ok",
+    "recommended_adjustments": {
+      "admit_new_agents": 0,
+      "agent_concurrency": 1,
+      "max_queue_depth": 0,
+      "rch_verification_fanout": 0,
+      "reason": "deny_new_work until critical budget drift clears"
+    },
+    "schema": "pi.swarm.budget_drift.v1",
+    "signals": [
+      {
+        "current": 4,
+        "evidence_path": "normalized_inputs.cargo_admission.queue_forecast.queue_depth",
+        "expected": 2,
+        "id": "rch_queue_depth_over_budget",
+        "recommendation": "pause broad validation until RCH queue depth returns under budget",
+        "severity": "critical"
+      },
+      {
+        "current": "backoff",
+        "evidence_path": "normalized_inputs.cargo_admission.queue_forecast",
+        "expected": "proceed",
+        "id": "rch_queue_saturated",
+        "recommendation": "deny new heavyweight work until RCH queue pressure clears",
+        "severity": "critical"
+      }
+    ],
+    "status": "deny_new_work"
+  },
   "degraded_reasons": [
-    "Agent Mail status is `degraded`"
+    "Agent Mail status is `degraded`",
+    "budget drift status is `deny_new_work`"
   ],
   "failure_actions": [
     {

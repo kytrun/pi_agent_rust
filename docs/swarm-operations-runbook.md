@@ -204,8 +204,9 @@ python3 scripts/build_swarm_operator_runpack.py \
 
 The runpack schema is governed by `docs/contracts/swarm-operator-runpack-contract.json`. The runpack is a redacted index over existing evidence, not a release performance claim and not a replacement for the source artifacts.
 The autopilot input pack schema is governed by `docs/contracts/swarm-autopilot-input-pack-contract.json`. It normalizes source statuses for the dry-run planner, but it is still advisory and never replaces Doctor, Beads, Agent Mail, RCH, git, or the source artifacts themselves.
-The autopilot plan schema is governed by `docs/contracts/swarm-autopilot-plan-contract.json`. It maps the input pack to ordered dry-run actions such as `claim_ready_bead`, `wait_for_rch`, `use_beads_soft_lock`, `reopen_stale_bead_candidate`, `run_docs_only_work`, `capture_handoff`, or `stop_and_surface_blocker`.
+The autopilot plan schema is governed by `docs/contracts/swarm-autopilot-plan-contract.json`. It maps the input pack to ordered dry-run actions such as `claim_ready_bead`, `wait_for_rch`, `adjust_swarm_budget`, `use_beads_soft_lock`, `reopen_stale_bead_candidate`, `run_docs_only_work`, `capture_handoff`, or `stop_and_surface_blocker`.
 The plan also includes `work_partitions` for ready Beads. Those entries recommend reservation globs, likely collision surfaces to avoid, alternate file families, confidence, and degraded caveats. They are diagnostic only; operators still claim through Beads and reserve through Agent Mail when it is healthy.
+The input pack and plan also carry `budget_drift` evidence with schema `pi.swarm.budget_drift.v1`. It compares the last accepted swarm resource preflight profile with live cgroup, memory, scratch-path, RCH queue, and active-owner observations. Status `stable` keeps the current ceiling, `degraded` recommends reduced fanout with hysteresis, and `deny_new_work` recommends admitting no new agents or heavyweight RCH verification until the live signals recover.
 The plan also includes `failure_actions` for common operational blockers. Those entries use stable catalog IDs for RCH artifact retrieval, local Cargo target/TMPDIR pressure, remote compiler failures, Agent Mail schema/read-only degradation, Beads JSONL drift, stale Beads ownership, and unknown operational failures. Unknown entries fail closed with a redacted raw excerpt and safe inspection commands instead of guessing a root cause.
 
 ## Completion Checklist
@@ -304,6 +305,22 @@ Autopilot input-pack evidence:
     "agent_mail": {
       "status": "degraded",
       "fallback_action": "use_beads_soft_lock"
+    },
+    "budget_drift": {
+      "schema": "pi.swarm.budget_drift.v1",
+      "status": "deny_new_work",
+      "signals": [
+        {
+          "id": "rch_queue_saturated",
+          "severity": "critical",
+          "recommendation": "deny new heavyweight work until RCH queue pressure clears"
+        }
+      ],
+      "recommended_adjustments": {
+        "admit_new_agents": 0,
+        "rch_verification_fanout": 0,
+        "reason": "deny_new_work until critical budget drift clears"
+      }
     }
   },
   "planner_guards": {
@@ -320,6 +337,15 @@ Autopilot plan evidence:
   "schema": "pi.swarm.autopilot_plan.v1",
   "purpose": "dry_run_swarm_autopilot_plan_not_source_of_truth",
   "status": "degraded",
+  "budget_drift": {
+    "schema": "pi.swarm.budget_drift.v1",
+    "status": "deny_new_work",
+    "profile_status": "ok",
+    "recommended_adjustments": {
+      "admit_new_agents": 0,
+      "rch_verification_fanout": 0
+    }
+  },
   "work_partitions": [
     {
       "issue_id": "bd-provider",
@@ -365,6 +391,20 @@ Autopilot plan evidence:
   "actions": [
     {
       "rank": 1,
+      "action": "adjust_swarm_budget",
+      "evidence_paths": [
+        "normalized_inputs.budget_drift.status",
+        "normalized_inputs.budget_drift.signals"
+      ],
+      "commands": [
+        {
+          "purpose": "Refresh swarm resource preflight",
+          "command": "pi doctor --only swarm --format json"
+        }
+      ]
+    },
+    {
+      "rank": 2,
       "action": "use_beads_soft_lock",
       "evidence_paths": [
         "normalized_inputs.agent_mail.status"

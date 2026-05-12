@@ -29,6 +29,7 @@
   "optional_source_ids": [
     "beads_ready",
     "activity_digest",
+    "host_preflight",
     "operator_runpack"
   ],
   "required_summary_paths": [
@@ -43,6 +44,12 @@
     "normalized_inputs.agent_mail.read_status",
     "normalized_inputs.agent_mail.reservation_status",
     "normalized_inputs.agent_mail.active_reservations",
+    "normalized_inputs.budget_drift.schema",
+    "normalized_inputs.budget_drift.status",
+    "normalized_inputs.budget_drift.profile_status",
+    "normalized_inputs.budget_drift.signals",
+    "normalized_inputs.budget_drift.recommended_adjustments",
+    "normalized_inputs.budget_drift.hysteresis",
     "normalized_inputs.git_state.status",
     "normalized_inputs.git_state.dirty",
     "normalized_inputs.activity_digest.status",
@@ -127,6 +134,14 @@
       "description": "Planner guardrails make the pack advisory and forbid destructive or ownership-mutating actions.",
       "validated_by": [
         "planner_guards"
+      ]
+    },
+    {
+      "id": "AUTOPILOT-INPUT-MUST-008",
+      "description": "The input pack includes live budget drift evidence so stale startup preflight profiles cannot silently authorize higher swarm fanout.",
+      "validated_by": [
+        "normalized_inputs.budget_drift",
+        "optional_source_ids"
       ]
     }
   ]

@@ -10,6 +10,7 @@
     "input_pack_schema",
     "input_pack_status",
     "work_partitions",
+    "budget_drift",
     "failure_actions",
     "actions",
     "omitted_actions",
@@ -67,6 +68,22 @@
     "beads",
     "unknown"
   ],
+  "required_budget_drift_fields": [
+    "schema",
+    "status",
+    "profile_status",
+    "accepted_profile",
+    "current_profile",
+    "current_observation",
+    "signals",
+    "recommended_adjustments",
+    "hysteresis"
+  ],
+  "allowed_budget_drift_statuses": [
+    "stable",
+    "degraded",
+    "deny_new_work"
+  ],
   "allowed_statuses": [
     "ready",
     "degraded",
@@ -79,6 +96,7 @@
     "use_beads_soft_lock",
     "reopen_stale_bead_candidate",
     "capture_handoff",
+    "adjust_swarm_budget",
     "claim_ready_bead",
     "run_docs_only_work"
   ],
@@ -152,6 +170,16 @@
         "failure_actions",
         "required_failure_action_fields",
         "allowed_failure_categories"
+      ]
+    },
+    {
+      "id": "AUTOPILOT-PLAN-MUST-007",
+      "description": "Live budget drift evidence is carried into the plan and can recommend reduced agent or RCH fanout before stale preflight assumptions cascade into failures.",
+      "validated_by": [
+        "budget_drift",
+        "required_budget_drift_fields",
+        "allowed_budget_drift_statuses",
+        "allowed_actions"
       ]
     }
   ]

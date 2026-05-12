@@ -45,6 +45,7 @@ AUTOPILOT_INPUT_PACK_SCHEMA = "pi.swarm.autopilot_input_pack.v1"
 AUTOPILOT_INPUT_PACK_CONTRACT_SCHEMA = "pi.swarm.autopilot_input_pack_contract.v1"
 AUTOPILOT_PLAN_SCHEMA = "pi.swarm.autopilot_plan.v1"
 AUTOPILOT_PLAN_CONTRACT_SCHEMA = "pi.swarm.autopilot_plan_contract.v1"
+BUDGET_DRIFT_SCHEMA = "pi.swarm.budget_drift.v1"
 RUNPACK_CONTRACT_PATH = Path("docs/contracts/swarm-operator-runpack-contract.json")
 AUTOPILOT_INPUT_PACK_CONTRACT_PATH = Path(
     "docs/contracts/swarm-autopilot-input-pack-contract.json"
@@ -117,6 +118,7 @@ AUTOPILOT_REQUIRED_SOURCE_IDS = (
 AUTOPILOT_OPTIONAL_SOURCE_IDS = (
     "beads_ready",
     "activity_digest",
+    "host_preflight",
     "operator_runpack",
 )
 AUTOPILOT_SOURCE_COMMAND_IDS: dict[str, tuple[str, ...]] = {
@@ -136,6 +138,7 @@ AUTOPILOT_SOURCE_COMMAND_IDS: dict[str, tuple[str, ...]] = {
         "git_recent_remote_commits",
     ),
     "activity_digest": (),
+    "host_preflight": (),
     "operator_runpack": (),
 }
 AUTOPILOT_FORBIDDEN_ACTIONS = (
@@ -153,6 +156,7 @@ AUTOPILOT_PLAN_ALLOWED_ACTIONS = (
     "use_beads_soft_lock",
     "reopen_stale_bead_candidate",
     "capture_handoff",
+    "adjust_swarm_budget",
     "claim_ready_bead",
     "run_docs_only_work",
 )
@@ -980,6 +984,11 @@ def autopilot_source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
         load_json_source("beads_ready", beads_ready_json),
         load_json_source("agent_mail_status", agent_mail_status_json),
         load_json_source("agent_mail_reservations", agent_mail_reservations_json),
+        load_json_source(
+            "host_preflight",
+            getattr(args, "host_preflight_json", None),
+            expected_schema=HOST_PREFLIGHT_SCHEMA,
+        ),
         load_git_status(args.git_status_file),
         load_json_source(
             "activity_digest",
@@ -2254,6 +2263,412 @@ def summarize_cargo_admission(source: SourcePayload) -> dict[str, Any]:
     }
 
 
+def numeric_value(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def nested_dict(value: Any, key: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    item = value.get(key)
+    return item if isinstance(item, dict) else {}
+
+
+def resource_preflight_from_doctor(source: SourcePayload) -> dict[str, Any] | None:
+    payload = source.payload
+    if not isinstance(payload, dict):
+        return None
+    findings = payload.get("findings")
+    if not isinstance(findings, list):
+        return None
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        data = finding.get("data")
+        if isinstance(data, dict) and data.get("schema") == HOST_PREFLIGHT_SCHEMA:
+            return data
+    return None
+
+
+def budget_recommendations(profile: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(profile, dict):
+        return {}
+    return nested_dict(profile, "recommended_budgets")
+
+
+def budget_int(budgets: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = numeric_value(budgets.get(key))
+        if value is not None:
+            return max(0, int(value))
+    return None
+
+
+def resource_effective_cpu(profile: dict[str, Any] | None) -> float | None:
+    cpu = nested_dict(profile, "cpu")
+    return numeric_value(first_non_empty(cpu.get("effective_cores"), cpu.get("effective")))
+
+
+def resource_effective_memory(profile: dict[str, Any] | None) -> float | None:
+    memory = nested_dict(profile, "memory")
+    return numeric_value(
+        first_non_empty(
+            memory.get("effective_limit_bytes"),
+            memory.get("cgroup_limit_bytes"),
+            profile.get("memory_limit_bytes") if isinstance(profile, dict) else None,
+        )
+    )
+
+
+def headroom_paths_by_env(profile: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    tmpfs = nested_dict(profile, "tmpfs_headroom")
+    paths = tmpfs.get("paths")
+    if not isinstance(paths, list):
+        return {}
+    return {
+        str(item.get("env_name")): item
+        for item in paths
+        if isinstance(item, dict) and item.get("env_name")
+    }
+
+
+def resource_profile_summary(profile: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(profile, dict):
+        return {"status": "not_provided"}
+    budgets = budget_recommendations(profile)
+    return {
+        "status": profile.get("status"),
+        "generated_at": profile.get("generated_at"),
+        "effective_cpu_cores": resource_effective_cpu(profile),
+        "effective_memory_bytes": resource_effective_memory(profile),
+        "critical_failures": profile.get("critical_failures") or [],
+        "source_errors": profile.get("source_errors") or [],
+        "recommended_budgets": {
+            "agent_concurrency": budget_int(budgets, "agent_concurrency", "agent_fanout"),
+            "rch_verification_fanout": budget_int(budgets, "rch_verification_fanout"),
+            "max_queue_depth": budget_int(budgets, "max_queue_depth"),
+            "max_rss_bytes": budget_int(budgets, "max_rss_bytes"),
+        },
+        "headroom_paths": {
+            env_name: {
+                "path": item.get("path"),
+                "ready": item.get("ready"),
+                "available_kb": item.get("available_kb"),
+                "problem": item.get("problem"),
+            }
+            for env_name, item in headroom_paths_by_env(profile).items()
+        },
+    }
+
+
+def add_budget_drift_signal(
+    signals: list[dict[str, Any]],
+    *,
+    signal_id: str,
+    severity: str,
+    evidence_path: str,
+    expected: Any,
+    current: Any,
+    recommendation: str,
+) -> None:
+    signals.append(
+        {
+            "id": signal_id,
+            "severity": severity,
+            "evidence_path": evidence_path,
+            "expected": expected,
+            "current": current,
+            "recommendation": recommendation,
+        }
+    )
+
+
+def budget_drift_status(signals: list[dict[str, Any]]) -> str:
+    if any(signal.get("severity") == "critical" for signal in signals):
+        return "deny_new_work"
+    if signals:
+        return "degraded"
+    return "stable"
+
+
+def budget_drift_adjustments(
+    status: str,
+    budgets: dict[str, Any],
+    *,
+    current_active_agents: int,
+) -> dict[str, Any]:
+    agent_budget = budget_int(budgets, "agent_concurrency", "agent_fanout")
+    rch_budget = budget_int(budgets, "rch_verification_fanout")
+    queue_budget = budget_int(budgets, "max_queue_depth")
+    if status == "deny_new_work":
+        return {
+            "admit_new_agents": 0,
+            "agent_concurrency": current_active_agents,
+            "rch_verification_fanout": 0,
+            "max_queue_depth": 0,
+            "reason": "deny_new_work until critical budget drift clears",
+        }
+    if status == "degraded":
+        reduced_agent_budget = None if agent_budget is None else max(1, agent_budget // 2)
+        reduced_rch_budget = None if rch_budget is None else max(1, rch_budget // 2)
+        return {
+            "admit_new_agents": None
+            if reduced_agent_budget is None
+            else max(0, reduced_agent_budget - current_active_agents),
+            "agent_concurrency": reduced_agent_budget,
+            "rch_verification_fanout": reduced_rch_budget,
+            "max_queue_depth": queue_budget,
+            "reason": "reduce fanout until two stable drift samples are observed",
+        }
+    return {
+        "admit_new_agents": None
+        if agent_budget is None
+        else max(0, agent_budget - current_active_agents),
+        "agent_concurrency": agent_budget,
+        "rch_verification_fanout": rch_budget,
+        "max_queue_depth": queue_budget,
+        "reason": "last accepted budget profile is still valid",
+    }
+
+
+def build_budget_drift_report(
+    *,
+    accepted_profile_source: SourcePayload,
+    doctor_source: SourcePayload,
+    cargo: dict[str, Any],
+    beads: dict[str, Any],
+    agent_mail: dict[str, Any],
+    max_items: int,
+) -> dict[str, Any]:
+    current_profile = resource_preflight_from_doctor(doctor_source)
+    accepted_profile = (
+        accepted_profile_source.payload
+        if isinstance(accepted_profile_source.payload, dict)
+        else current_profile
+    )
+    profile_status = "ok"
+    if accepted_profile_source.status != "ok" and current_profile is not None:
+        profile_status = "current_only"
+    elif accepted_profile is None:
+        profile_status = accepted_profile_source.status
+
+    signals: list[dict[str, Any]] = []
+    if accepted_profile is None and current_profile is None:
+        add_budget_drift_signal(
+            signals,
+            signal_id="missing_budget_profile",
+            severity="warning",
+            evidence_path="source_statuses.host_preflight",
+            expected="last accepted budget profile",
+            current="not_provided",
+            recommendation="capture pi doctor --only swarm --format json before raising fanout",
+        )
+
+    current_profile = current_profile or accepted_profile
+    accepted_summary = resource_profile_summary(accepted_profile)
+    current_summary = resource_profile_summary(current_profile)
+    accepted_budgets = budget_recommendations(accepted_profile)
+
+    accepted_cpu = resource_effective_cpu(accepted_profile)
+    current_cpu = resource_effective_cpu(current_profile)
+    if accepted_cpu and current_cpu and current_cpu < accepted_cpu:
+        ratio = current_cpu / accepted_cpu
+        add_budget_drift_signal(
+            signals,
+            signal_id="cpu_quota_reduced",
+            severity="critical" if ratio < 0.5 else "warning",
+            evidence_path="normalized_inputs.budget_drift.current_profile.effective_cpu_cores",
+            expected=accepted_cpu,
+            current=current_cpu,
+            recommendation="lower agent and RCH fanout to match current cgroup CPU quota",
+        )
+
+    accepted_memory = resource_effective_memory(accepted_profile)
+    current_memory = resource_effective_memory(current_profile)
+    if accepted_memory and current_memory and current_memory < accepted_memory:
+        ratio = current_memory / accepted_memory
+        add_budget_drift_signal(
+            signals,
+            signal_id="memory_headroom_reduced",
+            severity="critical" if ratio < 0.5 else "warning",
+            evidence_path="normalized_inputs.budget_drift.current_profile.effective_memory_bytes",
+            expected=int(accepted_memory),
+            current=int(current_memory),
+            recommendation="reduce active agents and avoid broad validation until memory headroom recovers",
+        )
+
+    for env_name, current_path in (
+        ("CARGO_TARGET_DIR", cargo.get("cargo_target_dir")),
+        ("TMPDIR", cargo.get("tmpdir")),
+    ):
+        accepted_path = headroom_paths_by_env(accepted_profile).get(env_name, {}).get("path")
+        if accepted_path and current_path and str(accepted_path) != str(current_path):
+            add_budget_drift_signal(
+                signals,
+                signal_id=f"{env_name.lower()}_path_drift",
+                severity="warning",
+                evidence_path=f"normalized_inputs.cargo_admission.{env_name.lower()}",
+                expected=accepted_path,
+                current=current_path,
+                recommendation=f"re-run preflight with the current {env_name} before increasing fanout",
+            )
+    for env_name, item in headroom_paths_by_env(current_profile).items():
+        if item.get("ready") is False:
+            add_budget_drift_signal(
+                signals,
+                signal_id=f"{env_name.lower()}_headroom_not_ready",
+                severity="critical",
+                evidence_path=f"normalized_inputs.budget_drift.current_profile.headroom_paths.{env_name}",
+                expected="ready",
+                current=item.get("problem") or "not_ready",
+                recommendation=f"fix {env_name} scratch headroom before admitting new work",
+            )
+
+    critical_failures = current_summary.get("critical_failures")
+    if isinstance(critical_failures, list):
+        for failure in critical_failures:
+            add_budget_drift_signal(
+                signals,
+                signal_id="resource_preflight_critical_failure",
+                severity="critical",
+                evidence_path="normalized_inputs.budget_drift.current_profile.critical_failures",
+                expected="no critical failures",
+                current=failure,
+                recommendation="deny new work until swarm resource preflight is no longer failing",
+            )
+
+    queue = cargo.get("queue_forecast") if isinstance(cargo.get("queue_forecast"), dict) else {}
+    max_queue_depth = budget_int(accepted_budgets, "max_queue_depth")
+    queue_depth = int_value(queue.get("queue_depth"))
+    if max_queue_depth is not None and queue_depth > max_queue_depth:
+        add_budget_drift_signal(
+            signals,
+            signal_id="rch_queue_depth_over_budget",
+            severity="critical",
+            evidence_path="normalized_inputs.cargo_admission.queue_forecast.queue_depth",
+            expected=max_queue_depth,
+            current=queue_depth,
+            recommendation="pause broad validation until RCH queue depth returns under budget",
+        )
+    if queue.get("recommended_action") == "backoff" or queue.get("slot_pressure") == "saturated":
+        add_budget_drift_signal(
+            signals,
+            signal_id="rch_queue_saturated",
+            severity="critical",
+            evidence_path="normalized_inputs.cargo_admission.queue_forecast",
+            expected="proceed",
+            current=queue.get("recommended_action") or queue.get("slot_pressure"),
+            recommendation="deny new heavyweight work until RCH queue pressure clears",
+        )
+    elif queue.get("recommended_action") == "split":
+        add_budget_drift_signal(
+            signals,
+            signal_id="rch_queue_split_recommended",
+            severity="warning",
+            evidence_path="normalized_inputs.cargo_admission.queue_forecast.recommended_action",
+            expected="proceed",
+            current="split",
+            recommendation="keep verification surface-scoped until queue pressure clears",
+        )
+
+    status_counts = beads.get("status_counts") if isinstance(beads.get("status_counts"), dict) else {}
+    active_agents = max(
+        int_value(status_counts.get("in_progress")),
+        int_value(agent_mail.get("active_reservation_count")),
+    )
+    agent_budget = budget_int(accepted_budgets, "agent_concurrency", "agent_fanout")
+    if agent_budget is not None:
+        if active_agents > agent_budget:
+            add_budget_drift_signal(
+                signals,
+                signal_id="active_agents_over_budget",
+                severity="critical",
+                evidence_path="normalized_inputs.beads.status_counts.in_progress",
+                expected=agent_budget,
+                current=active_agents,
+                recommendation="do not admit more agents until active ownership drops under budget",
+            )
+        elif active_agents >= max(1, int(agent_budget * 0.8)):
+            add_budget_drift_signal(
+                signals,
+                signal_id="active_agents_near_budget",
+                severity="warning",
+                evidence_path="normalized_inputs.beads.status_counts.in_progress",
+                expected=f"<80% of {agent_budget}",
+                current=active_agents,
+                recommendation="avoid increasing fanout unless the next sample remains stable",
+            )
+
+    status = budget_drift_status(signals)
+    return {
+        "schema": BUDGET_DRIFT_SCHEMA,
+        "status": status,
+        "profile_status": profile_status,
+        "accepted_profile": accepted_summary,
+        "current_profile": current_summary,
+        "current_observation": {
+            "cargo_target_dir": cargo.get("cargo_target_dir"),
+            "tmpdir": cargo.get("tmpdir"),
+            "queue_depth": queue_depth,
+            "active_builds": queue.get("active_builds"),
+            "queued_builds": queue.get("queued_builds"),
+            "slot_pressure": queue.get("slot_pressure"),
+            "queue_recommended_action": queue.get("recommended_action"),
+            "active_agents": active_agents,
+            "active_reservations": agent_mail.get("active_reservation_count"),
+        },
+        "signals": bounded(signals, max_items),
+        "recommended_adjustments": budget_drift_adjustments(
+            status,
+            accepted_budgets,
+            current_active_agents=active_agents,
+        ),
+        "hysteresis": {
+            "stable_samples_required": 2,
+            "degraded_recovery_policy": "hold reduced fanout until two consecutive stable samples",
+        },
+    }
+
+
+def replay_budget_drift_hysteresis(
+    reports: list[dict[str, Any]],
+    *,
+    stable_samples_required: int = 2,
+) -> dict[str, Any]:
+    effective_statuses: list[str] = []
+    stable_run = 0
+    holding_recovery = False
+    saw_drift = False
+    for report in reports:
+        status = str(report.get("status") or "degraded")
+        if status == "stable":
+            stable_run += 1
+            if saw_drift and stable_run < stable_samples_required:
+                effective_statuses.append("degraded")
+                holding_recovery = True
+            else:
+                effective_statuses.append("stable")
+        else:
+            stable_run = 0
+            saw_drift = True
+            effective_statuses.append(status)
+    return {
+        "schema": BUDGET_DRIFT_SCHEMA,
+        "stable_samples_required": stable_samples_required,
+        "effective_statuses": effective_statuses,
+        "hysteresis_applied": holding_recovery,
+    }
+
+
 def summarize_git_status(source: SourcePayload, max_items: int) -> dict[str, Any]:
     payload = source.payload
     if not isinstance(payload, dict):
@@ -2571,6 +2986,12 @@ def derive_autopilot_input_pack_status(
     agent_mail = pack.get("normalized_inputs", {}).get("agent_mail", {})
     if isinstance(agent_mail, dict) and agent_mail.get("status") != "ok":
         reasons.append(f"Agent Mail status is `{agent_mail.get('status')}`")
+    budget_drift = pack.get("normalized_inputs", {}).get("budget_drift", {})
+    if isinstance(budget_drift, dict) and budget_drift.get("status") in {
+        "degraded",
+        "deny_new_work",
+    }:
+        reasons.append(f"budget drift status is `{budget_drift.get('status')}`")
     if not pack.get("command_provenance"):
         reasons.append("command provenance was not captured")
     return ("degraded" if reasons else "ready", reasons)
@@ -2587,6 +3008,27 @@ def build_autopilot_input_pack(args: argparse.Namespace) -> dict[str, Any]:
         redaction.fields.update(source.redacted_fields)
     redaction.merge(merge_command_redaction(capture_summary))
     doctor_summary = summarize_doctor(by_id["doctor_swarm"], args.max_items)
+    cargo_summary = summarize_cargo_admission(by_id["cargo_admission"])
+    beads_summary = summarize_beads(
+        by_id["beads"],
+        generated_at=generated_at,
+        stale_after_hours=args.stale_after_hours,
+        max_items=args.max_items,
+    )
+    agent_mail_summary = summarize_agent_mail_autopilot(
+        by_id["agent_mail_status"],
+        by_id["agent_mail_reservations"],
+        capture_summary,
+        args.max_items,
+    )
+    budget_drift = build_budget_drift_report(
+        accepted_profile_source=by_id["host_preflight"],
+        doctor_source=by_id["doctor_swarm"],
+        cargo=cargo_summary,
+        beads=beads_summary,
+        agent_mail=agent_mail_summary,
+        max_items=args.max_items,
+    )
     pack = {
         "schema": AUTOPILOT_INPUT_PACK_SCHEMA,
         "generated_at": generated_at.isoformat(),
@@ -2607,23 +3049,14 @@ def build_autopilot_input_pack(args: argparse.Namespace) -> dict[str, Any]:
         "command_provenance": command_provenance(capture_summary, args.max_items),
         "normalized_inputs": {
             "doctor_swarm": doctor_summary,
-            "cargo_admission": summarize_cargo_admission(by_id["cargo_admission"]),
-            "beads": summarize_beads(
-                by_id["beads"],
-                generated_at=generated_at,
-                stale_after_hours=args.stale_after_hours,
-                max_items=args.max_items,
-            ),
+            "cargo_admission": cargo_summary,
+            "beads": beads_summary,
             "beads_ready": summarize_beads_ready(
                 by_id["beads_ready"],
                 args.max_items,
             ),
-            "agent_mail": summarize_agent_mail_autopilot(
-                by_id["agent_mail_status"],
-                by_id["agent_mail_reservations"],
-                capture_summary,
-                args.max_items,
-            ),
+            "agent_mail": agent_mail_summary,
+            "budget_drift": budget_drift,
             "git_state": summarize_git_status(by_id["git_status"], args.max_items),
             "activity_digest": summarize_activity_digest(
                 by_id["activity_digest"],
@@ -3276,6 +3709,7 @@ def derive_autopilot_plan_status(
         "use_beads_soft_lock",
         "reopen_stale_bead_candidate",
         "capture_handoff",
+        "adjust_swarm_budget",
     }
     if input_pack.get("status") != "ready" or action_names.intersection(degraded_actions):
         return "degraded"
@@ -3390,6 +3824,49 @@ def build_autopilot_plan(
                 ],
                 forbidden_actions=["broad duplicate file ownership"],
                 rationale="RCH queue forecast recommends split validation.",
+            )
+        )
+
+    budget_drift = normalized_section(input_pack, "budget_drift")
+    if budget_drift.get("status") in {"degraded", "deny_new_work"}:
+        status = str(budget_drift.get("status"))
+        adjustments = (
+            budget_drift.get("recommended_adjustments")
+            if isinstance(budget_drift.get("recommended_adjustments"), dict)
+            else {}
+        )
+        signals = budget_drift.get("signals") if isinstance(budget_drift.get("signals"), list) else []
+        actions.append(
+            autopilot_plan_action(
+                action="adjust_swarm_budget",
+                title="Reduce swarm fanout based on live budget drift",
+                severity="critical" if status == "deny_new_work" else "high",
+                confidence="high" if signals else "medium",
+                preconditions=[
+                    "Do not raise fanout from stale startup preflight evidence.",
+                    "Hold reduced fanout until the drift watcher sees two stable samples.",
+                ],
+                evidence_paths=[
+                    "normalized_inputs.budget_drift.status",
+                    "normalized_inputs.budget_drift.signals",
+                    "normalized_inputs.budget_drift.recommended_adjustments",
+                ],
+                commands=[
+                    plan_command("Inspect budget drift", "python3 -m json.tool <autopilot-input-pack.json>"),
+                    plan_command("Refresh swarm resource preflight", "pi doctor --only swarm --format json"),
+                    plan_command("Refresh cargo admission", "./scripts/cargo_headroom.sh --runner rch --admit-only check --all-targets"),
+                    plan_command("Inspect active ownership", "br list --status=in_progress --json"),
+                ],
+                omitted_commands=[
+                    omitted_command("increase swarm fanout", "live budget drift is not stable"),
+                    omitted_command("start broad cargo validation", "admission must match the adjusted fanout first"),
+                ],
+                forbidden_actions=["local heavyweight cargo fallback"],
+                rationale=(
+                    f"budget_drift status={status}; "
+                    f"admit_new_agents={adjustments.get('admit_new_agents')}; "
+                    f"rch_verification_fanout={adjustments.get('rch_verification_fanout')}"
+                ),
             )
         )
 
@@ -3588,6 +4065,7 @@ def build_autopilot_plan(
         "input_pack_schema": input_pack.get("schema"),
         "input_pack_status": input_pack.get("status"),
         "work_partitions": bounded(work_partitions, max_items),
+        "budget_drift": normalized_section(input_pack, "budget_drift"),
         "failure_actions": bounded(failure_actions, max_items),
         "actions": bounded(ranked_actions, max_items),
         "omitted_actions": [
@@ -4358,6 +4836,10 @@ def assert_autopilot_input_pack_contract(input_pack: dict[str, Any]) -> None:
     assert not unknown_source_ids, f"unexpected input-pack source ids: {sorted(unknown_source_ids)}"
     for path in contract.get("required_summary_paths", []):
         get_dotted(input_pack, path)
+    budget_drift = get_dotted(input_pack, "normalized_inputs.budget_drift")
+    assert isinstance(budget_drift, dict)
+    assert budget_drift.get("schema") == BUDGET_DRIFT_SCHEMA
+    assert budget_drift.get("status") in {"stable", "degraded", "deny_new_work"}
     for field in contract.get("required_source_status_fields", []):
         for source in input_pack.get("source_statuses", []):
             if isinstance(source, dict) and source.get("status") == "ok":
@@ -4401,10 +4883,20 @@ def assert_autopilot_plan_contract(plan: dict[str, Any]) -> None:
     action_fields = set(contract.get("required_action_fields", []))
     partition_fields = set(contract.get("required_partition_fields", []))
     failure_action_fields = set(contract.get("required_failure_action_fields", []))
+    budget_drift_fields = set(contract.get("required_budget_drift_fields", []))
     allowed_actions = set(contract.get("allowed_actions", []))
     allowed_severities = set(contract.get("allowed_severities", []))
     allowed_confidence = set(contract.get("allowed_confidence", []))
     allowed_failure_categories = set(contract.get("allowed_failure_categories", []))
+    allowed_budget_drift_statuses = set(contract.get("allowed_budget_drift_statuses", []))
+    budget_drift = plan.get("budget_drift")
+    assert isinstance(budget_drift, dict)
+    missing_budget_drift = budget_drift_fields - set(budget_drift)
+    assert not missing_budget_drift, (
+        f"autopilot plan budget drift missing fields: {sorted(missing_budget_drift)}"
+    )
+    assert budget_drift.get("schema") == BUDGET_DRIFT_SCHEMA
+    assert budget_drift.get("status") in allowed_budget_drift_statuses
     partitions = plan.get("work_partitions")
     assert isinstance(partitions, list)
     for partition in partitions:
@@ -4553,6 +5045,51 @@ def assert_autopilot_plan_golden(plan: dict[str, Any], workspace: Path) -> None:
 def run_self_test() -> int:
     workspace = Path(tempfile.mkdtemp(prefix="pi_swarm_runpack_"))
     generated_at = "2026-05-09T09:00:00+00:00"
+    accepted_preflight = {
+        "schema": HOST_PREFLIGHT_SCHEMA,
+        "generated_at": generated_at,
+        "status": "pass",
+        "cpu": {
+            "logical_cores": 16,
+            "effective_cores": 8,
+            "cgroup_quota": {"quota_cores": 8.0, "unlimited": False},
+            "cpuset": {"cpu_count": 8},
+        },
+        "numa": {"node_count": 2, "nodes": [0, 1]},
+        "memory": {
+            "cgroup_limit_bytes": 34359738368,
+            "effective_limit_bytes": 34359738368,
+            "unlimited": False,
+        },
+        "tmpfs_headroom": {
+            "expected_root": "/data/tmp/pi_agent_rust_cargo",
+            "paths": [
+                {
+                    "env_name": "CARGO_TARGET_DIR",
+                    "path": "/data/tmp/pi_agent_rust_cargo/test/target",
+                    "ready": True,
+                    "available_kb": 52428800,
+                },
+                {
+                    "env_name": "TMPDIR",
+                    "path": "/data/tmp/pi_agent_rust_cargo/test/tmp",
+                    "ready": True,
+                    "available_kb": 52428800,
+                },
+            ],
+        },
+        "recommended_budgets": {
+            "agent_concurrency": 4,
+            "tool_concurrency": 8,
+            "extension_hostcall_lanes": 16,
+            "rch_verification_fanout": 2,
+            "max_queue_depth": 2,
+            "max_rss_bytes": 17179869184,
+            "plan_confidence": "high",
+        },
+        "critical_failures": [],
+        "source_errors": [],
+    }
     doctor_path = write_json(
         workspace / "doctor.json",
         {
@@ -4769,21 +5306,7 @@ def run_self_test() -> int:
     )
     host_preflight_path = write_json(
         workspace / "host-preflight.json",
-        {
-            "schema": HOST_PREFLIGHT_SCHEMA,
-            "generated_at": generated_at,
-            "status": "pass",
-            "cpu": {
-                "logical": 16,
-                "effective": 8,
-                "cgroup_quota": {"quota_cores": 8.0, "unlimited": False},
-                "cpuset_cpus": 8,
-            },
-            "numa": {"node_count": 2, "nodes": [0, 1]},
-            "memory": {"cgroup_limit_bytes": 34359738368},
-            "recommended_budgets": {"agent_fanout": 4, "rch_verification_fanout": 2},
-            "critical_failures": [],
-        },
+        accepted_preflight,
     )
     hostcall_profile_path = write_json(
         workspace / "hostcall-profile.json",
@@ -5006,6 +5529,8 @@ def run_self_test() -> int:
         assert input_pack["status"] == "degraded"
         assert input_pack["normalized_inputs"]["agent_mail"]["status"] == "degraded"
         assert input_pack["normalized_inputs"]["agent_mail"]["fallback_action"] == "use_beads_soft_lock"
+        assert input_pack["normalized_inputs"]["budget_drift"]["status"] == "deny_new_work"
+        assert input_pack["normalized_inputs"]["budget_drift"]["schema"] == BUDGET_DRIFT_SCHEMA
         assert input_pack["normalized_inputs"]["operator_runpack"]["status"] == "ok"
         assert input_pack["normalized_inputs"]["beads_ready"]["status"] == "not_provided"
         assert any(
@@ -5019,12 +5544,13 @@ def run_self_test() -> int:
         plan = build_autopilot_plan(input_pack, max_items=args.max_items)
         assert plan["schema"] == AUTOPILOT_PLAN_SCHEMA
         assert plan["status"] == "degraded"
+        assert plan["budget_drift"]["status"] == "deny_new_work"
         plan_actions = [item["action"] for item in plan["actions"]]
         assert plan_actions == [
+            "adjust_swarm_budget",
             "wait_for_rch",
             "use_beads_soft_lock",
             "reopen_stale_bead_candidate",
-            "capture_handoff",
         ]
         assert plan["work_partitions"] == []
         assert_autopilot_plan_contract(plan)
@@ -5182,6 +5708,8 @@ def run_self_test() -> int:
         healthy_plan = build_autopilot_plan(healthy_input_pack, max_items=args.max_items)
         assert healthy_input_pack["status"] == "ready"
         assert healthy_plan["status"] == "ready"
+        assert healthy_input_pack["normalized_inputs"]["budget_drift"]["status"] == "stable"
+        assert healthy_plan["budget_drift"]["status"] == "stable"
         assert [item["action"] for item in healthy_plan["actions"]] == ["claim_ready_bead"]
         healthy_partition = healthy_plan["work_partitions"][0]
         assert healthy_partition["issue_id"] == "bd-ready"
@@ -5191,6 +5719,123 @@ def run_self_test() -> int:
         assert healthy_partition["confidence"] == "high"
         assert healthy_partition["degraded_caveats"] == []
         assert_autopilot_plan_contract(healthy_plan)
+
+        def clone_json(value: Any) -> Any:
+            return json.loads(json_dumps(value))
+
+        def doctor_with_preflight(name: str, preflight: dict[str, Any]) -> Path:
+            payload = clone_json(json.loads(doctor_path.read_text(encoding="utf-8")))
+            payload["findings"].append(
+                {
+                    "category": "swarm",
+                    "severity": "pass",
+                    "title": "Swarm resource preflight ready",
+                    "detail": "resource profile accepted",
+                    "remediation": None,
+                    "data": preflight,
+                    "fixability": "not_fixable",
+                }
+            )
+            return write_json(workspace / f"{name}-doctor.json", payload)
+
+        def build_budget_drift_fixture(
+            name: str,
+            *,
+            current_preflight: dict[str, Any],
+            cargo_payload: dict[str, Any] | None = None,
+            beads_payload: dict[str, Any] | None = None,
+        ) -> tuple[dict[str, Any], dict[str, Any]]:
+            fixture_args = argparse.Namespace(
+                **{
+                    **vars(healthy_args),
+                    "doctor_json": doctor_with_preflight(name, current_preflight),
+                    "cargo_admission_json": write_json(
+                        workspace / f"{name}-cargo.json",
+                        cargo_payload
+                        or json.loads(cargo_admit_path.read_text(encoding="utf-8")),
+                    ),
+                    "beads_json": write_json(
+                        workspace / f"{name}-beads.json",
+                        beads_payload
+                        or json.loads(open_beads_path.read_text(encoding="utf-8")),
+                    ),
+                }
+            )
+            fixture_input_pack = build_autopilot_input_pack(fixture_args)
+            fixture_plan = build_autopilot_plan(fixture_input_pack, max_items=args.max_items)
+            assert_autopilot_input_pack_contract(fixture_input_pack)
+            assert_autopilot_plan_contract(fixture_plan)
+            return fixture_input_pack, fixture_plan
+
+        cpu_reduced_preflight = clone_json(accepted_preflight)
+        cpu_reduced_preflight["cpu"]["effective_cores"] = 4
+        cpu_reduced_input, cpu_reduced_plan = build_budget_drift_fixture(
+            "budget-drift-cpu-reduced",
+            current_preflight=cpu_reduced_preflight,
+        )
+        assert cpu_reduced_input["normalized_inputs"]["budget_drift"]["status"] == "degraded"
+        assert any(
+            signal["id"] == "cpu_quota_reduced"
+            for signal in cpu_reduced_input["normalized_inputs"]["budget_drift"]["signals"]
+        )
+        assert "adjust_swarm_budget" in [
+            action["action"] for action in cpu_reduced_plan["actions"]
+        ]
+
+        memory_reduced_preflight = clone_json(accepted_preflight)
+        memory_reduced_preflight["memory"]["effective_limit_bytes"] = 8 * 1024 * 1024 * 1024
+        memory_reduced_input, _ = build_budget_drift_fixture(
+            "budget-drift-memory-reduced",
+            current_preflight=memory_reduced_preflight,
+        )
+        assert memory_reduced_input["normalized_inputs"]["budget_drift"]["status"] == "deny_new_work"
+        assert any(
+            signal["id"] == "memory_headroom_reduced"
+            for signal in memory_reduced_input["normalized_inputs"]["budget_drift"]["signals"]
+        )
+
+        tmpdir_drift_cargo = json.loads(cargo_admit_path.read_text(encoding="utf-8"))
+        tmpdir_drift_cargo["tmpdir"] = "/tmp/pi-agent-drift"
+        tmpdir_drift_input, _ = build_budget_drift_fixture(
+            "budget-drift-tmpdir",
+            current_preflight=accepted_preflight,
+            cargo_payload=tmpdir_drift_cargo,
+        )
+        assert tmpdir_drift_input["normalized_inputs"]["budget_drift"]["status"] == "degraded"
+        assert any(
+            signal["id"] == "tmpdir_path_drift"
+            for signal in tmpdir_drift_input["normalized_inputs"]["budget_drift"]["signals"]
+        )
+
+        queue_saturated_cargo = json.loads(cargo_admit_path.read_text(encoding="utf-8"))
+        queue_saturated_cargo["rch_queue_forecast"]["queue_depth"] = 8
+        queue_saturated_cargo["rch_queue_forecast"]["recommended_action"] = "backoff"
+        queue_saturated_cargo["rch_queue_forecast"]["slot_pressure"] = "saturated"
+        queue_saturated_input, _ = build_budget_drift_fixture(
+            "budget-drift-rch-queue",
+            current_preflight=accepted_preflight,
+            cargo_payload=queue_saturated_cargo,
+        )
+        assert queue_saturated_input["normalized_inputs"]["budget_drift"]["status"] == "deny_new_work"
+        assert any(
+            signal["id"] == "rch_queue_saturated"
+            for signal in queue_saturated_input["normalized_inputs"]["budget_drift"]["signals"]
+        )
+
+        recovered_input, _ = build_budget_drift_fixture(
+            "budget-drift-recovered",
+            current_preflight=accepted_preflight,
+        )
+        assert recovered_input["normalized_inputs"]["budget_drift"]["status"] == "stable"
+        replay = replay_budget_drift_hysteresis(
+            [
+                cpu_reduced_input["normalized_inputs"]["budget_drift"],
+                recovered_input["normalized_inputs"]["budget_drift"],
+                recovered_input["normalized_inputs"]["budget_drift"],
+            ]
+        )
+        assert replay["effective_statuses"] == ["degraded", "degraded", "stable"]
+        assert replay["hysteresis_applied"] is True
 
         independent_ready_path = write_json(
             workspace / "beads-ready-independent.json",

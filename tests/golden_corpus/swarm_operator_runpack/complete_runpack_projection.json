@@ -757,7 +757,7 @@
       "path": "[WORKSPACE]/host-preflight.json",
       "schema": "pi.doctor.swarm_resource_preflight.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 527,
+      "size_bytes": 1245,
       "status": "ok"
     },
     {
