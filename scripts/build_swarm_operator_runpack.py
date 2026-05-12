@@ -274,6 +274,217 @@ WORK_SURFACE_RULES: tuple[dict[str, Any], ...] = (
         ),
     },
 )
+FAILURE_ACTION_CATALOG_SCHEMA = "pi.swarm.failure_action_catalog.v1"
+FAILURE_ACTION_MAX_EXCERPT_CHARS = 520
+FAILURE_ACTION_RULES: tuple[dict[str, Any], ...] = (
+    {
+        "id": "FAIL-RCH-QUEUE-SATURATED",
+        "category": "rch",
+        "confidence": "high",
+        "terms": ("rch_queue_saturated", "queue_saturated", "slot_pressure=saturated"),
+        "secondary_terms": ("backoff", "saturated", "queue"),
+        "title": "RCH queue is saturated; do not start broad cargo validation",
+        "explanation": (
+            "Cargo admission or queue forecast says RCH capacity is saturated. "
+            "Keep work narrow and wait before launching heavyweight checks."
+        ),
+        "safe_commands": (
+            ("Inspect RCH queue", "rch queue"),
+            ("Inspect RCH workers", "rch status --workers --jobs"),
+            (
+                "Refresh cargo admission",
+                "./scripts/cargo_headroom.sh --runner rch --admit-only check --all-targets",
+            ),
+        ),
+        "escalation": (
+            "If saturation persists, split validation by surface or pause heavy "
+            "cargo work instead of allowing local fallback."
+        ),
+    },
+    {
+        "id": "FAIL-RCH-ARTIFACT-RETRIEVAL-DISK",
+        "category": "rch",
+        "confidence": "high",
+        "terms": ("artifact retrieval", "artifact sync", "retrieve artifacts", "rch-e21"),
+        "secondary_terms": ("no space left on device", "disk", "space", "storage"),
+        "title": "RCH artifact retrieval is blocked by disk or artifact-sync pressure",
+        "explanation": (
+            "The remote build may have completed, but artifact retrieval or local "
+            "staging is failing. Treat this as an operational storage/sync blocker, "
+            "not as proof of a Rust regression."
+        ),
+        "safe_commands": (
+            ("Inspect RCH jobs and workers", "rch status --workers --jobs"),
+            ("Inspect queue pressure", "rch queue"),
+            ("Inspect local scratch headroom", "df -h /data/tmp /tmp"),
+        ),
+        "escalation": (
+            "If headroom is low or retrieval keeps failing, surface the RCH error "
+            "code and worker id; do not delete cache or build directories without "
+            "explicit operator approval."
+        ),
+    },
+    {
+        "id": "FAIL-CARGO-LOCAL-TARGET-DISK",
+        "category": "cargo",
+        "confidence": "high",
+        "terms": ("no space left on device", "cargo_target_dir", "tmpdir", "target/debug"),
+        "secondary_terms": ("cargo", "target", "tmp", "filesystem"),
+        "title": "Cargo needs isolated high-capacity target and temp directories",
+        "explanation": (
+            "The failure matches local target/TMPDIR pressure. Retry through RCH "
+            "with explicit per-agent scratch paths before treating compiler output "
+            "as authoritative."
+        ),
+        "safe_commands": (
+            (
+                "Create per-agent scratch directories",
+                "mkdir -p /data/tmp/pi_agent_rust_cargo/${USER:-agent}/target /data/tmp/pi_agent_rust_cargo/${USER:-agent}/tmp",
+            ),
+            (
+                "Retry compiler check through RCH",
+                "env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/${USER:-agent}/target TMPDIR=/data/tmp/pi_agent_rust_cargo/${USER:-agent}/tmp rch exec -- cargo check --all-targets",
+            ),
+        ),
+        "escalation": (
+            "If the same disk error appears with /data/tmp scratch paths, capture "
+            "`df -h /data/tmp /tmp` and stop before cleanup."
+        ),
+    },
+    {
+        "id": "FAIL-RCH-REMOTE-COMPILE",
+        "category": "rch",
+        "confidence": "medium",
+        "terms": ("[rch] remote", "remote compile", "remote build", "worker"),
+        "secondary_terms": ("error[", "cargo check failed", "cargo clippy failed", "rustc"),
+        "title": "Remote RCH execution reached the compiler and failed",
+        "explanation": (
+            "The failure appears to come from the remote compiler run, so inspect "
+            "the Rust diagnostic before changing RCH configuration."
+        ),
+        "safe_commands": (
+            ("Inspect RCH worker health", "rch status --workers --jobs"),
+            (
+                "Re-run the focused compiler command through RCH",
+                "env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/${USER:-agent}/target TMPDIR=/data/tmp/pi_agent_rust_cargo/${USER:-agent}/tmp rch exec -- cargo check --all-targets",
+            ),
+        ),
+        "escalation": (
+            "If the diagnostic is not a code error, preserve the worker id, RCH "
+            "code, and stderr excerpt for RCH triage."
+        ),
+    },
+    {
+        "id": "FAIL-AGENT-MAIL-SCHEMA",
+        "category": "agent_mail",
+        "confidence": "high",
+        "terms": ("schema missing", "missing required", "projects, agents, messages"),
+        "secondary_terms": ("agent mail", "sqlite", "message_recipients", "database"),
+        "title": "Agent Mail database schema is missing required tables",
+        "explanation": (
+            "Agent Mail coordination cannot be trusted for reservations or inbox "
+            "state until the mailbox schema is repaired or restored."
+        ),
+        "safe_commands": (
+            ("Inspect Agent Mail health", "am doctor check --verbose"),
+            ("Preview Agent Mail repair", "am doctor repair --dry-run"),
+            ("Use Beads soft lock while Mail is red", "br list --status=in_progress --json"),
+        ),
+        "escalation": (
+            "Run repair only after the dry-run output is understood; continue with "
+            "Beads assignment as the temporary coordination lock."
+        ),
+    },
+    {
+        "id": "FAIL-AGENT-MAIL-DEGRADED-READONLY",
+        "category": "agent_mail",
+        "confidence": "medium",
+        "terms": (
+            "degraded_read_only",
+            "read-only",
+            "archive writes disabled",
+            "fallback_action=use_beads_soft_lock",
+        ),
+        "secondary_terms": ("agent mail", "mail", "reservation", "inbox", "degraded"),
+        "title": "Agent Mail is degraded or read-only",
+        "explanation": (
+            "Mail may still provide partial read evidence, but it should not be "
+            "treated as the write-side reservation ledger."
+        ),
+        "safe_commands": (
+            ("Inspect active Beads ownership", "br list --status=in_progress --json"),
+            ("Inspect target bead", "br show <issue-id> --json"),
+            ("Retry Agent Mail health later", "am doctor check --verbose"),
+        ),
+        "escalation": (
+            "Do not assume reservation writes landed while Mail is degraded; use "
+            "Beads status and narrow file surfaces until Mail is healthy."
+        ),
+    },
+    {
+        "id": "FAIL-BEADS-JSONL-DRIFT",
+        "category": "beads",
+        "confidence": "medium",
+        "terms": ("jsonl drift", "beads db", "beads database", "br doctor"),
+        "secondary_terms": ("stale", "drift", "warning", "integrity"),
+        "title": "Beads database and JSONL evidence may be out of sync",
+        "explanation": (
+            "The Beads ledger itself is warning about stale or drifting state. "
+            "Refresh Beads evidence before relying on ready/in-progress lists."
+        ),
+        "safe_commands": (
+            ("Run Beads doctor", "br doctor"),
+            ("Inspect ready queue", "br ready --json"),
+            ("Inspect active ownership", "br list --status=in_progress --json"),
+        ),
+        "escalation": (
+            "If doctor reports corruption or ambiguous recovery, stop and surface "
+            "the exact doctor output instead of editing the Beads DB by hand."
+        ),
+    },
+    {
+        "id": "FAIL-BEADS-STALE-OWNER",
+        "category": "beads",
+        "confidence": "medium",
+        "terms": ("stale in-progress", "stale bead", "stale owner"),
+        "secondary_terms": ("beads", "assignee", "in_progress"),
+        "title": "A Beads assignee may be stale",
+        "explanation": (
+            "The captured Beads state shows old in-progress ownership. Confirm "
+            "abandonment before reopening or taking over the work."
+        ),
+        "safe_commands": (
+            ("Inspect stale bead", "br show <issue-id> --json"),
+            ("Inspect all active Beads", "br list --status=in_progress --json"),
+            ("Reopen only after confirmation", "br update <issue-id> --status open"),
+        ),
+        "escalation": (
+            "Do not force-release reservations or alter another agent's files unless "
+            "Mail or recent commits confirm the claim is abandoned."
+        ),
+    },
+    {
+        "id": "FAIL-RCH-UNKNOWN",
+        "category": "rch",
+        "confidence": "low",
+        "terms": ("rch-", "[rch]", "rch "),
+        "secondary_terms": (),
+        "title": "RCH reported an unclassified operational failure",
+        "explanation": (
+            "The signal mentions RCH but does not match a safer, more specific "
+            "catalog entry. Preserve the excerpt and inspect RCH status before retrying."
+        ),
+        "safe_commands": (
+            ("Inspect RCH status", "rch status --workers --jobs"),
+            ("Inspect RCH queue", "rch queue"),
+            ("Run RCH doctor", "rch doctor"),
+        ),
+        "escalation": (
+            "Surface the RCH code, worker id, and redacted excerpt if doctor does "
+            "not identify a safe self-recovery path."
+        ),
+    },
+)
 TIMESTAMP_KEYS = (
     "generated_at",
     "generatedAt",
@@ -2718,6 +2929,245 @@ def build_work_partition_recommendations(
     return bounded(partitions, max_items)
 
 
+def failure_signal_text(value: Any) -> str:
+    if isinstance(value, dict):
+        fragments: list[str] = []
+        for key in (
+            "id",
+            "status",
+            "exit_code",
+            "issue",
+            "command",
+            "stdout_snippet",
+            "stderr_snippet",
+            "reason",
+            "decision",
+            "read_status",
+            "reservation_status",
+            "fallback_action",
+            "title",
+            "assignee",
+            "age_hours",
+        ):
+            item = value.get(key)
+            if item not in {None, ""}:
+                fragments.append(f"{key}={item}")
+        return " ".join(fragments)
+    return str(value)
+
+
+def add_failure_signal(
+    signals: list[dict[str, Any]],
+    *,
+    source: str,
+    evidence_path: str,
+    payload: Any,
+    active: bool = True,
+) -> None:
+    if not active:
+        return
+    text = failure_signal_text(payload).strip()
+    if not text:
+        return
+    signals.append(
+        {
+            "source": source,
+            "evidence_path": evidence_path,
+            "text": text,
+        }
+    )
+
+
+def gather_failure_signals(input_pack: dict[str, Any]) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    for index, command in enumerate(input_pack.get("command_provenance", [])):
+        if not isinstance(command, dict):
+            continue
+        add_failure_signal(
+            signals,
+            source=f"command:{command.get('id')}",
+            evidence_path=f"command_provenance[{index}]",
+            payload=command,
+            active=command.get("status") not in {None, "ok"},
+        )
+    for index, source in enumerate(input_pack.get("source_statuses", [])):
+        if not isinstance(source, dict):
+            continue
+        source_id = str(source.get("id") or "")
+        add_failure_signal(
+            signals,
+            source=f"source:{source.get('id')}",
+            evidence_path=f"source_statuses[{index}]",
+            payload=source,
+            active=(
+                source.get("status") not in {None, "ok"}
+                and source_id in AUTOPILOT_REQUIRED_SOURCE_IDS
+            ),
+        )
+    cargo = normalized_section(input_pack, "cargo_admission")
+    if cargo:
+        queue = cargo.get("queue_forecast") if isinstance(cargo.get("queue_forecast"), dict) else {}
+        add_failure_signal(
+            signals,
+            source="cargo_admission",
+            evidence_path="normalized_inputs.cargo_admission",
+            payload={
+                "decision": cargo.get("decision"),
+                "reason": cargo.get("reason"),
+                "status": cargo.get("status"),
+                "queue_reason": queue.get("reason"),
+                "queue_action": queue.get("recommended_action"),
+                "slot_pressure": queue.get("slot_pressure"),
+            },
+            active=(
+                cargo.get("status") != "ok"
+                or cargo.get("decision") in {"backoff", "degraded", "deny"}
+                or queue.get("recommended_action") in {"backoff", "split"}
+                or queue.get("slot_pressure") == "saturated"
+            ),
+        )
+
+    agent_mail = normalized_section(input_pack, "agent_mail")
+    if agent_mail:
+        add_failure_signal(
+            signals,
+            source="agent_mail",
+            evidence_path="normalized_inputs.agent_mail",
+            payload=agent_mail,
+            active=agent_mail.get("status") != "ok",
+        )
+
+    beads = normalized_section(input_pack, "beads")
+    stale = beads.get("stale") if isinstance(beads.get("stale"), list) else []
+    for index, item in enumerate(stale):
+        if not isinstance(item, dict):
+            continue
+        add_failure_signal(
+            signals,
+            source=f"beads:{item.get('id')}",
+            evidence_path=f"normalized_inputs.beads.stale[{index}]",
+            payload={
+                **item,
+                "reason": "stale in-progress Beads owner",
+            },
+        )
+    return signals
+
+
+def rule_matches_failure_signal(rule: dict[str, Any], signal_text: str) -> bool:
+    text = signal_text.lower()
+    terms = tuple(str(term).lower() for term in rule.get("terms", ()))
+    secondary_terms = tuple(str(term).lower() for term in rule.get("secondary_terms", ()))
+    if not terms:
+        return False
+    if not any(term in text for term in terms):
+        return False
+    return not secondary_terms or any(term in text for term in secondary_terms)
+
+
+def build_failure_action(
+    rule: dict[str, Any],
+    signal: dict[str, Any],
+) -> dict[str, Any]:
+    excerpt, redaction = redact_string(
+        bounded_text(str(signal.get("text") or ""), FAILURE_ACTION_MAX_EXCERPT_CHARS),
+        f"failure_actions.{rule.get('id')}.raw_excerpt",
+    )
+    return {
+        "id": rule.get("id"),
+        "catalog_schema": FAILURE_ACTION_CATALOG_SCHEMA,
+        "category": rule.get("category"),
+        "title": rule.get("title"),
+        "match_confidence": rule.get("confidence"),
+        "explanation": rule.get("explanation"),
+        "evidence_paths": [signal.get("evidence_path")],
+        "matched_source": signal.get("source"),
+        "safe_commands": [
+            plan_command(str(purpose), str(command))
+            for purpose, command in rule.get("safe_commands", ())
+        ],
+        "escalation": rule.get("escalation"),
+        "raw_excerpt": excerpt,
+        "redaction_summary": redaction.to_json(),
+    }
+
+
+def merge_failure_action_evidence(
+    action: dict[str, Any],
+    signal: dict[str, Any],
+) -> None:
+    evidence_path = signal.get("evidence_path")
+    if evidence_path not in action["evidence_paths"]:
+        action["evidence_paths"].append(evidence_path)
+    if action.get("raw_excerpt"):
+        return
+    excerpt, redaction = redact_string(
+        bounded_text(str(signal.get("text") or ""), FAILURE_ACTION_MAX_EXCERPT_CHARS),
+        f"failure_actions.{action.get('id')}.raw_excerpt",
+    )
+    action["raw_excerpt"] = excerpt
+    action["redaction_summary"] = redaction.to_json()
+
+
+def build_unknown_failure_action(signal: dict[str, Any]) -> dict[str, Any]:
+    excerpt, redaction = redact_string(
+        bounded_text(str(signal.get("text") or ""), FAILURE_ACTION_MAX_EXCERPT_CHARS),
+        "failure_actions.FAIL-UNKNOWN-OPERATIONAL.raw_excerpt",
+    )
+    return {
+        "id": "FAIL-UNKNOWN-OPERATIONAL",
+        "catalog_schema": FAILURE_ACTION_CATALOG_SCHEMA,
+        "category": "unknown",
+        "title": "Unclassified operational failure; stop and surface the redacted excerpt",
+        "match_confidence": "low",
+        "explanation": (
+            "The planner found a failing operational signal that does not match "
+            "the current catalog. It must not infer a root cause from this excerpt."
+        ),
+        "evidence_paths": [signal.get("evidence_path")],
+        "matched_source": signal.get("source"),
+        "safe_commands": [
+            plan_command("Inspect git state", "git status --short --branch"),
+            plan_command("Inspect active Beads ownership", "br list --status=in_progress --json"),
+            plan_command("Inspect the target bead", "br show <issue-id> --json"),
+        ],
+        "escalation": (
+            "Preserve the redacted raw excerpt and create or update a Beads issue "
+            "for catalog coverage if this failure recurs."
+        ),
+        "raw_excerpt": excerpt,
+        "redaction_summary": redaction.to_json(),
+    }
+
+
+def build_failure_action_recommendations(
+    input_pack: dict[str, Any],
+    *,
+    max_items: int,
+) -> list[dict[str, Any]]:
+    actions_by_id: dict[str, dict[str, Any]] = {}
+    unknown_signal: dict[str, Any] | None = None
+    for signal in gather_failure_signals(input_pack):
+        matched_rule: dict[str, Any] | None = None
+        for rule in FAILURE_ACTION_RULES:
+            if rule_matches_failure_signal(rule, str(signal.get("text") or "")):
+                matched_rule = rule
+                break
+        if matched_rule is None:
+            if unknown_signal is None:
+                unknown_signal = signal
+            continue
+        rule_id = str(matched_rule["id"])
+        if rule_id in actions_by_id:
+            merge_failure_action_evidence(actions_by_id[rule_id], signal)
+        else:
+            actions_by_id[rule_id] = build_failure_action(matched_rule, signal)
+    actions = list(actions_by_id.values())
+    if unknown_signal is not None:
+        actions.append(build_unknown_failure_action(unknown_signal))
+    return bounded(actions, max_items)
+
+
 def autopilot_plan_action(
     *,
     action: str,
@@ -2793,10 +3243,18 @@ def assign_action_ranks(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def assert_autopilot_plan_commands_are_safe(plan: dict[str, Any]) -> None:
-    for action in plan.get("actions", []):
+    command_groups = [
+        (action, "commands") for action in plan.get("actions", []) if isinstance(action, dict)
+    ]
+    command_groups.extend(
+        (action, "safe_commands")
+        for action in plan.get("failure_actions", [])
+        if isinstance(action, dict)
+    )
+    for action, command_key in command_groups:
         if not isinstance(action, dict):
             continue
-        for command in action.get("commands", []):
+        for command in action.get(command_key, []):
             if not isinstance(command, dict):
                 raise AssertionError("autopilot plan command entries must be objects")
             text = str(command.get("command") or "").lower()
@@ -2838,6 +3296,7 @@ def build_autopilot_plan(
     actions: list[dict[str, Any]] = []
     blockers = required_input_blockers(input_pack)
     work_partitions = build_work_partition_recommendations(input_pack, max_items=max_items)
+    failure_actions = build_failure_action_recommendations(input_pack, max_items=max_items)
     if blockers:
         actions.append(
             autopilot_plan_action(
@@ -3129,6 +3588,7 @@ def build_autopilot_plan(
         "input_pack_schema": input_pack.get("schema"),
         "input_pack_status": input_pack.get("status"),
         "work_partitions": bounded(work_partitions, max_items),
+        "failure_actions": bounded(failure_actions, max_items),
         "actions": bounded(ranked_actions, max_items),
         "omitted_actions": [
             omitted_command("destructive cleanup", "planner never recommends destructive git or filesystem cleanup"),
@@ -3940,9 +4400,11 @@ def assert_autopilot_plan_contract(plan: dict[str, Any]) -> None:
         assert key in plan, f"missing top-level autopilot plan key: {key}"
     action_fields = set(contract.get("required_action_fields", []))
     partition_fields = set(contract.get("required_partition_fields", []))
+    failure_action_fields = set(contract.get("required_failure_action_fields", []))
     allowed_actions = set(contract.get("allowed_actions", []))
     allowed_severities = set(contract.get("allowed_severities", []))
     allowed_confidence = set(contract.get("allowed_confidence", []))
+    allowed_failure_categories = set(contract.get("allowed_failure_categories", []))
     partitions = plan.get("work_partitions")
     assert isinstance(partitions, list)
     for partition in partitions:
@@ -3958,6 +4420,25 @@ def assert_autopilot_plan_contract(plan: dict[str, Any]) -> None:
         assert isinstance(partition.get("degraded_caveats"), list)
         evidence_paths = partition.get("evidence_paths")
         assert isinstance(evidence_paths, list) and evidence_paths
+    failure_actions = plan.get("failure_actions")
+    assert isinstance(failure_actions, list)
+    for failure_action in failure_actions:
+        assert isinstance(failure_action, dict)
+        missing = failure_action_fields - set(failure_action)
+        assert not missing, f"autopilot plan failure action missing fields: {sorted(missing)}"
+        assert failure_action.get("category") in allowed_failure_categories
+        assert failure_action.get("match_confidence") in allowed_confidence
+        assert isinstance(failure_action.get("evidence_paths"), list) and failure_action.get(
+            "evidence_paths"
+        )
+        safe_commands = failure_action.get("safe_commands")
+        assert isinstance(safe_commands, list) and safe_commands
+        for command in safe_commands:
+            assert isinstance(command, dict)
+            assert command.get("purpose")
+            assert command.get("command")
+        redaction_summary = failure_action.get("redaction_summary")
+        assert isinstance(redaction_summary, dict)
     actions = plan.get("actions")
     assert isinstance(actions, list) and actions
     ranks = [action.get("rank") for action in actions if isinstance(action, dict)]
@@ -4850,6 +5331,170 @@ def run_self_test() -> int:
             for caveat in mail_unavailable_provider["degraded_caveats"]
         )
         assert_autopilot_plan_contract(mail_unavailable_plan)
+
+        def build_failure_fixture_plan(
+            name: str,
+            *,
+            cargo_payload: dict[str, Any] | None = None,
+            agent_mail_status_payload: dict[str, Any] | None = None,
+            beads_payload: dict[str, Any] | None = None,
+            commands: list[dict[str, Any]] | None = None,
+        ) -> dict[str, Any]:
+            fixture_args = argparse.Namespace(
+                **{
+                    **vars(healthy_args),
+                    "cargo_admission_json": write_json(
+                        workspace / f"{name}-cargo.json",
+                        cargo_payload
+                        or json.loads(cargo_admit_path.read_text(encoding="utf-8")),
+                    ),
+                    "agent_mail_status_json": write_json(
+                        workspace / f"{name}-agent-mail-status.json",
+                        agent_mail_status_payload
+                        or json.loads(agent_mail_ok_path.read_text(encoding="utf-8")),
+                    ),
+                    "beads_json": write_json(
+                        workspace / f"{name}-beads.json",
+                        beads_payload
+                        or json.loads(open_beads_path.read_text(encoding="utf-8")),
+                    ),
+                    "capture_manifest": {
+                        "schema": RUNPACK_CAPTURE_SCHEMA,
+                        "mode": "current",
+                        "status": "degraded" if commands else "ok",
+                        "generated_at": generated_at,
+                        "capture_dir": str(workspace / f"capture-{name}"),
+                        "project_root": str(workspace),
+                        "generated_source_paths": {},
+                        "commands": commands or [],
+                    },
+                }
+            )
+            return build_autopilot_plan(
+                build_autopilot_input_pack(fixture_args),
+                max_items=args.max_items,
+            )
+
+        def require_failure_action(plan: dict[str, Any], action_id: str) -> dict[str, Any]:
+            actions_by_id = {
+                item["id"]: item
+                for item in plan["failure_actions"]
+                if isinstance(item, dict)
+            }
+            assert action_id in actions_by_id, sorted(actions_by_id)
+            action = actions_by_id[action_id]
+            assert action["safe_commands"]
+            assert action["escalation"]
+            assert action["raw_excerpt"]
+            assert_autopilot_plan_contract(plan)
+            return action
+
+        rch_retrieval_plan = build_failure_fixture_plan(
+            "failure-rch-retrieval",
+            commands=[
+                {
+                    "id": "rch_artifact_sync",
+                    "command": "rch exec -- cargo check --all-targets",
+                    "status": "failed",
+                    "exit_code": 1,
+                    "issue": "RCH-E211 artifact retrieval failed: No space left on device while retrieving artifacts",
+                }
+            ],
+        )
+        require_failure_action(
+            rch_retrieval_plan,
+            "FAIL-RCH-ARTIFACT-RETRIEVAL-DISK",
+        )
+
+        local_target_plan = build_failure_fixture_plan(
+            "failure-local-target-disk",
+            cargo_payload={
+                **json.loads(cargo_admit_path.read_text(encoding="utf-8")),
+                "decision": "degraded",
+                "reason": "cargo target/debug failed: No space left on device; set CARGO_TARGET_DIR and TMPDIR",
+            },
+        )
+        require_failure_action(local_target_plan, "FAIL-CARGO-LOCAL-TARGET-DISK")
+
+        remote_compile_plan = build_failure_fixture_plan(
+            "failure-rch-remote-compile",
+            commands=[
+                {
+                    "id": "cargo_check",
+                    "command": "rch exec -- cargo check --all-targets",
+                    "status": "failed",
+                    "exit_code": 101,
+                    "issue": "[RCH] remote vmi123 worker cargo check failed: error[E0308]: mismatched types",
+                }
+            ],
+        )
+        require_failure_action(remote_compile_plan, "FAIL-RCH-REMOTE-COMPILE")
+
+        unknown_rch_plan = build_failure_fixture_plan(
+            "failure-rch-unknown",
+            commands=[
+                {
+                    "id": "rch_unknown",
+                    "command": "rch exec -- cargo test",
+                    "status": "failed",
+                    "exit_code": 1,
+                    "issue": "[RCH] remote worker failed [RCH-E999] token=super-secret-value new failure mode",
+                }
+            ],
+        )
+        unknown_rch_action = require_failure_action(unknown_rch_plan, "FAIL-RCH-UNKNOWN")
+        assert "[REDACTED]" in unknown_rch_action["raw_excerpt"]
+
+        agent_mail_schema_action = require_failure_action(
+            plan,
+            "FAIL-AGENT-MAIL-SCHEMA",
+        )
+        assert "Agent Mail" in agent_mail_schema_action["title"]
+
+        agent_mail_readonly_plan = build_failure_fixture_plan(
+            "failure-agent-mail-readonly",
+            agent_mail_status_payload={
+                "schema": "pi.agent_mail.robot_status.v1",
+                "generated_at": generated_at,
+                "status": "degraded_read_only",
+                "health_level": "yellow",
+                "issue": "archive writes disabled; Agent Mail reservation store is read-only",
+            },
+        )
+        require_failure_action(
+            agent_mail_readonly_plan,
+            "FAIL-AGENT-MAIL-DEGRADED-READONLY",
+        )
+
+        beads_drift_plan = build_failure_fixture_plan(
+            "failure-beads-jsonl-drift",
+            commands=[
+                {
+                    "id": "beads_list",
+                    "command": "br list --json",
+                    "status": "failed",
+                    "exit_code": 1,
+                    "issue": "beads DB warning: JSONL drift detected; run br doctor",
+                }
+            ],
+        )
+        require_failure_action(beads_drift_plan, "FAIL-BEADS-JSONL-DRIFT")
+
+        unknown_plan = build_failure_fixture_plan(
+            "failure-unknown-operational",
+            commands=[
+                {
+                    "id": "opaque_tool",
+                    "command": "opaque tool",
+                    "status": "failed",
+                    "exit_code": 42,
+                    "issue": "opaque operational failure token=super-secret-value with no known signature",
+                }
+            ],
+        )
+        unknown_action = require_failure_action(unknown_plan, "FAIL-UNKNOWN-OPERATIONAL")
+        assert unknown_action["match_confidence"] == "low"
+        assert "[REDACTED]" in unknown_action["raw_excerpt"]
 
         if shutil.which("br") is not None:
             real_beads_workspace = workspace / "real-beads-workspace"

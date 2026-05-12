@@ -206,6 +206,7 @@ The runpack schema is governed by `docs/contracts/swarm-operator-runpack-contrac
 The autopilot input pack schema is governed by `docs/contracts/swarm-autopilot-input-pack-contract.json`. It normalizes source statuses for the dry-run planner, but it is still advisory and never replaces Doctor, Beads, Agent Mail, RCH, git, or the source artifacts themselves.
 The autopilot plan schema is governed by `docs/contracts/swarm-autopilot-plan-contract.json`. It maps the input pack to ordered dry-run actions such as `claim_ready_bead`, `wait_for_rch`, `use_beads_soft_lock`, `reopen_stale_bead_candidate`, `run_docs_only_work`, `capture_handoff`, or `stop_and_surface_blocker`.
 The plan also includes `work_partitions` for ready Beads. Those entries recommend reservation globs, likely collision surfaces to avoid, alternate file families, confidence, and degraded caveats. They are diagnostic only; operators still claim through Beads and reserve through Agent Mail when it is healthy.
+The plan also includes `failure_actions` for common operational blockers. Those entries use stable catalog IDs for RCH artifact retrieval, local Cargo target/TMPDIR pressure, remote compiler failures, Agent Mail schema/read-only degradation, Beads JSONL drift, stale Beads ownership, and unknown operational failures. Unknown entries fail closed with a redacted raw excerpt and safe inspection commands instead of guessing a root cause.
 
 ## Completion Checklist
 
@@ -333,6 +334,32 @@ Autopilot plan evidence:
       "avoid": [],
       "confidence": "high",
       "degraded_caveats": []
+    }
+  ],
+  "failure_actions": [
+    {
+      "id": "FAIL-AGENT-MAIL-SCHEMA",
+      "catalog_schema": "pi.swarm.failure_action_catalog.v1",
+      "category": "agent_mail",
+      "title": "Agent Mail database schema is missing required tables",
+      "match_confidence": "high",
+      "explanation": "Agent Mail coordination cannot be trusted for reservations or inbox state until the mailbox schema is repaired or restored.",
+      "evidence_paths": [
+        "normalized_inputs.agent_mail"
+      ],
+      "matched_source": "agent_mail",
+      "safe_commands": [
+        {
+          "purpose": "Preview Agent Mail repair",
+          "command": "am doctor repair --dry-run"
+        }
+      ],
+      "escalation": "Continue with Beads soft locks until Mail health is green.",
+      "raw_excerpt": "status=degraded issue=database schema missing required tables",
+      "redaction_summary": {
+        "redacted_count": 0,
+        "fields": []
+      }
     }
   ],
   "actions": [

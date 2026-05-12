@@ -10,6 +10,7 @@
     "input_pack_schema",
     "input_pack_status",
     "work_partitions",
+    "failure_actions",
     "actions",
     "omitted_actions",
     "forbidden_actions",
@@ -44,6 +45,27 @@
     "confidence",
     "degraded_caveats",
     "evidence_paths"
+  ],
+  "required_failure_action_fields": [
+    "id",
+    "catalog_schema",
+    "category",
+    "title",
+    "match_confidence",
+    "explanation",
+    "evidence_paths",
+    "matched_source",
+    "safe_commands",
+    "escalation",
+    "raw_excerpt",
+    "redaction_summary"
+  ],
+  "allowed_failure_categories": [
+    "rch",
+    "cargo",
+    "agent_mail",
+    "beads",
+    "unknown"
   ],
   "allowed_statuses": [
     "ready",
@@ -121,6 +143,15 @@
         "work_partitions",
         "required_partition_fields",
         "required_forbidden_actions"
+      ]
+    },
+    {
+      "id": "AUTOPILOT-PLAN-MUST-006",
+      "description": "Operational blockers include bounded failure-action recommendations with stable IDs, safe commands, escalation text, and redacted raw excerpts.",
+      "validated_by": [
+        "failure_actions",
+        "required_failure_action_fields",
+        "allowed_failure_categories"
       ]
     }
   ]
