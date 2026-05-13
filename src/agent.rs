@@ -41,6 +41,7 @@ use crate::models::{
     ModelEntry, ModelRegistry, model_requires_configured_credential, normalize_api_key_opt,
 };
 use crate::provider::{Context, Provider, StreamOptions, ToolDef};
+use crate::semantic_workspace_graph::{ContextBundleItem, SemanticContextBundle};
 use crate::session::{AutosaveFlushTrigger, Session, SessionHandle};
 use crate::tools::{Tool, ToolEffects, ToolOutput, ToolRegistry, ToolUpdate};
 use asupersync::runtime::{Runtime, RuntimeBuilder, RuntimeHandle};
@@ -53,6 +54,7 @@ use futures::future::BoxFuture;
 use futures::stream;
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -73,6 +75,11 @@ const MAX_FOLLOW_UP_QUEUE_SIZE: usize = 100;
 const MAX_AGENT_MESSAGES: usize = 10_000;
 /// Schema identifier for per-turn latency budget breakdowns.
 pub const TURN_LATENCY_BREAKDOWN_SCHEMA_V1: &str = "pi.agent.turn_latency_breakdown.v1";
+const SEMANTIC_CONTEXT_PROMPT_SCHEMA_V1: &str = "pi.semantic_context_prompt.v1";
+const SEMANTIC_CONTEXT_PROVENANCE_SCHEMA_V1: &str = "pi.semantic_context_provenance.v1";
+const SEMANTIC_CONTEXT_CUSTOM_TYPE: &str = "semantic_context_bundle";
+const DEFAULT_SEMANTIC_CONTEXT_PROMPT_MAX_BYTES: u64 = 16 * 1024;
+const DEFAULT_SEMANTIC_CONTEXT_PROMPT_MAX_ITEMS: usize = 16;
 
 fn compatible_tool_parallelism_limit() -> usize {
     static LIMIT: OnceLock<usize> = OnceLock::new();
@@ -552,6 +559,88 @@ impl Default for AgentConfig {
             fail_closed_hooks: false,
         }
     }
+}
+
+/// Opt-in semantic context bundle controls for a single agent session.
+#[derive(Debug, Clone)]
+pub struct SemanticContextBundleInjection {
+    pub enabled: bool,
+    pub bundle: SemanticContextBundle,
+    pub max_prompt_items: usize,
+    pub max_prompt_bytes: u64,
+    pub include_exclusion_summary: bool,
+    pub include_validation_commands: bool,
+}
+
+impl SemanticContextBundleInjection {
+    pub fn enabled(bundle: SemanticContextBundle) -> Self {
+        let max_prompt_items = bundle
+            .budget
+            .max_items
+            .min(DEFAULT_SEMANTIC_CONTEXT_PROMPT_MAX_ITEMS);
+        let max_prompt_bytes = bundle
+            .budget
+            .max_bytes
+            .min(DEFAULT_SEMANTIC_CONTEXT_PROMPT_MAX_BYTES);
+        Self {
+            enabled: true,
+            bundle,
+            max_prompt_items,
+            max_prompt_bytes,
+            include_exclusion_summary: true,
+            include_validation_commands: true,
+        }
+    }
+
+    pub const fn disabled(bundle: SemanticContextBundle) -> Self {
+        Self {
+            enabled: false,
+            bundle,
+            max_prompt_items: DEFAULT_SEMANTIC_CONTEXT_PROMPT_MAX_ITEMS,
+            max_prompt_bytes: DEFAULT_SEMANTIC_CONTEXT_PROMPT_MAX_BYTES,
+            include_exclusion_summary: true,
+            include_validation_commands: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_prompt_budget(mut self, max_items: usize, max_bytes: u64) -> Self {
+        self.max_prompt_items = max_items;
+        self.max_prompt_bytes = max_bytes;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticContextPromptShape {
+    CustomUserMessage,
+    SystemPromptAppend,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedSemanticContextPrompt {
+    prompt: String,
+    revision: String,
+    shape: SemanticContextPromptShape,
+    details: Value,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SemanticContextPromptBudget {
+    max_items: usize,
+    max_bytes: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct SemanticContextPromptStats {
+    selected_items_included: usize,
+    selected_items_omitted: usize,
+    validation_commands_included: usize,
+    validation_commands_omitted: usize,
+    exclusions_included: usize,
+    exclusions_omitted: usize,
+    truncated: bool,
 }
 
 /// Async fetcher for queued messages (steering or follow-up).
@@ -2969,6 +3058,7 @@ pub struct AgentSession {
     model_registry: Option<ModelRegistry>,
     auth_storage: Option<AuthStorage>,
     api_key_override: Option<String>,
+    semantic_context_bundle: Option<SemanticContextBundleInjection>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -6874,6 +6964,7 @@ impl AgentSession {
             model_registry: None,
             auth_storage: None,
             api_key_override: None,
+            semantic_context_bundle: None,
         }
     }
 
@@ -6916,6 +7007,17 @@ impl AgentSession {
 
     pub fn set_api_key_override(&mut self, api_key: Option<String>) {
         self.api_key_override = normalize_api_key_opt(api_key);
+    }
+
+    pub fn set_semantic_context_bundle(
+        &mut self,
+        injection: Option<SemanticContextBundleInjection>,
+    ) {
+        self.semantic_context_bundle = injection;
+    }
+
+    pub const fn semantic_context_bundle(&self) -> Option<&SemanticContextBundleInjection> {
+        self.semantic_context_bundle.as_ref()
     }
 
     pub fn set_queue_modes(&mut self, steering_mode: QueueMode, follow_up_mode: QueueMode) {
@@ -8184,6 +8286,146 @@ impl AgentSession {
         }
     }
 
+    fn prepare_semantic_context_prompt(&self) -> Option<PreparedSemanticContextPrompt> {
+        let injection = self.semantic_context_bundle.as_ref()?;
+        if !injection.enabled {
+            return None;
+        }
+
+        let provider = self.agent.provider();
+        let shape = semantic_context_prompt_shape_for_provider(provider.api());
+        let budget = semantic_context_prompt_budget_for_provider(provider.api(), injection);
+        let revision = semantic_context_bundle_revision(&injection.bundle);
+        let (prompt, stats) =
+            render_semantic_context_prompt(&injection.bundle, injection, budget, &revision);
+        if prompt.trim().is_empty() {
+            tracing::warn!(
+                event = "pi.semantic_context.prompt.skipped",
+                provider = provider.name(),
+                api = provider.api(),
+                model = provider.model_id(),
+                revision = %revision,
+                max_bytes = budget.max_bytes,
+                "semantic context bundle prompt skipped because prompt budget was too small"
+            );
+            return None;
+        }
+
+        tracing::info!(
+            event = "pi.semantic_context.prompt.injected",
+            provider = provider.name(),
+            api = provider.api(),
+            model = provider.model_id(),
+            revision = %revision,
+            shape = ?shape,
+            prompt_bytes = prompt.len(),
+            selected_items = stats.selected_items_included,
+            selected_items_omitted = stats.selected_items_omitted,
+            validation_commands = stats.validation_commands_included,
+            truncated = stats.truncated,
+            "semantic context bundle attached to agent turn"
+        );
+
+        let details = json!({
+            "schema": SEMANTIC_CONTEXT_PROVENANCE_SCHEMA_V1,
+            "bundleSchema": injection.bundle.schema.as_str(),
+            "bundleRevision": revision.as_str(),
+            "provider": {
+                "name": provider.name(),
+                "api": provider.api(),
+                "model": provider.model_id(),
+                "promptShape": shape,
+            },
+            "budget": {
+                "requestedMaxItems": injection.max_prompt_items,
+                "requestedMaxBytes": injection.max_prompt_bytes,
+                "effectiveMaxItems": budget.max_items,
+                "effectiveMaxBytes": budget.max_bytes,
+            },
+            "prompt": {
+                "bytes": prompt.len(),
+                "selectedItemsIncluded": stats.selected_items_included,
+                "selectedItemsOmitted": stats.selected_items_omitted,
+                "validationCommandsIncluded": stats.validation_commands_included,
+                "validationCommandsOmitted": stats.validation_commands_omitted,
+                "exclusionsIncluded": stats.exclusions_included,
+                "exclusionsOmitted": stats.exclusions_omitted,
+                "truncated": stats.truncated,
+            },
+            "bundle": {
+                "selectedItems": injection.bundle.selected_items.len(),
+                "excludedItems": injection.bundle.excluded_items.len(),
+                "staleEvidenceSuppressions": injection.bundle.stale_evidence_suppressions.len(),
+                "estimatedBytes": injection.bundle.estimated_bytes,
+                "estimatedTokens": injection.bundle.estimated_tokens,
+                "redactionStatus": injection.bundle.redaction_summary.overall_status,
+                "inputFingerprintSha256": injection.bundle.invalidation_policy.input_fingerprint_sha256.as_str(),
+                "cacheable": injection.bundle.invalidation_policy.cacheable,
+                "workspaceId": injection.bundle.invalidation_policy.workspace_id.as_str(),
+                "branch": injection.bundle.invalidation_policy.branch.as_deref(),
+                "sessionId": injection.bundle.invalidation_policy.session_id.as_deref(),
+            }
+        });
+
+        Some(PreparedSemanticContextPrompt {
+            prompt,
+            revision,
+            shape,
+            details,
+        })
+    }
+
+    fn semantic_context_prompt_messages(
+        prepared: &PreparedSemanticContextPrompt,
+        timestamp: i64,
+    ) -> Vec<Message> {
+        match prepared.shape {
+            SemanticContextPromptShape::CustomUserMessage => {
+                vec![Message::Custom(CustomMessage {
+                    content: prepared.prompt.clone(),
+                    custom_type: SEMANTIC_CONTEXT_CUSTOM_TYPE.to_string(),
+                    display: true,
+                    details: Some(prepared.details.clone()),
+                    timestamp,
+                })]
+            }
+            SemanticContextPromptShape::SystemPromptAppend => {
+                vec![Message::Custom(CustomMessage {
+                    content: format!(
+                        "Semantic context bundle revision {} attached to system prompt.",
+                        prepared.revision
+                    ),
+                    custom_type: SEMANTIC_CONTEXT_CUSTOM_TYPE.to_string(),
+                    display: false,
+                    details: Some(prepared.details.clone()),
+                    timestamp,
+                })]
+            }
+        }
+    }
+
+    fn semantic_context_system_prompt_for_turn(
+        base_system_prompt: Option<String>,
+        prepared: Option<&PreparedSemanticContextPrompt>,
+    ) -> Option<String> {
+        let Some(prepared) = prepared else {
+            return base_system_prompt;
+        };
+        if !matches!(
+            prepared.shape,
+            SemanticContextPromptShape::SystemPromptAppend
+        ) {
+            return base_system_prompt;
+        }
+
+        let mut prompt = base_system_prompt.unwrap_or_default();
+        if !prompt.is_empty() {
+            prompt.push_str("\n\n");
+        }
+        prompt.push_str(&prepared.prompt);
+        Some(prompt)
+    }
+
     fn split_content_blocks_for_input(blocks: &[ContentBlock]) -> (String, Vec<ImageContent>) {
         let mut text = String::new();
         let mut images = Vec::new();
@@ -8331,8 +8573,22 @@ impl AgentSession {
             }
         }
 
+        let semantic_context = self.prepare_semantic_context_prompt();
+        let semantic_context_messages = semantic_context
+            .as_ref()
+            .map(|prepared| {
+                Self::semantic_context_prompt_messages(prepared, Utc::now().timestamp_millis())
+            })
+            .unwrap_or_default();
         let streaming_guard = AtomicBoolGuard::activate(&self.extensions_is_streaming);
+        let base_system_prompt = self.agent.system_prompt().map(str::to_string);
+        self.agent
+            .set_system_prompt(Self::semantic_context_system_prompt_for_turn(
+                base_system_prompt.clone(),
+                semantic_context.as_ref(),
+            ));
         let on_event_for_run = Arc::clone(&on_event);
+        prompts.extend(semantic_context_messages);
         let result = self
             .agent
             .run_with_messages_with_abort(prompts, abort, move |event| {
@@ -8340,6 +8596,7 @@ impl AgentSession {
             })
             .await;
         drop(streaming_guard);
+        self.agent.set_system_prompt(base_system_prompt);
 
         let persist_result = self
             .persist_new_messages(start_len + 1, result.is_err())
@@ -8381,6 +8638,14 @@ impl AgentSession {
         });
         let mut prompts = Vec::with_capacity(1 + custom_messages.len());
         prompts.push(user_message.clone());
+        let semantic_context = self.prepare_semantic_context_prompt();
+        let semantic_context_messages = semantic_context
+            .as_ref()
+            .map(|prepared| {
+                Self::semantic_context_prompt_messages(prepared, Utc::now().timestamp_millis())
+            })
+            .unwrap_or_default();
+        prompts.extend(semantic_context_messages);
         prompts.extend(custom_messages.into_iter().map(Message::Custom));
 
         {
@@ -8397,6 +8662,12 @@ impl AgentSession {
         }
 
         let streaming_guard = AtomicBoolGuard::activate(&self.extensions_is_streaming);
+        let base_system_prompt = self.agent.system_prompt().map(str::to_string);
+        self.agent
+            .set_system_prompt(Self::semantic_context_system_prompt_for_turn(
+                base_system_prompt.clone(),
+                semantic_context.as_ref(),
+            ));
         let on_event_for_run = Arc::clone(&on_event);
         let result = self
             .agent
@@ -8405,6 +8676,7 @@ impl AgentSession {
             })
             .await;
         drop(streaming_guard);
+        self.agent.set_system_prompt(base_system_prompt);
 
         // Persist any NEW messages (assistant/tools) generated before the agent stopped,
         // even if it stopped due to an error, skipping the user message we already saved.
@@ -8448,6 +8720,14 @@ impl AgentSession {
         });
         let mut prompts = Vec::with_capacity(1 + custom_messages.len());
         prompts.push(user_message.clone());
+        let semantic_context = self.prepare_semantic_context_prompt();
+        let semantic_context_messages = semantic_context
+            .as_ref()
+            .map(|prepared| {
+                Self::semantic_context_prompt_messages(prepared, Utc::now().timestamp_millis())
+            })
+            .unwrap_or_default();
+        prompts.extend(semantic_context_messages);
         prompts.extend(custom_messages.into_iter().map(Message::Custom));
 
         {
@@ -8464,6 +8744,12 @@ impl AgentSession {
         }
 
         let streaming_guard = AtomicBoolGuard::activate(&self.extensions_is_streaming);
+        let base_system_prompt = self.agent.system_prompt().map(str::to_string);
+        self.agent
+            .set_system_prompt(Self::semantic_context_system_prompt_for_turn(
+                base_system_prompt.clone(),
+                semantic_context.as_ref(),
+            ));
         let on_event_for_run = Arc::clone(&on_event);
         let result = self
             .agent
@@ -8472,6 +8758,7 @@ impl AgentSession {
             })
             .await;
         drop(streaming_guard);
+        self.agent.set_system_prompt(base_system_prompt);
 
         // Persist any NEW messages (assistant/tools) generated before the agent stopped,
         // even if it stopped due to an error, skipping the user message we already saved.
@@ -8517,6 +8804,318 @@ fn is_synthetic_empty_error_assistant(message: &Message) -> bool {
                 && matches!(assistant.stop_reason, StopReason::Error)
                 && assistant.error_message.is_some()
     )
+}
+
+fn semantic_context_prompt_shape_for_provider(api: &str) -> SemanticContextPromptShape {
+    match api {
+        "bedrock-converse-stream" | "gitlab-chat" => SemanticContextPromptShape::SystemPromptAppend,
+        _ => SemanticContextPromptShape::CustomUserMessage,
+    }
+}
+
+fn semantic_context_prompt_budget_for_provider(
+    api: &str,
+    injection: &SemanticContextBundleInjection,
+) -> SemanticContextPromptBudget {
+    let provider_max_bytes = match api {
+        "gitlab-chat" => 8 * 1024,
+        "bedrock-converse-stream" | "google-gemini" | "google-vertex" => 12 * 1024,
+        "openai-responses" | "openai-completions" | "azure-openai" => 24 * 1024,
+        "anthropic" => 32 * 1024,
+        _ => DEFAULT_SEMANTIC_CONTEXT_PROMPT_MAX_BYTES,
+    };
+    let provider_max_items = match api {
+        "gitlab-chat" => 8,
+        "bedrock-converse-stream" | "google-gemini" | "google-vertex" => 12,
+        _ => DEFAULT_SEMANTIC_CONTEXT_PROMPT_MAX_ITEMS,
+    };
+
+    SemanticContextPromptBudget {
+        max_items: injection
+            .max_prompt_items
+            .min(injection.bundle.budget.max_items)
+            .min(provider_max_items),
+        max_bytes: injection
+            .max_prompt_bytes
+            .min(injection.bundle.budget.max_bytes)
+            .min(provider_max_bytes),
+    }
+}
+
+fn semantic_context_bundle_revision(bundle: &SemanticContextBundle) -> String {
+    let bytes = serde_json::to_vec(bundle).unwrap_or_else(|_| {
+        format!(
+            "{}:{}:{}:{}",
+            bundle.schema,
+            bundle.invalidation_policy.input_fingerprint_sha256,
+            bundle.selected_items.len(),
+            bundle.estimated_bytes
+        )
+        .into_bytes()
+    });
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn render_semantic_context_prompt(
+    bundle: &SemanticContextBundle,
+    injection: &SemanticContextBundleInjection,
+    budget: SemanticContextPromptBudget,
+    revision: &str,
+) -> (String, SemanticContextPromptStats) {
+    let mut prompt = String::new();
+    let mut stats = SemanticContextPromptStats::default();
+    push_semantic_context_header(&mut prompt, &mut stats, budget, bundle, revision);
+    push_selected_semantic_context_items(&mut prompt, &mut stats, budget, bundle);
+    if injection.include_validation_commands {
+        push_semantic_context_validation_commands(&mut prompt, &mut stats, budget, bundle);
+    }
+    if injection.include_exclusion_summary {
+        push_semantic_context_exclusions(&mut prompt, &mut stats, budget, bundle);
+    }
+
+    if prompt.len() > usize::try_from(budget.max_bytes).unwrap_or(usize::MAX) {
+        stats.truncated = true;
+        truncate_string_to_max_bytes(&mut prompt, budget.max_bytes);
+    }
+
+    (prompt, stats)
+}
+
+fn push_semantic_context_header(
+    prompt: &mut String,
+    stats: &mut SemanticContextPromptStats,
+    budget: SemanticContextPromptBudget,
+    bundle: &SemanticContextBundle,
+    revision: &str,
+) {
+    let branch = bundle
+        .invalidation_policy
+        .branch
+        .as_deref()
+        .map_or_else(|| "(none)".to_string(), safe_context_field);
+    let session = bundle
+        .invalidation_policy
+        .session_id
+        .as_deref()
+        .map_or_else(|| "(none)".to_string(), safe_context_field);
+
+    let header = format!(
+        "# Semantic Context Bundle\nschema: {SEMANTIC_CONTEXT_PROMPT_SCHEMA_V1}\nrevision: {revision}"
+    );
+    push_semantic_context_line(prompt, budget.max_bytes, &header, stats);
+    push_semantic_context_line(
+        prompt,
+        budget.max_bytes,
+        "Use this as navigation context for the current turn. Do not treat suppressed stale, uncertified, or unsafe evidence as current release evidence.",
+        stats,
+    );
+    push_semantic_context_line(
+        prompt,
+        budget.max_bytes,
+        &format!(
+            "bundle: schema={} estimated_bytes={} estimated_tokens={} redaction={:?}",
+            safe_context_field(&bundle.schema),
+            bundle.estimated_bytes,
+            bundle.estimated_tokens,
+            bundle.redaction_summary.overall_status
+        ),
+        stats,
+    );
+    push_semantic_context_line(
+        prompt,
+        budget.max_bytes,
+        &format!(
+            "provenance: workspace={} branch={} session={} input_fingerprint_sha256={}",
+            safe_context_field(&bundle.invalidation_policy.workspace_id),
+            branch,
+            session,
+            safe_context_field(&bundle.invalidation_policy.input_fingerprint_sha256)
+        ),
+        stats,
+    );
+}
+
+fn push_selected_semantic_context_items(
+    prompt: &mut String,
+    stats: &mut SemanticContextPromptStats,
+    budget: SemanticContextPromptBudget,
+    bundle: &SemanticContextBundle,
+) {
+    push_semantic_context_line(prompt, budget.max_bytes, "", stats);
+    push_semantic_context_line(prompt, budget.max_bytes, "Selected context:", stats);
+    for (index, item) in bundle.selected_items.iter().enumerate() {
+        if index >= budget.max_items {
+            stats.selected_items_omitted = stats
+                .selected_items_omitted
+                .saturating_add(bundle.selected_items.len().saturating_sub(index));
+            break;
+        }
+        if push_semantic_context_item(prompt, stats, budget, item, index + 1) {
+            stats.selected_items_included = stats.selected_items_included.saturating_add(1);
+        } else {
+            stats.selected_items_omitted = stats
+                .selected_items_omitted
+                .saturating_add(bundle.selected_items.len().saturating_sub(index));
+            break;
+        }
+    }
+    if bundle.selected_items.is_empty() {
+        push_semantic_context_line(prompt, budget.max_bytes, "- (none)", stats);
+    }
+}
+
+fn push_semantic_context_validation_commands(
+    prompt: &mut String,
+    stats: &mut SemanticContextPromptStats,
+    budget: SemanticContextPromptBudget,
+    bundle: &SemanticContextBundle,
+) {
+    push_semantic_context_line(prompt, budget.max_bytes, "", stats);
+    push_semantic_context_line(
+        prompt,
+        budget.max_bytes,
+        "Suggested validation commands:",
+        stats,
+    );
+    if bundle.suggested_validation_commands.is_empty() {
+        push_semantic_context_line(prompt, budget.max_bytes, "- (none)", stats);
+        return;
+    }
+
+    for (index, command) in bundle.suggested_validation_commands.iter().enumerate() {
+        let line = format!("- {}", safe_context_field(command));
+        if push_semantic_context_line(prompt, budget.max_bytes, &line, stats) {
+            stats.validation_commands_included =
+                stats.validation_commands_included.saturating_add(1);
+        } else {
+            stats.validation_commands_omitted = bundle
+                .suggested_validation_commands
+                .len()
+                .saturating_sub(index);
+            break;
+        }
+    }
+}
+
+fn push_semantic_context_exclusions(
+    prompt: &mut String,
+    stats: &mut SemanticContextPromptStats,
+    budget: SemanticContextPromptBudget,
+    bundle: &SemanticContextBundle,
+) {
+    push_semantic_context_line(prompt, budget.max_bytes, "", stats);
+    push_semantic_context_line(
+        prompt,
+        budget.max_bytes,
+        "Suppressed or excluded context:",
+        stats,
+    );
+    if bundle.stale_evidence_suppressions.is_empty() && bundle.excluded_items.is_empty() {
+        push_semantic_context_line(prompt, budget.max_bytes, "- (none)", stats);
+        return;
+    }
+
+    for (index, item) in bundle
+        .stale_evidence_suppressions
+        .iter()
+        .chain(bundle.excluded_items.iter())
+        .take(8)
+        .enumerate()
+    {
+        let line = format!(
+            "- {:?} {} :: {} reason={}",
+            item.node_type,
+            safe_context_field(&item.source_path),
+            safe_context_field(&item.title),
+            safe_context_field(&item.reason)
+        );
+        if push_semantic_context_line(prompt, budget.max_bytes, &line, stats) {
+            stats.exclusions_included = stats.exclusions_included.saturating_add(1);
+        } else {
+            stats.exclusions_omitted = bundle
+                .stale_evidence_suppressions
+                .len()
+                .saturating_add(bundle.excluded_items.len())
+                .saturating_sub(index);
+            break;
+        }
+    }
+}
+
+fn push_semantic_context_item(
+    prompt: &mut String,
+    stats: &mut SemanticContextPromptStats,
+    budget: SemanticContextPromptBudget,
+    item: &ContextBundleItem,
+    ordinal: usize,
+) -> bool {
+    let freshness = item.freshness_status.map_or_else(
+        || "not_applicable".to_string(),
+        |status| format!("{status:?}"),
+    );
+    let line = format!(
+        "{ordinal}. {:?} {} :: {}",
+        item.node_type,
+        safe_context_field(&item.source_path),
+        safe_context_field(&item.title)
+    );
+    let detail = format!(
+        "   reason={} score={} tokens={} freshness={} redaction={:?}",
+        safe_context_field(&item.reason),
+        item.score,
+        item.estimated_tokens,
+        freshness,
+        item.redaction_status
+    );
+    push_semantic_context_line(prompt, budget.max_bytes, &line, stats)
+        && push_semantic_context_line(prompt, budget.max_bytes, &detail, stats)
+}
+
+fn push_semantic_context_line(
+    prompt: &mut String,
+    max_bytes: u64,
+    line: &str,
+    stats: &mut SemanticContextPromptStats,
+) -> bool {
+    let max_bytes = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+    let required = line.len().saturating_add(1);
+    if prompt.len().saturating_add(required) > max_bytes {
+        stats.truncated = true;
+        return false;
+    }
+    prompt.push_str(line);
+    prompt.push('\n');
+    true
+}
+
+fn truncate_string_to_max_bytes(value: &mut String, max_bytes: u64) {
+    let max_bytes = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+    if value.len() <= max_bytes {
+        return;
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    value.truncate(end);
+}
+
+fn safe_context_field(value: &str) -> String {
+    let mut output = String::with_capacity(value.len().min(512));
+    for ch in value.chars() {
+        if matches!(ch, '\n' | '\r' | '\t') {
+            output.push(' ');
+        } else if ch.is_control() {
+            output.push('?');
+        } else {
+            output.push(ch);
+        }
+        if output.len() >= 512 {
+            output.push_str("...");
+            break;
+        }
+    }
+    output
 }
 
 // ============================================================================
@@ -8671,9 +9270,11 @@ mod tests {
     use asupersync::runtime::RuntimeBuilder;
     use async_trait::async_trait;
     use futures::Stream;
+    use std::collections::BTreeSet;
     use std::collections::HashMap;
     use std::path::Path;
     use std::pin::Pin;
+    use std::sync::{Arc as StdArc, Mutex as StdTestMutex};
 
     fn user_message(text: &str) -> Message {
         Message::User(UserMessage {
@@ -8813,6 +9414,151 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct CapturedProviderContext {
+        system_prompt: Option<String>,
+        messages: Vec<Message>,
+    }
+
+    #[derive(Debug)]
+    struct CapturingProvider {
+        api: &'static str,
+        calls: StdArc<StdTestMutex<Vec<CapturedProviderContext>>>,
+    }
+
+    impl CapturingProvider {
+        fn new(api: &'static str) -> Self {
+            Self {
+                api,
+                calls: StdArc::new(StdTestMutex::new(Vec::new())),
+            }
+        }
+
+        fn calls(&self) -> StdArc<StdTestMutex<Vec<CapturedProviderContext>>> {
+            StdArc::clone(&self.calls)
+        }
+    }
+
+    #[async_trait]
+    #[allow(clippy::unnecessary_literal_bound)]
+    impl Provider for CapturingProvider {
+        fn name(&self) -> &str {
+            "capturing-provider"
+        }
+
+        fn api(&self) -> &str {
+            self.api
+        }
+
+        fn model_id(&self) -> &str {
+            "capture-model"
+        }
+
+        async fn stream(
+            &self,
+            context: &Context<'_>,
+            _options: &StreamOptions,
+        ) -> crate::error::Result<
+            Pin<Box<dyn Stream<Item = crate::error::Result<StreamEvent>> + Send>>,
+        > {
+            self.calls
+                .lock()
+                .expect("capture context lock")
+                .push(CapturedProviderContext {
+                    system_prompt: context.system_prompt.as_ref().map(ToString::to_string),
+                    messages: context.messages.iter().cloned().collect(),
+                });
+            let final_message = assistant_message("captured");
+            Ok(Box::pin(futures::stream::iter(vec![Ok(
+                StreamEvent::Done {
+                    reason: StopReason::Stop,
+                    message: final_message,
+                },
+            )])))
+        }
+    }
+
+    fn sample_semantic_context_bundle() -> SemanticContextBundle {
+        use crate::semantic_workspace_graph::{
+            ContextBundleBudget, ContextBundleExclusion, ContextBundleInvalidationPolicy,
+            ContextRedactionSummary, EvidenceFreshnessStatus, RedactionStatus, SemanticNodeType,
+        };
+
+        SemanticContextBundle {
+            schema: crate::semantic_workspace_graph::SEMANTIC_CONTEXT_BUNDLE_SCHEMA.to_string(),
+            budget: ContextBundleBudget {
+                max_items: 8,
+                max_bytes: 4096,
+            },
+            selected_items: vec![
+                ContextBundleItem {
+                    node_id: "node-session".to_string(),
+                    node_type: SemanticNodeType::CodeSymbol,
+                    source_path: "src/agent.rs".to_string(),
+                    title: "AgentSession::run_agent_with_text".to_string(),
+                    reason: "query_match,related_to_bead_or_changed_path".to_string(),
+                    score: 420,
+                    estimated_bytes: 700,
+                    estimated_tokens: 175,
+                    freshness_status: None,
+                    redaction_status: RedactionStatus::None,
+                },
+                ContextBundleItem {
+                    node_id: "node-test".to_string(),
+                    node_type: SemanticNodeType::TestCase,
+                    source_path: "tests/agent_loop_reliability.rs".to_string(),
+                    title: "semantic context session coverage".to_string(),
+                    reason: "validation_context".to_string(),
+                    score: 300,
+                    estimated_bytes: 400,
+                    estimated_tokens: 100,
+                    freshness_status: Some(EvidenceFreshnessStatus::Current),
+                    redaction_status: RedactionStatus::Redacted,
+                },
+            ],
+            excluded_items: vec![ContextBundleExclusion {
+                node_id: "stale-doc".to_string(),
+                node_type: SemanticNodeType::DocSection,
+                source_path: "README.md".to_string(),
+                title: "obsolete drop-in claim".to_string(),
+                reason: "suppressed_stale_or_unsafe_evidence".to_string(),
+                score: 250,
+                estimated_bytes: 300,
+                freshness_status: Some(EvidenceFreshnessStatus::Uncertified),
+                redaction_status: RedactionStatus::SensitiveOmitted,
+            }],
+            stale_evidence_suppressions: Vec::new(),
+            redaction_summary: ContextRedactionSummary {
+                policy_version: "test-policy".to_string(),
+                overall_status: RedactionStatus::Redacted,
+                selected_redacted_nodes: 1,
+                selected_sensitive_omissions: 0,
+                suppressed_unsafe_nodes: 0,
+                redacted_metadata_keys: BTreeSet::from(["api_key".to_string()]),
+                sensitive_path_kinds: BTreeSet::new(),
+            },
+            invalidation_policy: ContextBundleInvalidationPolicy {
+                policy_version: "test-policy".to_string(),
+                workspace_id: "workspace:test".to_string(),
+                branch: Some("main".to_string()),
+                session_id: Some("session-123".to_string()),
+                input_fingerprint_sha256: "abc123".repeat(10),
+                cache_ttl_seconds: 900,
+                generated_at_utc: Some("2026-05-13T00:00:00Z".to_string()),
+                expires_at_utc: Some("2026-05-13T00:15:00Z".to_string()),
+                invalidates_on: vec!["input_fingerprint_change".to_string()],
+                cacheable: true,
+            },
+            path_normalization: Vec::new(),
+            suggested_validation_commands: vec![
+                "cargo test agent_semantic_context".to_string(),
+                "cargo check --all-targets".to_string(),
+            ],
+            estimated_bytes: 1100,
+            estimated_tokens: 275,
+        }
+    }
+
     #[test]
     fn delta_without_start_does_not_mutate_previous_message() {
         let runtime = RuntimeBuilder::current_thread()
@@ -8852,6 +9598,205 @@ mod tests {
                 assistant_texts.as_slice(),
                 ["prev".to_string(), "hello".to_string()]
             );
+        });
+    }
+
+    #[test]
+    fn semantic_context_bundle_injection_is_disabled_by_default() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let provider = CapturingProvider::new("openai-responses");
+            let calls = provider.calls();
+            let agent = Agent::new(
+                Arc::new(provider),
+                ToolRegistry::from_tools(Vec::new()),
+                AgentConfig::default(),
+            );
+            let session = Arc::new(Mutex::new(Session::in_memory()));
+            let mut agent_session =
+                AgentSession::new(agent, session, false, ResolvedCompactionSettings::default());
+
+            agent_session
+                .run_text("hello".to_string(), |_| {})
+                .await
+                .expect("run with default context settings");
+
+            let calls = match calls.lock() {
+                Ok(calls) => calls,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].messages.len(), 1);
+            assert_user_text(&calls[0].messages[0], "hello");
+            assert!(calls[0].system_prompt.is_none());
+            drop(calls);
+        });
+    }
+
+    #[test]
+    fn semantic_context_bundle_injection_adds_bounded_custom_message_and_session_provenance() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let bundle = sample_semantic_context_bundle();
+            let revision = semantic_context_bundle_revision(&bundle);
+            let provider = CapturingProvider::new("openai-responses");
+            let calls = provider.calls();
+            let agent = Agent::new(
+                Arc::new(provider),
+                ToolRegistry::from_tools(Vec::new()),
+                AgentConfig::default(),
+            );
+            let session = Arc::new(Mutex::new(Session::in_memory()));
+            let mut agent_session = AgentSession::new(
+                agent,
+                Arc::clone(&session),
+                false,
+                ResolvedCompactionSettings::default(),
+            );
+            agent_session.set_semantic_context_bundle(Some(
+                SemanticContextBundleInjection::enabled(bundle).with_prompt_budget(4, 2048),
+            ));
+
+            agent_session
+                .run_text("use context".to_string(), |_| {})
+                .await
+                .expect("run with context bundle");
+
+            {
+                let calls = match calls.lock() {
+                    Ok(calls) => calls,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].messages.len(), 2);
+                assert_user_text(&calls[0].messages[0], "use context");
+                let custom = match &calls[0].messages[1] {
+                    Message::Custom(custom) => custom,
+                    other => {
+                        assert!(
+                            matches!(other, Message::Custom(_)),
+                            "expected custom semantic context message"
+                        );
+                        return;
+                    }
+                };
+                assert_eq!(custom.custom_type, SEMANTIC_CONTEXT_CUSTOM_TYPE);
+                assert!(custom.display);
+                assert!(custom.content.len() <= 2048);
+                assert!(custom.content.contains("Semantic Context Bundle"));
+                assert!(custom.content.contains("src/agent.rs"));
+                let details = custom.details.as_ref().expect("context provenance");
+                assert_eq!(
+                    details.get("bundleRevision").and_then(Value::as_str),
+                    Some(revision.as_str())
+                );
+                assert_eq!(
+                    details
+                        .pointer("/provider/promptShape")
+                        .and_then(Value::as_str),
+                    Some("custom_user_message")
+                );
+                drop(calls);
+            }
+
+            let cx = crate::agent_cx::AgentCx::for_request();
+            let stored = session
+                .lock(cx.cx())
+                .await
+                .expect("session lock")
+                .to_messages_for_current_path();
+            assert!(
+                stored.iter().any(|message| matches!(
+                    message,
+                    Message::Custom(CustomMessage { custom_type, details, display: true, .. })
+                        if custom_type == SEMANTIC_CONTEXT_CUSTOM_TYPE
+                            && details
+                                .as_ref()
+                                .and_then(|value| value.get("bundleRevision"))
+                                .and_then(Value::as_str)
+                                == Some(revision.as_str())
+                )),
+                "semantic context provenance was not persisted in session messages: {stored:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn semantic_context_bundle_uses_system_prompt_append_for_providers_without_custom_context() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let bundle = sample_semantic_context_bundle();
+            let revision = semantic_context_bundle_revision(&bundle);
+            let provider = CapturingProvider::new("gitlab-chat");
+            let calls = provider.calls();
+            let agent = Agent::new(
+                Arc::new(provider),
+                ToolRegistry::from_tools(Vec::new()),
+                AgentConfig {
+                    system_prompt: Some("base prompt".to_string()),
+                    ..AgentConfig::default()
+                },
+            );
+            let session = Arc::new(Mutex::new(Session::in_memory()));
+            let mut agent_session = AgentSession::new(
+                agent,
+                Arc::clone(&session),
+                false,
+                ResolvedCompactionSettings::default(),
+            );
+            agent_session.set_semantic_context_bundle(Some(
+                SemanticContextBundleInjection::enabled(bundle).with_prompt_budget(4, 2048),
+            ));
+
+            agent_session
+                .run_text("gitlab turn".to_string(), |_| {})
+                .await
+                .expect("run with system prompt context");
+
+            {
+                let calls = match calls.lock() {
+                    Ok(calls) => calls,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].messages.len(), 1);
+                assert_user_text(&calls[0].messages[0], "gitlab turn");
+                let system_prompt = calls[0].system_prompt.as_deref().expect("system prompt");
+                assert!(system_prompt.contains("base prompt"));
+                assert!(system_prompt.contains("Semantic Context Bundle"));
+                assert!(system_prompt.contains("src/agent.rs"));
+                drop(calls);
+            }
+
+            let cx = crate::agent_cx::AgentCx::for_request();
+            let stored = session
+                .lock(cx.cx())
+                .await
+                .expect("session lock")
+                .to_messages_for_current_path();
+            assert!(
+                stored.iter().any(|message| matches!(
+                    message,
+                    Message::Custom(CustomMessage { custom_type, details, display: false, .. })
+                        if custom_type == SEMANTIC_CONTEXT_CUSTOM_TYPE
+                            && details
+                                .as_ref()
+                                .and_then(|value| value.get("bundleRevision"))
+                                .and_then(Value::as_str)
+                                == Some(revision.as_str())
+                )),
+                "hidden semantic context provenance was not persisted in session messages: {stored:?}"
+            );
+            assert_eq!(agent_session.agent.system_prompt(), Some("base prompt"));
         });
     }
 
