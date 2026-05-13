@@ -302,6 +302,24 @@ fn command_value(command: Option<&Commands>) -> Value {
         Some(Commands::UpdateIndex) => json!({
             "name": "update-index",
         }),
+        Some(Commands::ContextPreview {
+            format,
+            bead,
+            changed_paths,
+            failing_command,
+            max_items,
+            max_bytes,
+            query,
+        }) => json!({
+            "name": "context-preview",
+            "format": format,
+            "bead": bead,
+            "changed_paths": changed_paths,
+            "failing_command": failing_command,
+            "max_items": max_items,
+            "max_bytes": max_bytes,
+            "query": query,
+        }),
         Some(Commands::List) => json!({
             "name": "list",
         }),

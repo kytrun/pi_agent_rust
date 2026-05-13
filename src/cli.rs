@@ -33,6 +33,7 @@ const ROOT_SUBCOMMANDS: &[&str] = &[
     "remove",
     "update",
     "update-index",
+    "context-preview",
     "search",
     "info",
     "list",
@@ -1757,6 +1758,32 @@ pub enum Commands {
     /// Refresh extension index cache from remote sources
     #[command(name = "update-index")]
     UpdateIndex,
+
+    /// Preview the semantic context bundle Pi would use for a task
+    #[command(name = "context-preview")]
+    ContextPreview {
+        /// Output format: text (default) or json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        format: String,
+        /// Bead ID to anchor the preview around
+        #[arg(long)]
+        bead: Option<String>,
+        /// Changed path to anchor related context; repeatable
+        #[arg(long = "changed-path", action = clap::ArgAction::Append)]
+        changed_paths: Vec<String>,
+        /// Failing command to match validation context
+        #[arg(long = "failing-command")]
+        failing_command: Option<String>,
+        /// Maximum selected bundle items
+        #[arg(long, default_value_t = 24)]
+        max_items: usize,
+        /// Maximum selected bundle bytes
+        #[arg(long, default_value_t = 32 * 1024)]
+        max_bytes: u64,
+        /// Task query text used to score candidate context
+        #[arg(trailing_var_arg = true)]
+        query: Vec<String>,
+    },
 
     /// Show detailed information about an extension
     Info {

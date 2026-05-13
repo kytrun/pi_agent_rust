@@ -63,6 +63,7 @@ const EXIT_CODE_USAGE: i32 = 2;
 const USAGE_ERROR_PATTERNS: &[&str] = &[
     "@file arguments are not supported in rpc mode",
     "--api-key requires a model to be specified via --provider/--model or --models",
+    "context-preview requires",
     "unknown --only categories",
     "--only must include at least one category",
     "theme file not found",
@@ -287,6 +288,27 @@ fn main_impl() -> Result<()> {
             cli::Commands::Update { source } => {
                 let manager = PackageManager::new(cwd);
                 handle_package_update_blocking(&manager, source.as_deref())?;
+                return Ok(());
+            }
+            cli::Commands::ContextPreview {
+                format,
+                bead,
+                changed_paths,
+                failing_command,
+                max_items,
+                max_bytes,
+                query,
+            } => {
+                handle_context_preview_blocking(
+                    &cwd,
+                    format,
+                    bead.as_deref(),
+                    changed_paths,
+                    failing_command.as_deref(),
+                    *max_items,
+                    *max_bytes,
+                    query,
+                )?;
                 return Ok(());
             }
             cli::Commands::List => {
@@ -1672,6 +1694,26 @@ async fn handle_subcommand(command: cli::Commands, cwd: &Path) -> Result<()> {
         cli::Commands::UpdateIndex => {
             handle_update_index().await?;
         }
+        cli::Commands::ContextPreview {
+            format,
+            bead,
+            changed_paths,
+            failing_command,
+            max_items,
+            max_bytes,
+            query,
+        } => {
+            handle_context_preview_blocking(
+                cwd,
+                &format,
+                bead.as_deref(),
+                &changed_paths,
+                failing_command.as_deref(),
+                max_items,
+                max_bytes,
+                &query,
+            )?;
+        }
         cli::Commands::Search {
             query,
             tag,
@@ -1711,6 +1753,293 @@ async fn handle_subcommand(command: cli::Commands, cwd: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct ContextPreviewReport<'a> {
+    schema: &'static str,
+    generated_at_utc: String,
+    command: ContextPreviewCommandProvenance,
+    graph: ContextPreviewGraphSummary,
+    request: &'a pi::semantic_workspace_graph::ContextBundleRequest,
+    bundle: &'a pi::semantic_workspace_graph::SemanticContextBundle,
+}
+
+#[derive(Debug, Serialize)]
+struct ContextPreviewCommandProvenance {
+    invocation: &'static str,
+    cwd: String,
+    read_only: bool,
+    provider_calls: u8,
+    writes: u8,
+}
+
+#[derive(Debug, Serialize)]
+struct ContextPreviewGraphSummary {
+    root: String,
+    nodes: usize,
+    edges: usize,
+    input_fingerprints: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_context_preview_blocking(
+    cwd: &Path,
+    format: &str,
+    bead: Option<&str>,
+    changed_paths: &[String],
+    failing_command: Option<&str>,
+    max_items: usize,
+    max_bytes: u64,
+    query: &[String],
+) -> Result<()> {
+    let query = non_empty_string(&query.join(" "));
+    let bead_id = bead.and_then(non_empty_string);
+    let failing_command = failing_command.and_then(non_empty_string);
+    let changed_paths: Vec<String> = changed_paths
+        .iter()
+        .filter_map(|path| non_empty_string(path))
+        .collect();
+
+    if query.is_none() && bead_id.is_none() && changed_paths.is_empty() && failing_command.is_none()
+    {
+        bail!(
+            "context-preview requires at least one context signal: query text, --bead, --changed-path, or --failing-command"
+        );
+    }
+
+    let graph = pi::semantic_workspace_graph::SemanticWorkspaceGraphBuilder::new(cwd).build()?;
+    let generated_at_utc = chrono::Utc::now().to_rfc3339();
+    let request = pi::semantic_workspace_graph::ContextBundleRequest {
+        query,
+        bead_id,
+        changed_paths,
+        failing_command,
+        workspace_id: Some(context_preview_workspace_id(cwd)),
+        branch: context_preview_git_branch(cwd),
+        session_id: None,
+        generated_at_utc: Some(generated_at_utc.clone()),
+        cache_ttl_seconds: 15 * 60,
+        budget: pi::semantic_workspace_graph::ContextBundleBudget {
+            max_items,
+            max_bytes,
+        },
+    };
+    let planner = pi::semantic_workspace_graph::SemanticContextBundlePlanner::new(&graph);
+    let bundle = planner.plan(&request);
+    let report = ContextPreviewReport {
+        schema: "pi.context_bundle_preview.v1",
+        generated_at_utc,
+        command: ContextPreviewCommandProvenance {
+            invocation: "pi context-preview",
+            cwd: normalize_display_path(cwd),
+            read_only: true,
+            provider_calls: 0,
+            writes: 0,
+        },
+        graph: ContextPreviewGraphSummary {
+            root: graph.root.clone(),
+            nodes: graph.nodes.len(),
+            edges: graph.edges.len(),
+            input_fingerprints: graph.input_fingerprints.len(),
+        },
+        request: &request,
+        bundle: &bundle,
+    };
+
+    match format {
+        "json" => {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        "text" => print_context_preview_text(&report),
+        other => bail!("unsupported context-preview format: {other}"),
+    }
+
+    Ok(())
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn context_preview_workspace_id(cwd: &Path) -> String {
+    format!("workspace:{}", normalize_display_path(cwd))
+}
+
+fn context_preview_git_branch(cwd: &Path) -> Option<String> {
+    let head_path = context_preview_git_head_path(cwd)?;
+    let head = fs::read_to_string(head_path).ok()?;
+    let head = head.trim();
+    head.strip_prefix("ref: refs/heads/").map_or_else(
+        || {
+            head.get(..12.min(head.len()))
+                .and_then(|short| non_empty_string(&format!("detached:{short}")))
+        },
+        non_empty_string,
+    )
+}
+
+fn context_preview_git_head_path(cwd: &Path) -> Option<PathBuf> {
+    let dot_git = cwd.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git.join("HEAD"));
+    }
+    let git_file = fs::read_to_string(&dot_git).ok()?;
+    let git_dir = git_file
+        .trim()
+        .strip_prefix("gitdir:")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let git_dir = PathBuf::from(git_dir);
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        cwd.join(git_dir)
+    };
+    Some(git_dir.join("HEAD"))
+}
+
+fn print_context_preview_text(report: &ContextPreviewReport<'_>) {
+    let bundle = report.bundle;
+    println!("Context Bundle Preview");
+    println!("schema: {}", report.schema);
+    println!("read_only: true");
+    println!("provider_calls: 0");
+    println!("writes: 0");
+    println!(
+        "graph: {} nodes, {} edges, {} inputs",
+        report.graph.nodes, report.graph.edges, report.graph.input_fingerprints
+    );
+    println!(
+        "selected: {}  excluded: {}  stale_suppressions: {}",
+        bundle.selected_items.len(),
+        bundle.excluded_items.len(),
+        bundle.stale_evidence_suppressions.len()
+    );
+    println!(
+        "estimated: {} bytes / {} tokens",
+        bundle.estimated_bytes, bundle.estimated_tokens
+    );
+    println!(
+        "redaction: {:?}  selected_redacted={}  unsafe_suppressed={}",
+        bundle.redaction_summary.overall_status,
+        bundle.redaction_summary.selected_redacted_nodes,
+        bundle.redaction_summary.suppressed_unsafe_nodes
+    );
+    println!(
+        "cache: cacheable={} ttl_seconds={} expires_at={}",
+        bundle.invalidation_policy.cacheable,
+        bundle.invalidation_policy.cache_ttl_seconds,
+        bundle
+            .invalidation_policy
+            .expires_at_utc
+            .as_deref()
+            .unwrap_or("(none)")
+    );
+
+    if !bundle.path_normalization.is_empty() {
+        println!();
+        println!("Changed Paths");
+        for path in &bundle.path_normalization {
+            let normalized = path.normalized_path.as_deref().unwrap_or("(rejected)");
+            println!(
+                "- {} -> {} [{}]",
+                terminal_safe(&path.raw_path),
+                terminal_safe(normalized),
+                terminal_safe(&path.reason)
+            );
+        }
+    }
+
+    println!();
+    println!("Selected Items");
+    if bundle.selected_items.is_empty() {
+        println!("- (none)");
+    } else {
+        for item in &bundle.selected_items {
+            println!(
+                "- {} {} score={} reason={}",
+                terminal_safe(&item.source_path),
+                terminal_safe(&item.title),
+                item.score,
+                terminal_safe(&item.reason)
+            );
+        }
+    }
+
+    println!();
+    println!("Excluded Items");
+    if bundle.excluded_items.is_empty() {
+        println!("- (none)");
+    } else {
+        for item in bundle.excluded_items.iter().take(12) {
+            println!(
+                "- {} {} reason={}",
+                terminal_safe(&item.source_path),
+                terminal_safe(&item.title),
+                terminal_safe(&item.reason)
+            );
+        }
+        if bundle.excluded_items.len() > 12 {
+            println!("- ... {} more", bundle.excluded_items.len() - 12);
+        }
+    }
+
+    print_context_preview_stale_suppressions(&bundle.stale_evidence_suppressions);
+
+    println!();
+    println!("Suggested Validation Commands");
+    if bundle.suggested_validation_commands.is_empty() {
+        println!("- (none)");
+    } else {
+        for command in &bundle.suggested_validation_commands {
+            println!("- {}", terminal_safe(command));
+        }
+    }
+}
+
+fn print_context_preview_stale_suppressions(
+    suppressions: &[pi::semantic_workspace_graph::ContextBundleExclusion],
+) {
+    println!();
+    println!("Stale Evidence Suppressions");
+    if suppressions.is_empty() {
+        println!("- (none)");
+        return;
+    }
+
+    for item in suppressions {
+        println!(
+            "- {} {} reason={} freshness={}",
+            terminal_safe(&item.source_path),
+            terminal_safe(&item.title),
+            terminal_safe(&item.reason),
+            item.freshness_status
+                .map_or_else(|| "unknown".to_string(), |status| format!("{status:?}"))
+        );
+    }
+}
+
+fn terminal_safe(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '\n' | '\r' | '\t') {
+            output.push(' ');
+        } else if ch.is_control() {
+            output.push('?');
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+fn normalize_display_path(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
 }
 
 fn spawn_session_index_maintenance() {
