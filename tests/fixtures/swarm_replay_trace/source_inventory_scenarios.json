@@ -1,0 +1,399 @@
+{
+  "schema": "pi.swarm.replay_trace.fixture_suite.v1",
+  "contract_schema": "pi.swarm.replay_trace_contract.v1",
+  "trace_schema": "pi.swarm.replay_trace.v1",
+  "fixture_suite_id": "swarm-replay-source-inventory-scenarios",
+  "scenarios": [
+    {
+      "scenario_id": "agent-mail-unavailable-keeps-beads-rch-doctor-usable",
+      "description": "Agent Mail schema is unavailable, but Beads, RCH, Doctor, git, and validation evidence remain usable. The trace records the outage explicitly and keeps replay advisory.",
+      "source_statuses": [
+        {
+          "source_id": "agent_mail_archive",
+          "status": "unavailable",
+          "uncertainty_state": "unavailable_source",
+          "path": "/home/ubuntu/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3",
+          "sha256": null,
+          "diagnostic": "sqlite schema missing required health_check tables: projects, agents, messages, message_recipients"
+        },
+        {
+          "source_id": "beads_jsonl",
+          "status": "usable",
+          "uncertainty_state": "observed",
+          "path": ".beads/issues.jsonl",
+          "sha256": "fixture-beads-sha256",
+          "diagnostic": null
+        },
+        {
+          "source_id": "rch_queue_status",
+          "status": "usable",
+          "uncertainty_state": "observed",
+          "path": "fixture/rch-status.json",
+          "sha256": "fixture-rch-sha256",
+          "diagnostic": null
+        },
+        {
+          "source_id": "doctor_swarm_diagnostics",
+          "status": "usable",
+          "uncertainty_state": "observed",
+          "path": "fixture/doctor-swarm.json",
+          "sha256": "fixture-doctor-sha256",
+          "diagnostic": null
+        }
+      ],
+      "trace": {
+        "schema": "pi.swarm.replay_trace.v1",
+        "trace_id": "fixture-agent-mail-unavailable",
+        "generated_at": "2026-05-13T17:30:00Z",
+        "workspace": {
+          "repo": "pi_agent_rust",
+          "root": "/data/projects/pi_agent_rust",
+          "git_commit": "fixture"
+        },
+        "sources": [
+          {
+            "source_id": "agent_mail_archive",
+            "status": "unavailable",
+            "path": "/home/ubuntu/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3",
+            "sha256": null
+          },
+          {
+            "source_id": "beads_jsonl",
+            "status": "usable",
+            "path": ".beads/issues.jsonl",
+            "sha256": "fixture-beads-sha256"
+          },
+          {
+            "source_id": "rch_queue_status",
+            "status": "usable",
+            "path": "fixture/rch-status.json",
+            "sha256": "fixture-rch-sha256"
+          },
+          {
+            "source_id": "doctor_swarm_diagnostics",
+            "status": "usable",
+            "path": "fixture/doctor-swarm.json",
+            "sha256": "fixture-doctor-sha256"
+          }
+        ],
+        "events": [
+          {
+            "event_id": "evt-0001-agent-mail-unavailable",
+            "event_kind": "source_unavailable",
+            "occurred_at": "2026-05-13T17:30:00Z",
+            "logical_clock": 1,
+            "source_id": "agent_mail_archive",
+            "source_path": "/home/ubuntu/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3",
+            "source_hash": null,
+            "provenance": {
+              "source_id": "agent_mail_archive",
+              "path": "/home/ubuntu/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3",
+              "sha256": null,
+              "captured_at": "2026-05-13T17:30:00Z",
+              "generated_at": "2026-05-13T17:30:00Z",
+              "command": "mcp_agent_mail.health_check",
+              "git_commit": "fixture",
+              "workspace_root": "/data/projects/pi_agent_rust"
+            },
+            "redaction": {
+              "state": "sensitive_omitted",
+              "summary": "database path retained; no message bodies or registration tokens emitted",
+              "redacted_fields": [
+                "message_bodies",
+                "registration_tokens"
+              ],
+              "secret_classes_removed": [
+                "registration_token"
+              ],
+              "raw_secret_bytes_emitted": 0
+            },
+            "uncertainty": {
+              "state": "unavailable_source",
+              "reason": "agent_mail_schema_missing",
+              "confidence": 1.0,
+              "missing_inputs": [
+                "projects",
+                "agents",
+                "messages",
+                "message_recipients"
+              ]
+            },
+            "payload": {
+              "health_level": "red",
+              "replay_effect": "continue_without_agent_mail_coordination_events"
+            }
+          },
+          {
+            "event_id": "evt-0002-bead-open",
+            "event_kind": "bead_lifecycle",
+            "occurred_at": "2026-05-13T17:31:00Z",
+            "logical_clock": 2,
+            "source_id": "beads_jsonl",
+            "source_path": ".beads/issues.jsonl",
+            "source_hash": "fixture-beads-sha256",
+            "provenance": {
+              "source_id": "beads_jsonl",
+              "path": ".beads/issues.jsonl",
+              "sha256": "fixture-beads-sha256",
+              "captured_at": "2026-05-13T17:31:00Z",
+              "generated_at": "2026-05-13T17:31:00Z",
+              "command": "br ready --json",
+              "git_commit": "fixture",
+              "workspace_root": "/data/projects/pi_agent_rust"
+            },
+            "redaction": {
+              "state": "none",
+              "summary": "bead metadata contains no secret-class fields",
+              "redacted_fields": [],
+              "secret_classes_removed": [],
+              "raw_secret_bytes_emitted": 0
+            },
+            "uncertainty": {
+              "state": "observed",
+              "reason": "beads_jsonl_available",
+              "confidence": 1.0,
+              "missing_inputs": []
+            },
+            "payload": {
+              "bead_id": "bd-in57w.1",
+              "status": "open",
+              "priority": 3
+            }
+          },
+          {
+            "event_id": "evt-0003-rch-queue",
+            "event_kind": "rch_job_state",
+            "occurred_at": "2026-05-13T17:32:00Z",
+            "logical_clock": 3,
+            "source_id": "rch_queue_status",
+            "source_path": "fixture/rch-status.json",
+            "source_hash": "fixture-rch-sha256",
+            "provenance": {
+              "source_id": "rch_queue_status",
+              "path": "fixture/rch-status.json",
+              "sha256": "fixture-rch-sha256",
+              "captured_at": "2026-05-13T17:32:00Z",
+              "generated_at": "2026-05-13T17:32:00Z",
+              "command": "rch status --json",
+              "git_commit": "fixture",
+              "workspace_root": "/data/projects/pi_agent_rust"
+            },
+            "redaction": {
+              "state": "redacted",
+              "summary": "worker host identifiers omitted",
+              "redacted_fields": [
+                "worker_host"
+              ],
+              "secret_classes_removed": [],
+              "raw_secret_bytes_emitted": 0
+            },
+            "uncertainty": {
+              "state": "observed",
+              "reason": "rch_status_available",
+              "confidence": 0.95,
+              "missing_inputs": []
+            },
+            "payload": {
+              "queue_depth": 1,
+              "admission": "allow"
+            }
+          },
+          {
+            "event_id": "evt-0004-doctor",
+            "event_kind": "doctor_finding",
+            "occurred_at": "2026-05-13T17:33:00Z",
+            "logical_clock": 4,
+            "source_id": "doctor_swarm_diagnostics",
+            "source_path": "fixture/doctor-swarm.json",
+            "source_hash": "fixture-doctor-sha256",
+            "provenance": {
+              "source_id": "doctor_swarm_diagnostics",
+              "path": "fixture/doctor-swarm.json",
+              "sha256": "fixture-doctor-sha256",
+              "captured_at": "2026-05-13T17:33:00Z",
+              "generated_at": "2026-05-13T17:33:00Z",
+              "command": "pi doctor --only swarm --format json",
+              "git_commit": "fixture",
+              "workspace_root": "/data/projects/pi_agent_rust"
+            },
+            "redaction": {
+              "state": "redacted",
+              "summary": "absolute temp paths retained, host-specific detail summarized",
+              "redacted_fields": [
+                "hostname"
+              ],
+              "secret_classes_removed": [],
+              "raw_secret_bytes_emitted": 0
+            },
+            "uncertainty": {
+              "state": "observed",
+              "reason": "doctor_swarm_available",
+              "confidence": 1.0,
+              "missing_inputs": []
+            },
+            "payload": {
+              "finding_id": "tmpdir_headroom",
+              "severity": "pass"
+            }
+          }
+        ],
+        "ordering": {
+          "logical_clock_monotonic": true,
+          "tie_breakers": [
+            "occurred_at",
+            "source_id",
+            "source_sequence",
+            "event_id"
+          ]
+        },
+        "redaction_summary": {
+          "redacted_count": 3,
+          "raw_secret_bytes_emitted": 0
+        },
+        "diagnostics": [
+          {
+            "diagnostic_id": "agent_mail_unavailable",
+            "severity": "degraded",
+            "message": "Agent Mail archive unavailable; replay continues from Beads/RCH/Doctor sources"
+          }
+        ],
+        "invariants": [
+          "agent_mail_unavailable_does_not_block_beads_rch_doctor_replay",
+          "unavailable_sources_emit_source_unavailable_events",
+          "raw_secret_bytes_emitted_is_zero"
+        ]
+      },
+      "expected": {
+        "trace_status": "degraded_not_blocked",
+        "usable_sources": [
+          "beads_jsonl",
+          "rch_queue_status",
+          "doctor_swarm_diagnostics"
+        ],
+        "required_event_kinds": [
+          "source_unavailable",
+          "bead_lifecycle",
+          "rch_job_state",
+          "doctor_finding"
+        ],
+        "silently_dropped_events_allowed": false
+      }
+    },
+    {
+      "scenario_id": "malformed-rch-snapshot-fails-closed",
+      "description": "A malformed RCH status snapshot is recorded as an explicit source_malformed event and suppresses queue-depth claims instead of being ignored.",
+      "source_statuses": [
+        {
+          "source_id": "rch_queue_status",
+          "status": "malformed",
+          "uncertainty_state": "malformed_source",
+          "path": "fixture/rch-status-malformed.json",
+          "sha256": "fixture-rch-malformed-sha256",
+          "diagnostic": "missing queue_depth and worker status fields"
+        }
+      ],
+      "trace": {
+        "schema": "pi.swarm.replay_trace.v1",
+        "trace_id": "fixture-malformed-rch-snapshot",
+        "generated_at": "2026-05-13T17:40:00Z",
+        "workspace": {
+          "repo": "pi_agent_rust",
+          "root": "/data/projects/pi_agent_rust",
+          "git_commit": "fixture"
+        },
+        "sources": [
+          {
+            "source_id": "rch_queue_status",
+            "status": "malformed",
+            "path": "fixture/rch-status-malformed.json",
+            "sha256": "fixture-rch-malformed-sha256"
+          }
+        ],
+        "events": [
+          {
+            "event_id": "evt-1001-rch-malformed",
+            "event_kind": "source_malformed",
+            "occurred_at": "2026-05-13T17:40:00Z",
+            "logical_clock": 1,
+            "source_id": "rch_queue_status",
+            "source_path": "fixture/rch-status-malformed.json",
+            "source_hash": "fixture-rch-malformed-sha256",
+            "provenance": {
+              "source_id": "rch_queue_status",
+              "path": "fixture/rch-status-malformed.json",
+              "sha256": "fixture-rch-malformed-sha256",
+              "captured_at": "2026-05-13T17:40:00Z",
+              "generated_at": "2026-05-13T17:40:00Z",
+              "command": "rch status --json",
+              "git_commit": "fixture",
+              "workspace_root": "/data/projects/pi_agent_rust"
+            },
+            "redaction": {
+              "state": "redacted",
+              "summary": "raw malformed payload omitted",
+              "redacted_fields": [
+                "raw_payload"
+              ],
+              "secret_classes_removed": [],
+              "raw_secret_bytes_emitted": 0
+            },
+            "uncertainty": {
+              "state": "malformed_source",
+              "reason": "missing_required_rch_fields",
+              "confidence": 1.0,
+              "missing_inputs": [
+                "queue_depth",
+                "workers"
+              ]
+            },
+            "payload": {
+              "source_id": "rch_queue_status",
+              "suppressed_claims": [
+                "queue_depth",
+                "worker_availability",
+                "cargo_admission"
+              ]
+            }
+          }
+        ],
+        "ordering": {
+          "logical_clock_monotonic": true,
+          "tie_breakers": [
+            "occurred_at",
+            "source_id",
+            "source_sequence",
+            "event_id"
+          ]
+        },
+        "redaction_summary": {
+          "redacted_count": 1,
+          "raw_secret_bytes_emitted": 0
+        },
+        "diagnostics": [
+          {
+            "diagnostic_id": "rch_source_malformed",
+            "severity": "degraded",
+            "message": "Malformed RCH source suppresses queue and admission claims"
+          }
+        ],
+        "invariants": [
+          "malformed_sources_emit_source_malformed_events",
+          "malformed_rch_suppresses_queue_depth_claims",
+          "raw_secret_bytes_emitted_is_zero"
+        ]
+      },
+      "expected": {
+        "trace_status": "degraded_fail_closed",
+        "required_event_kinds": [
+          "source_malformed"
+        ],
+        "suppressed_claims": [
+          "queue_depth",
+          "worker_availability",
+          "cargo_admission"
+        ],
+        "silently_dropped_events_allowed": false
+      }
+    }
+  ]
+}

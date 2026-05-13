@@ -1,0 +1,316 @@
+{
+  "schema": "pi.swarm.replay_trace.v1",
+  "trace_id": "fixture-agent-mail-unavailable",
+  "generated_at": "2026-05-13T17:30:00Z",
+  "contract_version": "1.0.0",
+  "source_inventory": [
+    {
+      "source_id": "beads_jsonl",
+      "source_kind": "beads",
+      "path": ".beads/issues.jsonl",
+      "availability": "available",
+      "freshness_state": "current",
+      "source_hash": "sha256:fixture-beads-jsonl",
+      "redaction_state": "none",
+      "authoritative_for": [
+        "bead_lifecycle"
+      ],
+      "uncertainty": []
+    },
+    {
+      "source_id": "beads_db",
+      "source_kind": "beads",
+      "path": ".beads/beads.db",
+      "availability": "available",
+      "freshness_state": "current",
+      "source_hash": "sha256:fixture-beads-db",
+      "redaction_state": "none",
+      "authoritative_for": [
+        "bead_lifecycle"
+      ],
+      "uncertainty": []
+    },
+    {
+      "source_id": "agent_mail_archive",
+      "source_kind": "agent_mail",
+      "path": "/home/ubuntu/.mcp_agent_mail_git_mailbox_repo",
+      "availability": "unavailable",
+      "freshness_state": "missing",
+      "source_hash": null,
+      "redaction_state": "sensitive_omitted",
+      "authoritative_for": [
+        "reservation_intent",
+        "reservation_conflict",
+        "agent_message",
+        "build_slot_state"
+      ],
+      "uncertainty": [
+        "sqlite_schema_missing_required_tables"
+      ]
+    },
+    {
+      "source_id": "doctor_swarm_diagnostics",
+      "source_kind": "doctor",
+      "path": "docs/evidence/doctor-swarm.json",
+      "availability": "available",
+      "freshness_state": "current",
+      "source_hash": "sha256:fixture-doctor",
+      "redaction_state": "redacted",
+      "authoritative_for": [
+        "doctor_finding"
+      ],
+      "uncertainty": []
+    },
+    {
+      "source_id": "rch_queue_status",
+      "source_kind": "rch",
+      "path": "docs/evidence/rch-queue-status.json",
+      "availability": "available",
+      "freshness_state": "current",
+      "source_hash": "sha256:fixture-rch",
+      "redaction_state": "none",
+      "authoritative_for": [
+        "rch_job_state"
+      ],
+      "uncertainty": []
+    },
+    {
+      "source_id": "operator_runpack",
+      "source_kind": "runpack",
+      "path": "docs/evidence/swarm-operator-runpack.json",
+      "availability": "partial",
+      "freshness_state": "freshness_unknown",
+      "source_hash": "sha256:fixture-runpack",
+      "redaction_state": "redacted",
+      "authoritative_for": [
+        "runpack_recommendation",
+        "operator_handoff"
+      ],
+      "uncertainty": [
+        "optional_runpack_snapshot"
+      ]
+    },
+    {
+      "source_id": "git_refs",
+      "source_kind": "git",
+      "path": ".git",
+      "availability": "available",
+      "freshness_state": "current",
+      "source_hash": "sha256:fixture-git",
+      "redaction_state": "none",
+      "authoritative_for": [
+        "worktree_state"
+      ],
+      "uncertainty": []
+    },
+    {
+      "source_id": "validation_command_records",
+      "source_kind": "validation",
+      "path": "tests/e2e_results/fixture",
+      "availability": "available",
+      "freshness_state": "current",
+      "source_hash": "sha256:fixture-validation",
+      "redaction_state": "none",
+      "authoritative_for": [
+        "cargo_gate_result",
+        "validation_artifact"
+      ],
+      "uncertainty": []
+    },
+    {
+      "source_id": "context_intelligence_evidence",
+      "source_kind": "context_intelligence",
+      "path": "docs/evidence/context-intelligence-closeout-gate.json",
+      "availability": "available",
+      "freshness_state": "current",
+      "source_hash": "sha256:fixture-context",
+      "redaction_state": "redacted",
+      "authoritative_for": [
+        "validation_artifact"
+      ],
+      "uncertainty": []
+    },
+    {
+      "source_id": "swarm_flight_recorder",
+      "source_kind": "flight_recorder",
+      "path": "tests/e2e_results/fixture/swarm-flight-recorder.jsonl",
+      "availability": "available",
+      "freshness_state": "current",
+      "source_hash": "sha256:fixture-flight",
+      "redaction_state": "redacted",
+      "authoritative_for": [
+        "validation_artifact"
+      ],
+      "uncertainty": []
+    },
+    {
+      "source_id": "swarm_activity_ledger",
+      "source_kind": "activity_ledger",
+      "path": "tests/e2e_results/fixture/swarm-activity-ledger.jsonl",
+      "availability": "available",
+      "freshness_state": "current",
+      "source_hash": "sha256:fixture-activity",
+      "redaction_state": "redacted",
+      "authoritative_for": [
+        "operator_handoff",
+        "validation_artifact"
+      ],
+      "uncertainty": []
+    }
+  ],
+  "ordering": {
+    "monotonic_sequence_required": true,
+    "timestamp_normalization": "utc_rfc3339_z",
+    "tie_breakers": [
+      "sequence",
+      "source_ref",
+      "event_id"
+    ]
+  },
+  "events": [
+    {
+      "event_id": "evt-0001",
+      "sequence": 1,
+      "occurred_at_utc": "2026-05-13T17:26:28Z",
+      "observed_at_utc": "2026-05-13T17:26:29Z",
+      "event_type": "bead_lifecycle",
+      "actor": "codex-cli",
+      "source_ref": "beads_jsonl",
+      "source_hash": "sha256:fixture-beads-jsonl",
+      "redaction_state": "none",
+      "uncertainty": {
+        "state": "certain",
+        "reasons": [],
+        "suppressed_claims": []
+      },
+      "payload": {
+        "bead_id": "bd-in57w.1",
+        "from_status": "open",
+        "to_status": "in_progress",
+        "priority": 3,
+        "assignee": "codex-cli"
+      }
+    },
+    {
+      "event_id": "evt-0002",
+      "sequence": 2,
+      "occurred_at_utc": "2026-05-13T17:26:30Z",
+      "observed_at_utc": "2026-05-13T17:26:31Z",
+      "event_type": "agent_message",
+      "actor": "agent-mail",
+      "source_ref": "agent_mail_archive",
+      "source_hash": null,
+      "redaction_state": "sensitive_omitted",
+      "uncertainty": {
+        "state": "missing_source",
+        "reasons": [
+          "sqlite_schema_missing_required_tables"
+        ],
+        "suppressed_claims": [
+          "ack_latency",
+          "active_reservation_holder",
+          "mail_thread_completeness"
+        ]
+      },
+      "payload": {
+        "thread_id": "bd-in57w.1",
+        "sender": "unknown",
+        "recipients": [],
+        "importance": "unknown",
+        "ack_required": false
+      }
+    },
+    {
+      "event_id": "evt-0003",
+      "sequence": 3,
+      "occurred_at_utc": "2026-05-13T17:27:00Z",
+      "observed_at_utc": "2026-05-13T17:27:01Z",
+      "event_type": "rch_job_state",
+      "actor": "rch",
+      "source_ref": "rch_queue_status",
+      "source_hash": "sha256:fixture-rch",
+      "redaction_state": "none",
+      "uncertainty": {
+        "state": "certain",
+        "reasons": [],
+        "suppressed_claims": []
+      },
+      "payload": {
+        "job_id": "rch-fixture-001",
+        "state": "not_started",
+        "worker": null,
+        "command": "rch exec -- cargo test --test swarm_replay_trace_contract",
+        "queue_position": null
+      }
+    },
+    {
+      "event_id": "evt-0004",
+      "sequence": 4,
+      "occurred_at_utc": "2026-05-13T17:27:10Z",
+      "observed_at_utc": "2026-05-13T17:27:11Z",
+      "event_type": "doctor_finding",
+      "actor": "doctor",
+      "source_ref": "doctor_swarm_diagnostics",
+      "source_hash": "sha256:fixture-doctor",
+      "redaction_state": "redacted",
+      "uncertainty": {
+        "state": "certain",
+        "reasons": [],
+        "suppressed_claims": []
+      },
+      "payload": {
+        "finding_id": "agent-mail-red",
+        "severity": "high",
+        "surface": "agent_mail",
+        "status": "degraded"
+      }
+    },
+    {
+      "event_id": "evt-0005",
+      "sequence": 5,
+      "occurred_at_utc": "2026-05-13T17:27:20Z",
+      "observed_at_utc": "2026-05-13T17:27:21Z",
+      "event_type": "validation_artifact",
+      "actor": "codex-cli",
+      "source_ref": "validation_command_records",
+      "source_hash": "sha256:fixture-validation",
+      "redaction_state": "none",
+      "uncertainty": {
+        "state": "certain",
+        "reasons": [],
+        "suppressed_claims": []
+      },
+      "payload": {
+        "artifact_path": "docs/contracts/swarm-replay-trace-contract.json",
+        "artifact_schema": "pi.swarm.replay_trace_contract.v1",
+        "verdict": "fixture",
+        "command": "rch exec -- cargo test --test swarm_replay_trace_contract -- --nocapture"
+      }
+    }
+  ],
+  "redaction_summary": {
+    "redacted_count": 2,
+    "redacted_fields": [
+      "doctor_swarm.findings[0].detail",
+      "agent_mail_status.registration_token"
+    ],
+    "redaction_reason": "Agent Mail archive unavailable and doctor details redacted"
+  },
+  "uncertainty_summary": {
+    "uncertain_event_count": 1,
+    "missing_sources": [
+      "agent_mail_archive"
+    ],
+    "suppressed_claims": [
+      "ack_latency",
+      "active_reservation_holder",
+      "mail_thread_completeness"
+    ]
+  },
+  "replay_guards": {
+    "read_only": true,
+    "no_live_mutation": true,
+    "no_network_required": true,
+    "fail_closed_on_missing_required_sources": true
+  }
+}

@@ -1,0 +1,427 @@
+{
+  "schema": "pi.swarm.replay_trace_contract.v1",
+  "trace_schema": "pi.swarm.replay_trace.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-in57w.1",
+  "parent_bead_id": "bd-in57w",
+  "purpose": "offline_swarm_replay_trace_contract_not_live_control",
+  "summary": "Defines the canonical replay trace contract and source inventory for an offline swarm replay lab. The trace is evidence for simulation and policy comparison only; it must not mutate Beads, Agent Mail, git, RCH jobs, reservations, or live build slots.",
+  "non_goals": [
+    "replace_beads_or_agent_mail_as_sources_of_truth",
+    "replace_live_swarm_autopilot_or_operator_runpacks",
+    "claim_release_performance_without_existing_claim_gates",
+    "infer_missing_timeline_facts_without_uncertainty_markers",
+    "emit_unredacted_prompts_tokens_credentials_or_mail_bodies",
+    "perform_live_mutation_during_replay"
+  ],
+  "required_trace_top_level_keys": [
+    "schema",
+    "trace_id",
+    "generated_at",
+    "contract_version",
+    "source_inventory",
+    "ordering",
+    "events",
+    "redaction_summary",
+    "uncertainty_summary",
+    "replay_guards"
+  ],
+  "source_inventory_contract": {
+    "required_source_ids": [
+      "beads_jsonl",
+      "beads_db",
+      "agent_mail_archive",
+      "doctor_swarm_diagnostics",
+      "rch_queue_status",
+      "operator_runpack",
+      "git_refs",
+      "validation_command_records",
+      "context_intelligence_evidence",
+      "swarm_flight_recorder",
+      "swarm_activity_ledger"
+    ],
+    "required_source_fields": [
+      "source_id",
+      "source_kind",
+      "path",
+      "availability",
+      "freshness_state",
+      "source_hash",
+      "redaction_state",
+      "authoritative_for",
+      "uncertainty"
+    ],
+    "allowed_availability": [
+      "available",
+      "unavailable",
+      "partial",
+      "malformed",
+      "stale"
+    ],
+    "allowed_freshness_states": [
+      "current",
+      "stale",
+      "missing",
+      "malformed",
+      "freshness_unknown"
+    ],
+    "unavailable_source_policy": "Unavailable sources remain inventory rows with explicit uncertainty; replay may continue only when remaining authoritative sources cover the requested event classes and the missing source cannot be silently inferred."
+  },
+  "event_contract": {
+    "required_event_types": [
+      "bead_lifecycle",
+      "reservation_intent",
+      "reservation_conflict",
+      "agent_message",
+      "build_slot_state",
+      "rch_job_state",
+      "cargo_gate_result",
+      "worktree_state",
+      "doctor_finding",
+      "runpack_recommendation",
+      "validation_artifact",
+      "operator_handoff"
+    ],
+    "required_event_fields": [
+      "event_id",
+      "sequence",
+      "occurred_at_utc",
+      "observed_at_utc",
+      "event_type",
+      "actor",
+      "source_ref",
+      "source_hash",
+      "redaction_state",
+      "uncertainty",
+      "payload"
+    ],
+    "required_uncertainty_fields": [
+      "state",
+      "reasons",
+      "suppressed_claims"
+    ],
+    "event_type_contracts": [
+      {
+        "event_type": "bead_lifecycle",
+        "authoritative_sources": [
+          "beads_jsonl",
+          "beads_db"
+        ],
+        "required_payload_fields": [
+          "bead_id",
+          "from_status",
+          "to_status",
+          "priority",
+          "assignee"
+        ]
+      },
+      {
+        "event_type": "reservation_intent",
+        "authoritative_sources": [
+          "agent_mail_archive"
+        ],
+        "required_payload_fields": [
+          "reservation_id",
+          "path_patterns",
+          "exclusive",
+          "ttl_seconds",
+          "reason"
+        ]
+      },
+      {
+        "event_type": "reservation_conflict",
+        "authoritative_sources": [
+          "agent_mail_archive"
+        ],
+        "required_payload_fields": [
+          "path_pattern",
+          "holder",
+          "conflict_reason"
+        ]
+      },
+      {
+        "event_type": "agent_message",
+        "authoritative_sources": [
+          "agent_mail_archive"
+        ],
+        "required_payload_fields": [
+          "thread_id",
+          "sender",
+          "recipients",
+          "importance",
+          "ack_required"
+        ]
+      },
+      {
+        "event_type": "build_slot_state",
+        "authoritative_sources": [
+          "agent_mail_archive"
+        ],
+        "required_payload_fields": [
+          "slot",
+          "holder",
+          "state",
+          "expires_at_utc"
+        ]
+      },
+      {
+        "event_type": "rch_job_state",
+        "authoritative_sources": [
+          "rch_queue_status"
+        ],
+        "required_payload_fields": [
+          "job_id",
+          "state",
+          "worker",
+          "command",
+          "queue_position"
+        ]
+      },
+      {
+        "event_type": "cargo_gate_result",
+        "authoritative_sources": [
+          "validation_command_records"
+        ],
+        "required_payload_fields": [
+          "command",
+          "runner",
+          "exit_code",
+          "target_dir",
+          "tmpdir"
+        ]
+      },
+      {
+        "event_type": "worktree_state",
+        "authoritative_sources": [
+          "git_refs"
+        ],
+        "required_payload_fields": [
+          "head",
+          "branch",
+          "dirty",
+          "changed_paths"
+        ]
+      },
+      {
+        "event_type": "doctor_finding",
+        "authoritative_sources": [
+          "doctor_swarm_diagnostics"
+        ],
+        "required_payload_fields": [
+          "finding_id",
+          "severity",
+          "surface",
+          "status"
+        ]
+      },
+      {
+        "event_type": "runpack_recommendation",
+        "authoritative_sources": [
+          "operator_runpack"
+        ],
+        "required_payload_fields": [
+          "action",
+          "severity",
+          "evidence_paths",
+          "operator_notes"
+        ]
+      },
+      {
+        "event_type": "validation_artifact",
+        "authoritative_sources": [
+          "validation_command_records",
+          "context_intelligence_evidence",
+          "swarm_flight_recorder",
+          "swarm_activity_ledger"
+        ],
+        "required_payload_fields": [
+          "artifact_path",
+          "artifact_schema",
+          "verdict",
+          "command"
+        ]
+      },
+      {
+        "event_type": "operator_handoff",
+        "authoritative_sources": [
+          "operator_runpack",
+          "swarm_activity_ledger"
+        ],
+        "required_payload_fields": [
+          "handoff_id",
+          "summary",
+          "next_actions",
+          "evidence_paths"
+        ]
+      }
+    ]
+  },
+  "ordering_contract": {
+    "monotonic_sequence_required": true,
+    "timestamp_normalization": "utc_rfc3339_z",
+    "required_ordering_fields": [
+      "sequence",
+      "occurred_at_utc",
+      "observed_at_utc"
+    ],
+    "tie_breakers": [
+      "sequence",
+      "source_ref",
+      "event_id"
+    ],
+    "out_of_order_policy": "Keep the raw observed timestamps, preserve monotonic sequence order, and mark uncertainty.state as uncertain when source timestamps conflict."
+  },
+  "redaction_policy": {
+    "fail_closed": true,
+    "allowed_redaction_states": [
+      "none",
+      "redacted",
+      "sensitive_omitted",
+      "unsafe_to_emit"
+    ],
+    "required_redaction_fields": [
+      "redaction_state",
+      "redacted_fields",
+      "redaction_reason"
+    ],
+    "sensitive_fields": [
+      "authorization",
+      "body",
+      "cookie",
+      "prompt",
+      "registration_token",
+      "secret",
+      "token",
+      "transcript"
+    ]
+  },
+  "uncertainty_policy": {
+    "fail_closed": true,
+    "allowed_uncertainty_states": [
+      "certain",
+      "inferred",
+      "partial",
+      "missing_source",
+      "malformed_source",
+      "uncertain"
+    ],
+    "suppressed_claim_policy": "Any metric, latency, ownership, or coordination claim that depends on a missing, stale, malformed, or unavailable source must be listed in uncertainty.suppressed_claims instead of emitted as fact."
+  },
+  "replay_guards": {
+    "read_only": true,
+    "no_live_mutation": true,
+    "no_network_required": true,
+    "fail_closed_on_missing_required_sources": true,
+    "requires_source_inventory": true,
+    "disallowed_live_actions": [
+      "claim_bead",
+      "close_bead",
+      "send_agent_mail",
+      "reserve_file",
+      "release_file",
+      "acquire_build_slot",
+      "cancel_rch_job",
+      "git_commit",
+      "git_push"
+    ]
+  },
+  "overlap_boundaries": [
+    {
+      "existing_surface": "swarm_autopilot",
+      "boundary": "Replay trace may compare dry-run decisions offline, but it must not replace live autopilot input packs, planner guards, or operator execution."
+    },
+    {
+      "existing_surface": "resource_governor_and_flight_recorder",
+      "boundary": "Replay trace may consume resource and flight-recorder events, but it must not reimplement live admission control or claim fresh performance evidence."
+    },
+    {
+      "existing_surface": "context_intelligence",
+      "boundary": "Replay trace may reference context-intelligence evidence freshness, but it must not serve file contents or bypass freshness and redaction gates."
+    },
+    {
+      "existing_surface": "operator_runpack",
+      "boundary": "Replay trace may ingest runpack recommendations, but the runpack remains an operator handoff summary and not a source of release claims."
+    }
+  ],
+  "contract_test_fixtures": [
+    {
+      "fixture_id": "agent_mail_unavailable_beads_rch_doctor_usable",
+      "path": "tests/fixtures/swarm_replay_trace/agent_mail_unavailable_trace.json",
+      "must_prove": [
+        "agent_mail_archive source remains explicit and unavailable",
+        "beads_jsonl source remains available for bead_lifecycle events",
+        "rch_queue_status source remains available for rch_job_state events",
+        "doctor_swarm_diagnostics source remains available for doctor_finding events",
+        "claims requiring Agent Mail are suppressed rather than inferred"
+      ]
+    },
+    {
+      "fixture_id": "source_inventory_scenario_suite",
+      "path": "tests/fixtures/swarm_replay_trace/source_inventory_scenarios.json",
+      "must_prove": [
+        "source inventory scenarios include unavailable-source and malformed-source cases",
+        "Agent Mail unavailable does not block Beads, RCH, or Doctor evidence",
+        "malformed RCH input suppresses queue-depth and admission claims",
+        "raw secret bytes emitted stays zero in replay fixtures"
+      ]
+    }
+  ],
+  "downstream_dependencies": {
+    "unblocked_beads": [
+      "bd-in57w.2",
+      "bd-in57w.3",
+      "bd-in57w.12"
+    ]
+  },
+  "must_requirements": [
+    {
+      "id": "REPLAY-TRACE-MUST-001",
+      "description": "The contract declares the canonical replay trace schema, version, Beads linkage, and non-live-control purpose.",
+      "validated_by": [
+        "schema",
+        "trace_schema",
+        "bead_id",
+        "purpose"
+      ]
+    },
+    {
+      "id": "REPLAY-TRACE-MUST-002",
+      "description": "The source inventory names every authoritative artifact family needed by replay and records availability, freshness, hashes, redaction, and uncertainty.",
+      "validated_by": [
+        "source_inventory_contract.required_source_ids",
+        "source_inventory_contract.required_source_fields"
+      ]
+    },
+    {
+      "id": "REPLAY-TRACE-MUST-003",
+      "description": "Every required replay event type has explicit authoritative sources and payload fields.",
+      "validated_by": [
+        "event_contract.required_event_types",
+        "event_contract.event_type_contracts"
+      ]
+    },
+    {
+      "id": "REPLAY-TRACE-MUST-004",
+      "description": "Replay order uses monotonic sequence numbers with UTC timestamp normalization and deterministic tie breakers.",
+      "validated_by": [
+        "ordering_contract"
+      ]
+    },
+    {
+      "id": "REPLAY-TRACE-MUST-005",
+      "description": "Redaction and uncertainty policies fail closed, and unavailable Agent Mail data suppresses dependent claims instead of inventing coordination facts.",
+      "validated_by": [
+        "redaction_policy",
+        "uncertainty_policy",
+        "contract_test_fixtures"
+      ]
+    },
+    {
+      "id": "REPLAY-TRACE-MUST-006",
+      "description": "Replay guards forbid live mutation of Beads, Agent Mail, git, RCH jobs, reservations, and build slots.",
+      "validated_by": [
+        "replay_guards.disallowed_live_actions"
+      ]
+    }
+  ]
+}
