@@ -1,0 +1,352 @@
+{
+  "schema": "pi.context.semantic_graph_contract.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-ircr3.1",
+  "parent_bead_id": "bd-ircr3",
+  "purpose": "evidence_aware_context_graph_contract_not_source_of_truth",
+  "summary": "Defines the first semantic workspace graph contract for evidence-aware context intelligence without replacing Beads, Agent Mail, RCH, doctor, runpacks, direct file reads, or release claim gates.",
+  "non_goals": [
+    "replace_beads_or_agent_mail",
+    "replace_doctor_or_swarm_runpacks",
+    "replace_direct_file_reads_on_uncertain_cache_state",
+    "create_release_or_dropin_claims_without_existing_claim_gates",
+    "serve_stale_file_or_evidence_content",
+    "store_unredacted_prompts_or_provider_credentials"
+  ],
+  "overlap_boundaries": [
+    {
+      "existing_bead_id": "bd-h3uv0",
+      "existing_surface": "swarm_autopilot_and_evidence_driven_launch_control",
+      "boundary": "Context graph may feed advisory bundle provenance into autopilot/runpacks, but it must not select actions, claim beads, mutate ownership, or replace autopilot input-pack source-status logic."
+    },
+    {
+      "existing_bead_id": "bd-07cku",
+      "existing_surface": "swarm_resource_governor_and_flight_recorder",
+      "boundary": "Context graph may reference resource and flight-recorder evidence nodes, but it must not reimplement live admission control, cgroup/NUMA sampling, or runtime replay classification."
+    },
+    {
+      "existing_bead_id": "bd-dklqn",
+      "existing_surface": "swarm_context_fabric_and_shared_read_only_source_cache",
+      "boundary": "Context graph may consume a fresh read-only cache entry, but it must own semantic provenance, freshness classification, bundle eligibility, and stale-suppression rules rather than caching bytes itself."
+    }
+  ],
+  "graph_schema": {
+    "required_node_types": [
+      "code_symbol",
+      "file_region",
+      "test_case",
+      "doc_section",
+      "evidence_artifact",
+      "bead",
+      "provider_surface",
+      "validation_command"
+    ],
+    "required_edge_types": [
+      "contains",
+      "defines",
+      "exercises",
+      "validates",
+      "cites_evidence",
+      "tracks",
+      "blocks",
+      "depends_on",
+      "suggests_validation",
+      "supersedes"
+    ],
+    "required_node_fields": [
+      "node_id",
+      "node_type",
+      "source_path",
+      "source_hash",
+      "freshness_state",
+      "redaction_state",
+      "provenance",
+      "invalidation"
+    ],
+    "required_edge_fields": [
+      "edge_id",
+      "edge_type",
+      "from_node_id",
+      "to_node_id",
+      "confidence",
+      "provenance"
+    ],
+    "allowed_freshness_states": [
+      "current",
+      "stale",
+      "missing",
+      "malformed",
+      "uncertified",
+      "freshness_unknown"
+    ],
+    "allowed_redaction_states": [
+      "none",
+      "redacted",
+      "sensitive_omitted",
+      "unsafe_to_emit"
+    ],
+    "node_type_contracts": [
+      {
+        "node_type": "code_symbol",
+        "required_fields": [
+          "symbol_kind",
+          "symbol_name",
+          "module_path",
+          "line_start",
+          "line_end"
+        ],
+        "freshness_required": true,
+        "redaction_required": false
+      },
+      {
+        "node_type": "file_region",
+        "required_fields": [
+          "line_start",
+          "line_end",
+          "content_hash",
+          "region_role"
+        ],
+        "freshness_required": true,
+        "redaction_required": true
+      },
+      {
+        "node_type": "test_case",
+        "required_fields": [
+          "test_name",
+          "test_binary",
+          "target_command",
+          "covered_surface"
+        ],
+        "freshness_required": true,
+        "redaction_required": false
+      },
+      {
+        "node_type": "doc_section",
+        "required_fields": [
+          "heading",
+          "heading_level",
+          "claim_classification",
+          "citation_links"
+        ],
+        "freshness_required": true,
+        "redaction_required": true
+      },
+      {
+        "node_type": "evidence_artifact",
+        "required_fields": [
+          "artifact_schema",
+          "generated_at",
+          "verdict",
+          "claim_scope",
+          "stale_after_hours"
+        ],
+        "freshness_required": true,
+        "redaction_required": true
+      },
+      {
+        "node_type": "bead",
+        "required_fields": [
+          "bead_id",
+          "status",
+          "priority",
+          "issue_type",
+          "updated_at"
+        ],
+        "freshness_required": true,
+        "redaction_required": false
+      },
+      {
+        "node_type": "provider_surface",
+        "required_fields": [
+          "provider_id",
+          "request_shape",
+          "stream_shape",
+          "credential_policy"
+        ],
+        "freshness_required": true,
+        "redaction_required": true
+      },
+      {
+        "node_type": "validation_command",
+        "required_fields": [
+          "command",
+          "runner",
+          "expected_artifacts",
+          "failure_classification"
+        ],
+        "freshness_required": false,
+        "redaction_required": true
+      }
+    ]
+  },
+  "source_surfaces": [
+    {
+      "surface_id": "rust_source",
+      "path_globs": [
+        "src/**/*.rs"
+      ],
+      "node_types": [
+        "code_symbol",
+        "file_region",
+        "provider_surface"
+      ],
+      "extraction_policy": "prefer_ast_or_structured_parser; fall back to explicit file_region nodes with freshness_unknown only when parser support is absent"
+    },
+    {
+      "surface_id": "rust_tests",
+      "path_globs": [
+        "tests/**/*.rs"
+      ],
+      "node_types": [
+        "test_case",
+        "file_region"
+      ],
+      "extraction_policy": "discover test names and target commands without treating passing tests as release claims"
+    },
+    {
+      "surface_id": "docs",
+      "path_globs": [
+        "README.md",
+        "docs/**/*.md",
+        "docs/**/*.json"
+      ],
+      "node_types": [
+        "doc_section",
+        "evidence_artifact"
+      ],
+      "extraction_policy": "classify claims, citations, schema ids, generated_at, and release/drop-in gate scope"
+    },
+    {
+      "surface_id": "beads",
+      "path_globs": [
+        ".beads/issues.jsonl"
+      ],
+      "node_types": [
+        "bead"
+      ],
+      "extraction_policy": "closed and tombstone beads remain graph facts but are never actionable context without explicit historical rationale"
+    }
+  ],
+  "freshness_policy": {
+    "fail_closed": true,
+    "direct_read_fallback_on_uncertainty": true,
+    "stale_evidence_must_be_suppressed": true,
+    "release_claims_require_certified_gate": true,
+    "uncertified_dropin_language_state": "uncertified",
+    "required_invalidation_inputs": [
+      "canonical_path",
+      "content_hash",
+      "mtime_ns",
+      "size_bytes",
+      "git_head",
+      "git_dirty_state",
+      "bead_updated_at",
+      "artifact_generated_at"
+    ],
+    "fail_closed_conditions": [
+      "missing_required_node_field",
+      "missing_required_edge_field",
+      "unreadable_source_path",
+      "malformed_evidence_json",
+      "stale_generated_at",
+      "dropin_verdict_not_certified",
+      "redaction_required_but_not_recorded",
+      "cache_key_missing_dirty_state"
+    ]
+  },
+  "redaction_policy": {
+    "fail_closed": true,
+    "required_summary_fields": [
+      "redacted_count",
+      "redacted_keys",
+      "unsafe_to_emit_count",
+      "policy_version"
+    ],
+    "sensitive_path_or_key_patterns": [
+      "api_key",
+      "token",
+      "secret",
+      "cookie",
+      "authorization",
+      "prompt",
+      "transcript",
+      "provider_response_body",
+      "vcr_body_text"
+    ],
+    "forbidden_unredacted_payloads": [
+      "provider_credentials",
+      "raw_user_prompt",
+      "raw_model_response",
+      "agent_mail_registration_token",
+      "vcr_http_body"
+    ]
+  },
+  "gap_audit": {
+    "current_strengths": [
+      {
+        "surface": "docs_evidence_freshness",
+        "evidence": "scripts/check_readme_evidence_freshness.py and docs/evidence artifacts already encode claim freshness checks."
+      },
+      {
+        "surface": "swarm_runpack",
+        "evidence": "docs/swarm-operations-runbook.md and runpack contracts already collect Beads, RCH, Agent Mail, and doctor source statuses."
+      },
+      {
+        "surface": "resource_governor",
+        "evidence": "src/resource_governor.rs already models swarm admission, memory pressure replay, and activity-ledger alignment."
+      },
+      {
+        "surface": "flight_recorder",
+        "evidence": "docs/swarm-flight-recorder.md and tests/e2e_swarm_flight_recorder.rs already provide deterministic replay evidence."
+      }
+    ],
+    "missing_for_bd_ircr3_2": [
+      "canonical graph node and edge Rust types",
+      "incremental ingestion for src, tests, docs, evidence, and Beads",
+      "stable node IDs and source fingerprints",
+      "JSONL trace of ingestion decisions",
+      "malformed and unreadable source classification"
+    ],
+    "missing_for_bd_ircr3_3": [
+      "README citation to evidence-artifact edges",
+      "drop-in verdict and parity ledger freshness facts",
+      "perf budget and extension closeout evidence classifiers",
+      "stale claim suppression facts consumable by a bundle planner",
+      "uncertified release-claim state propagation"
+    ],
+    "handoff_requirements": [
+      "bd-ircr3.2 starts from graph_schema.required_node_types and source_surfaces",
+      "bd-ircr3.3 starts from freshness_policy, redaction_policy, and gap_audit.missing_for_bd_ircr3_3",
+      "future planner work must not bypass freshness_policy.fail_closed or redaction_policy.fail_closed"
+    ]
+  },
+  "downstream_dependencies": {
+    "unblocked_beads": [
+      "bd-ircr3.2",
+      "bd-ircr3.3"
+    ],
+    "implementation_order": [
+      "bd-ircr3.2",
+      "bd-ircr3.3",
+      "bd-ircr3.4",
+      "bd-ircr3.5",
+      "bd-ircr3.6",
+      "bd-ircr3.7",
+      "bd-ircr3.8",
+      "bd-ircr3.9",
+      "bd-ircr3.10",
+      "bd-ircr3.11"
+    ]
+  },
+  "validation": {
+    "required_test_file": "tests/semantic_context_graph_contract.rs",
+    "focused_command": "rch exec -- cargo test --test semantic_context_graph_contract -- --nocapture",
+    "required_quality_gates": [
+      "cargo fmt --check",
+      "cargo check --all-targets",
+      "cargo clippy --all-targets -- -D warnings",
+      "ubs --staged --only=rust .",
+      "./scripts/reconcile_beads_ledger.sh"
+    ]
+  }
+}

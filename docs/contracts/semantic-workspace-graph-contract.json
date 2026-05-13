@@ -1,0 +1,1000 @@
+{
+  "schema": "pi.semantic_workspace_graph.contract.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-ircr3.1",
+  "parent_bead_id": "bd-ircr3",
+  "graph_schema": "pi.semantic_workspace_graph.v1",
+  "purpose": "evidence_aware_context_intelligence_contract_not_source_of_truth",
+  "summary": "Defines the node, edge, freshness, redaction, and authority boundaries for a future semantic workspace graph that can assemble task-specific context without replacing existing project sources of truth.",
+  "required_node_types": [
+    "code_symbol",
+    "file_region",
+    "test_case",
+    "doc_section",
+    "evidence_artifact",
+    "bead",
+    "provider_surface",
+    "validation_command"
+  ],
+  "allowed_evidence_freshness_statuses": [
+    "current",
+    "historical_snapshot",
+    "stale",
+    "missing",
+    "malformed",
+    "uncertified",
+    "freshness_unknown"
+  ],
+  "allowed_bead_actionability_statuses": [
+    "actionable_open",
+    "claimed_in_progress",
+    "stalled_reopen_candidate",
+    "blocked",
+    "closed_reference_only",
+    "tombstone_reference_only",
+    "unknown_fail_closed"
+  ],
+  "authority_boundaries": {
+    "graph_may": [
+      "index workspace facts with provenance",
+      "explain why files, tests, docs, evidence, Beads, provider surfaces, and validation commands are relevant",
+      "classify stale, missing, malformed, closed, tombstoned, or uncertified inputs explicitly",
+      "emit advisory context bundles with byte and token budget accounting"
+    ],
+    "graph_must_not": [
+      "replace Beads for work status, dependencies, ownership, or closure",
+      "replace Agent Mail for reservations or agent-to-agent coordination",
+      "replace README evidence freshness checks or drop-in certification gates",
+      "replace swarm operator runpacks, doctor output, RCH admission, or performance claim gates",
+      "serve cached file content when content hash, size, mtime, branch, workspace identity, or freshness cannot be proven"
+    ]
+  },
+  "overlap_boundaries": [
+    {
+      "existing_bead_id": "bd-h3uv0",
+      "existing_surface": "swarm_autopilot_and_evidence_driven_launch_control",
+      "boundary": "The semantic workspace graph may provide advisory bundle provenance to autopilot and runpack artifacts, but it must not select actions, claim beads, mutate ownership, or replace autopilot input-pack source-status logic."
+    },
+    {
+      "existing_bead_id": "bd-07cku",
+      "existing_surface": "swarm_resource_governor_and_flight_recorder",
+      "boundary": "The graph may reference resource-governor and flight-recorder evidence nodes for context relevance, but it must not reimplement live admission control, cgroup or NUMA sampling, runtime replay classification, or resource enforcement."
+    },
+    {
+      "existing_bead_id": "bd-dklqn",
+      "existing_surface": "swarm_context_fabric_and_shared_read_only_source_cache",
+      "boundary": "The graph may consume fresh read-only cache evidence and invalidation policy, but it owns semantic provenance, freshness classification, bundle eligibility, and stale-suppression rules rather than caching bytes itself."
+    }
+  ],
+  "non_goals": [
+    "No provider calls are made while building the graph.",
+    "No release-facing speed, drop-in, performance, or parity claim is created by graph presence alone.",
+    "No destructive action, Beads mutation, Agent Mail reservation, commit, push, or filesystem write is performed by the graph builder.",
+    "No raw prompt text, provider credentials, authorization headers, registration tokens, cookies, or secret-like values are persisted in graph nodes.",
+    "No stale evidence is upgraded to current status through proximity to a current doc section or passing test."
+  ],
+  "current_surface_inventory": [
+    {
+      "surface_id": "rust_code_modules",
+      "kind": "source",
+      "authoritative_for": "compiled implementation symbols, module boundaries, provider/tool/session/resource surfaces",
+      "paths": [
+        "src/main.rs",
+        "src/lib.rs",
+        "src/agent.rs",
+        "src/provider.rs",
+        "src/providers/*.rs",
+        "src/tools.rs",
+        "src/extensions.rs",
+        "src/extensions_js.rs",
+        "src/resources.rs",
+        "src/session.rs",
+        "src/session_index.rs",
+        "src/rpc.rs",
+        "src/doctor.rs"
+      ],
+      "graph_role": "ingest code_symbol and file_region nodes with path, range, visibility, content_hash, and import/export evidence",
+      "freshness_inputs": [
+        "canonical_path",
+        "content_sha256",
+        "size_bytes",
+        "mtime_unix_ms",
+        "git_commit",
+        "branch_name"
+      ]
+    },
+    {
+      "surface_id": "integration_and_contract_tests",
+      "kind": "tests",
+      "authoritative_for": "behavioral contracts and executable validation commands",
+      "paths": [
+        "tests/*.rs",
+        "tests/conformance/**",
+        "tests/golden_corpus/**",
+        "tests/evidence_bundle/**"
+      ],
+      "graph_role": "ingest test_case and validation_command nodes, then link them to code, docs, evidence, and Beads",
+      "freshness_inputs": [
+        "source_path",
+        "test_name",
+        "cargo_test_command",
+        "content_sha256"
+      ]
+    },
+    {
+      "surface_id": "readme_and_docs",
+      "kind": "docs",
+      "authoritative_for": "operator-facing descriptions, current claim wording, resource maps, and human workflows",
+      "paths": [
+        "README.md",
+        "docs/**/*.md",
+        "docs/**/*.json",
+        "docs/contracts/*.json",
+        "docs/schema/*.json"
+      ],
+      "graph_role": "ingest doc_section nodes and citation edges to evidence_artifact nodes",
+      "freshness_inputs": [
+        "doc_path",
+        "heading_anchor",
+        "line_range",
+        "content_sha256",
+        "citation_artifact_path"
+      ]
+    },
+    {
+      "surface_id": "readme_evidence_freshness",
+      "kind": "claim_gate",
+      "authoritative_for": "README proof obligations for release-facing evidence citations",
+      "paths": [
+        "scripts/check_readme_evidence_freshness.py",
+        "README.md"
+      ],
+      "graph_role": "classify doc_section citation edges as current, stale, historical_snapshot, missing, malformed, or freshness_unknown",
+      "freshness_inputs": [
+        "artifact_path",
+        "citation_value",
+        "claim_surface",
+        "artifact_generated_at",
+        "artifact_mtime"
+      ]
+    },
+    {
+      "surface_id": "dropin_and_parity_evidence",
+      "kind": "evidence",
+      "authoritative_for": "drop-in certification, parity gaps, claim-gate status, and release wording limits",
+      "paths": [
+        "docs/contracts/dropin-certification-contract.json",
+        "docs/evidence/dropin-certification-verdict.json",
+        "docs/evidence/dropin-parity-gap-ledger.json",
+        "docs/evidence/dropin-differential-evidence-suite.json",
+        "docs/parity-certification.json"
+      ],
+      "graph_role": "ingest evidence_artifact nodes and claim_gate edges with fail-closed uncertainty",
+      "freshness_inputs": [
+        "schema",
+        "generated_at",
+        "overall_verdict",
+        "blocking_gate_status",
+        "correlation_id",
+        "run_id",
+        "git_commit"
+      ]
+    },
+    {
+      "surface_id": "tool_output_context_cache_evidence",
+      "kind": "cache_evidence",
+      "authoritative_for": "historical evidence that read-only tool output caching invalidates on file and directory fingerprints",
+      "paths": [
+        "docs/evidence/tool-output-context-cache.jsonl"
+      ],
+      "graph_role": "provide cache invalidation policy examples; never serve as a source of current file contents",
+      "freshness_inputs": [
+        "tool",
+        "outcome",
+        "reason",
+        "dependency_mode",
+        "proof"
+      ]
+    },
+    {
+      "surface_id": "session_store_and_index",
+      "kind": "session",
+      "authoritative_for": "JSONL session persistence, session metadata index, cwd scoping, timestamps, message counts, and branch history",
+      "paths": [
+        "src/session.rs",
+        "src/session_index.rs",
+        "docs/schema/session_store_v2_contract.json",
+        "tests/session_store_v2_contract.rs"
+      ],
+      "graph_role": "link context decisions to session provenance without treating session content as shareable unless redaction and workspace identity checks pass",
+      "freshness_inputs": [
+        "session_path",
+        "session_id",
+        "cwd",
+        "last_modified_ms",
+        "size_bytes",
+        "message_count"
+      ]
+    },
+    {
+      "surface_id": "resource_loader",
+      "kind": "resources",
+      "authoritative_for": "skills, prompt templates, themes, extension resources, package discovery, and collision diagnostics",
+      "paths": [
+        "src/resources.rs",
+        "src/package_manager.rs",
+        "docs/schema/extension_manifest.json",
+        "docs/schema/extension_protocol.json"
+      ],
+      "graph_role": "link resource files and extension-provided surfaces to code, provider, tool, and validation nodes",
+      "freshness_inputs": [
+        "resource_type",
+        "source",
+        "canonical_path",
+        "content_sha256",
+        "collision_status"
+      ]
+    },
+    {
+      "surface_id": "beads_issue_graph",
+      "kind": "beads",
+      "authoritative_for": "task status, dependencies, priority, owner, labels, external refs, and closure reasons",
+      "paths": [
+        ".beads/issues.jsonl",
+        ".beads/*.db"
+      ],
+      "graph_role": "ingest bead nodes for relevance and actionability; do not mutate or close work",
+      "freshness_inputs": [
+        "id",
+        "status",
+        "priority",
+        "updated_at",
+        "dependencies",
+        "dependents",
+        "external_ref",
+        "assignee"
+      ]
+    },
+    {
+      "surface_id": "swarm_operator_runpack",
+      "kind": "operator_handoff",
+      "authoritative_for": "read-only swarm operator handoff summaries and degraded-source reporting",
+      "paths": [
+        "scripts/build_swarm_operator_runpack.py",
+        "docs/contracts/swarm-operator-runpack-contract.json",
+        "docs/contracts/swarm-autopilot-input-pack-contract.json",
+        "docs/contracts/swarm-autopilot-plan-contract.json",
+        "tests/golden_corpus/swarm_operator_runpack/*.json"
+      ],
+      "graph_role": "consume runpack source statuses and next-action evidence as advisory context; never replace source artifacts",
+      "freshness_inputs": [
+        "source_statuses",
+        "sha256",
+        "size_bytes",
+        "degraded_reasons",
+        "redaction_summary"
+      ]
+    },
+    {
+      "surface_id": "provider_surfaces",
+      "kind": "provider",
+      "authoritative_for": "native provider behavior and extension provider bridge contracts",
+      "paths": [
+        "src/provider.rs",
+        "src/providers/anthropic.rs",
+        "src/providers/openai.rs",
+        "src/providers/openai_responses.rs",
+        "src/providers/gemini.rs",
+        "src/providers/cohere.rs",
+        "src/providers/azure.rs",
+        "src/providers/bedrock.rs",
+        "src/providers/vertex.rs",
+        "src/providers/copilot.rs",
+        "src/providers/gitlab.rs",
+        "src/providers/mod.rs",
+        "tests/provider_native_contract.rs",
+        "tests/provider_contract.rs"
+      ],
+      "graph_role": "ingest provider_surface nodes and link them to tests, docs, and validation commands",
+      "freshness_inputs": [
+        "provider_id",
+        "source_path",
+        "api_kind",
+        "streaming_support",
+        "tool_call_support",
+        "content_sha256"
+      ]
+    }
+  ],
+  "node_schemas": [
+    {
+      "node_type": "code_symbol",
+      "required_fields": [
+        "node_id",
+        "node_type",
+        "path",
+        "language",
+        "symbol_kind",
+        "symbol_name",
+        "line_range",
+        "content_sha256",
+        "visibility",
+        "freshness_status"
+      ],
+      "stable_id_fields": [
+        "node_type",
+        "canonical_path",
+        "symbol_kind",
+        "symbol_name",
+        "line_range.start"
+      ],
+      "freshness_inputs": [
+        "content_sha256",
+        "size_bytes",
+        "mtime_unix_ms",
+        "git_commit"
+      ],
+      "redaction_class": "source_metadata_only",
+      "failure_mode": "omit_when_parse_uncertain"
+    },
+    {
+      "node_type": "file_region",
+      "required_fields": [
+        "node_id",
+        "node_type",
+        "path",
+        "line_range",
+        "byte_range",
+        "content_sha256",
+        "extractor",
+        "freshness_status"
+      ],
+      "stable_id_fields": [
+        "node_type",
+        "canonical_path",
+        "line_range.start",
+        "line_range.end",
+        "content_sha256"
+      ],
+      "freshness_inputs": [
+        "content_sha256",
+        "size_bytes",
+        "mtime_unix_ms",
+        "workspace_identity"
+      ],
+      "redaction_class": "redacted_content_excerpt",
+      "failure_mode": "direct_read_required"
+    },
+    {
+      "node_type": "test_case",
+      "required_fields": [
+        "node_id",
+        "node_type",
+        "path",
+        "test_name",
+        "harness",
+        "validation_command_id",
+        "validates_node_types",
+        "freshness_status"
+      ],
+      "stable_id_fields": [
+        "node_type",
+        "canonical_path",
+        "test_name",
+        "harness"
+      ],
+      "freshness_inputs": [
+        "source_sha256",
+        "command",
+        "last_known_result_artifact"
+      ],
+      "redaction_class": "source_metadata_only",
+      "failure_mode": "include_as_candidate_not_proof"
+    },
+    {
+      "node_type": "doc_section",
+      "required_fields": [
+        "node_id",
+        "node_type",
+        "path",
+        "heading",
+        "anchor",
+        "line_range",
+        "claim_surface",
+        "citation_refs",
+        "freshness_status"
+      ],
+      "stable_id_fields": [
+        "node_type",
+        "canonical_path",
+        "anchor",
+        "line_range.start"
+      ],
+      "freshness_inputs": [
+        "content_sha256",
+        "citation_artifact_paths",
+        "citation_values"
+      ],
+      "redaction_class": "redacted_content_excerpt",
+      "failure_mode": "suppress_release_claim_context"
+    },
+    {
+      "node_type": "evidence_artifact",
+      "required_fields": [
+        "node_id",
+        "node_type",
+        "path",
+        "artifact_schema",
+        "generated_at",
+        "provenance",
+        "claim_surface",
+        "freshness_status",
+        "claim_gate_status"
+      ],
+      "stable_id_fields": [
+        "node_type",
+        "canonical_path",
+        "artifact_schema",
+        "provenance.run_id",
+        "provenance.correlation_id"
+      ],
+      "freshness_inputs": [
+        "generated_at",
+        "mtime_unix_ms",
+        "sha256",
+        "run_id",
+        "correlation_id",
+        "git_commit",
+        "overall_verdict"
+      ],
+      "redaction_class": "artifact_metadata_and_redacted_summary",
+      "failure_mode": "classify_not_current"
+    },
+    {
+      "node_type": "bead",
+      "required_fields": [
+        "node_id",
+        "node_type",
+        "id",
+        "title",
+        "status",
+        "priority",
+        "dependencies",
+        "dependents",
+        "updated_at",
+        "actionability_status"
+      ],
+      "stable_id_fields": [
+        "node_type",
+        "id"
+      ],
+      "freshness_inputs": [
+        "status",
+        "updated_at",
+        "closed_at",
+        "dependencies",
+        "external_ref",
+        "assignee"
+      ],
+      "redaction_class": "task_metadata_only",
+      "failure_mode": "unknown_fail_closed"
+    },
+    {
+      "node_type": "provider_surface",
+      "required_fields": [
+        "node_id",
+        "node_type",
+        "provider_id",
+        "api_kind",
+        "source_path",
+        "capabilities",
+        "contract_tests",
+        "freshness_status"
+      ],
+      "stable_id_fields": [
+        "node_type",
+        "provider_id",
+        "api_kind"
+      ],
+      "freshness_inputs": [
+        "source_sha256",
+        "contract_test_paths",
+        "registry_entry"
+      ],
+      "redaction_class": "source_metadata_only",
+      "failure_mode": "include_unproven_surface_warning"
+    },
+    {
+      "node_type": "validation_command",
+      "required_fields": [
+        "node_id",
+        "node_type",
+        "command",
+        "workdir",
+        "requires_rch",
+        "target_dir_policy",
+        "proves",
+        "expected_artifacts"
+      ],
+      "stable_id_fields": [
+        "node_type",
+        "command",
+        "workdir"
+      ],
+      "freshness_inputs": [
+        "command",
+        "environment_contract",
+        "expected_artifacts"
+      ],
+      "redaction_class": "command_metadata_only",
+      "failure_mode": "do_not_infer_pass"
+    }
+  ],
+  "edge_schemas": [
+    {
+      "edge_type": "defined_in",
+      "from_node_types": [
+        "code_symbol"
+      ],
+      "to_node_types": [
+        "file_region"
+      ],
+      "required_fields": [
+        "source_range",
+        "content_sha256"
+      ]
+    },
+    {
+      "edge_type": "validated_by",
+      "from_node_types": [
+        "code_symbol",
+        "provider_surface",
+        "doc_section",
+        "evidence_artifact"
+      ],
+      "to_node_types": [
+        "test_case",
+        "validation_command"
+      ],
+      "required_fields": [
+        "confidence",
+        "reason",
+        "proof_path"
+      ]
+    },
+    {
+      "edge_type": "cites",
+      "from_node_types": [
+        "doc_section"
+      ],
+      "to_node_types": [
+        "evidence_artifact"
+      ],
+      "required_fields": [
+        "citation_kind",
+        "citation_value",
+        "claim_surface"
+      ]
+    },
+    {
+      "edge_type": "tracks",
+      "from_node_types": [
+        "bead"
+      ],
+      "to_node_types": [
+        "code_symbol",
+        "file_region",
+        "test_case",
+        "doc_section",
+        "evidence_artifact",
+        "provider_surface",
+        "validation_command"
+      ],
+      "required_fields": [
+        "link_source",
+        "confidence",
+        "reason"
+      ]
+    },
+    {
+      "edge_type": "requires_freshness",
+      "from_node_types": [
+        "doc_section",
+        "validation_command"
+      ],
+      "to_node_types": [
+        "evidence_artifact",
+        "bead"
+      ],
+      "required_fields": [
+        "policy_id",
+        "fail_closed_reason"
+      ]
+    }
+  ],
+  "freshness_policy": {
+    "default_stale_after_hours": 24,
+    "release_facing_evidence_stale_after_days": 14,
+    "classification_rules": [
+      {
+        "id": "FRESHNESS-CURRENT",
+        "applies_to": [
+          "evidence_artifact"
+        ],
+        "status": "current",
+        "requires_all": [
+          "artifact_exists",
+          "valid_json_when_json",
+          "expected_schema_matches_when_declared",
+          "fresh_generated_at_or_mtime",
+          "provenance_matches_citation_when_cited",
+          "claim_gate_allows_surface_when_release_facing"
+        ]
+      },
+      {
+        "id": "FRESHNESS-HISTORICAL",
+        "applies_to": [
+          "evidence_artifact",
+          "doc_section"
+        ],
+        "status": "historical_snapshot",
+        "requires_any": [
+          "claim_surface_is_historical_snapshot",
+          "doc_section_explicitly_says_not_current"
+        ],
+        "release_claim_allowed": false
+      },
+      {
+        "id": "FRESHNESS-STALE",
+        "applies_to": [
+          "evidence_artifact",
+          "doc_section"
+        ],
+        "status": "stale",
+        "requires_any": [
+          "generated_at_older_than_policy",
+          "mtime_older_than_policy",
+          "cited_correlation_id_absent",
+          "claim_gate_reports_no_data"
+        ],
+        "release_claim_allowed": false
+      },
+      {
+        "id": "FRESHNESS-MISSING",
+        "applies_to": [
+          "evidence_artifact",
+          "file_region",
+          "doc_section"
+        ],
+        "status": "missing",
+        "requires_any": [
+          "path_missing",
+          "source_unreadable"
+        ],
+        "release_claim_allowed": false
+      },
+      {
+        "id": "FRESHNESS-MALFORMED",
+        "applies_to": [
+          "evidence_artifact",
+          "bead"
+        ],
+        "status": "malformed",
+        "requires_any": [
+          "json_parse_error",
+          "schema_mismatch",
+          "required_field_missing"
+        ],
+        "release_claim_allowed": false
+      },
+      {
+        "id": "FRESHNESS-UNCERTIFIED",
+        "applies_to": [
+          "evidence_artifact",
+          "doc_section"
+        ],
+        "status": "uncertified",
+        "requires_any": [
+          "dropin_verdict_not_certified",
+          "blocking_gate_not_pass",
+          "open_critical_or_high_gap_without_active_owner"
+        ],
+        "release_claim_allowed": false
+      }
+    ]
+  },
+  "bead_actionability_policy": {
+    "classification_rules": [
+      {
+        "id": "BEAD-ACTIONABLE-OPEN",
+        "source_status": "open",
+        "actionability_status": "actionable_open",
+        "requires": [
+          "not_blocked",
+          "not_tombstone",
+          "not_deleted"
+        ]
+      },
+      {
+        "id": "BEAD-CLAIMED-IN-PROGRESS",
+        "source_status": "in_progress",
+        "actionability_status": "claimed_in_progress",
+        "requires": [
+          "recent_updated_at_or_active_assignee"
+        ]
+      },
+      {
+        "id": "BEAD-STALLED-REOPEN-CANDIDATE",
+        "source_status": "in_progress",
+        "actionability_status": "stalled_reopen_candidate",
+        "requires": [
+          "stale_updated_at",
+          "missing_recent_comments_or_activity"
+        ]
+      },
+      {
+        "id": "BEAD-CLOSED-REFERENCE-ONLY",
+        "source_status": "closed",
+        "actionability_status": "closed_reference_only",
+        "requires": [
+          "closed_at_present_or_close_reason_present"
+        ]
+      },
+      {
+        "id": "BEAD-TOMBSTONE-REFERENCE-ONLY",
+        "source_status": "tombstone",
+        "actionability_status": "tombstone_reference_only",
+        "requires": [
+          "status_equals_tombstone_or_deleted_marker_present"
+        ]
+      },
+      {
+        "id": "BEAD-UNKNOWN-FAIL-CLOSED",
+        "source_status": "*",
+        "actionability_status": "unknown_fail_closed",
+        "requires_any": [
+          "missing_status",
+          "malformed_issue_record",
+          "unrecognized_status"
+        ]
+      }
+    ]
+  },
+  "redaction_policy": {
+    "redaction_summary_required": true,
+    "forbidden_raw_fields": [
+      "authorization",
+      "bearer",
+      "cookie",
+      "password",
+      "prompt",
+      "registration_token",
+      "secret",
+      "token"
+    ],
+    "sensitive_key_fragments": [
+      "api_key",
+      "authorization",
+      "bearer",
+      "body",
+      "cookie",
+      "key",
+      "password",
+      "prompt",
+      "registration_token",
+      "secret",
+      "token",
+      "transcript"
+    ],
+    "path_classes_requiring_redaction": [
+      "tests/fixtures/vcr/**",
+      "tests/e2e_results/**",
+      ".pi/sessions/**",
+      "docs/evidence/**",
+      "tests/perf/reports/**"
+    ],
+    "safe_summary_fields": [
+      "redacted_count",
+      "redacted_fields",
+      "redaction_policy_id",
+      "raw_bytes_seen",
+      "raw_bytes_emitted"
+    ],
+    "raw_bytes_emitted_must_be_zero_for_secret_classes": true
+  },
+  "relationship_to_existing_systems": [
+    {
+      "system_id": "tool_output_context_cache",
+      "paths": [
+        "docs/evidence/tool-output-context-cache.jsonl"
+      ],
+      "relationship": "The semantic graph may reuse cache invalidation concepts such as file_content, directory_immediate, and directory_recursive dependencies, but must not serve cached content without independently verifying current fingerprints.",
+      "not_replaced": true
+    },
+    {
+      "system_id": "session_index_cache",
+      "paths": [
+        "src/session_index.rs"
+      ],
+      "relationship": "The graph may link sessions by metadata and cwd for provenance, but session JSONL contents stay subject to workspace identity and redaction policy before any context bundle use.",
+      "not_replaced": true
+    },
+    {
+      "system_id": "swarm_operator_runpack",
+      "paths": [
+        "scripts/build_swarm_operator_runpack.py",
+        "docs/contracts/swarm-operator-runpack-contract.json"
+      ],
+      "relationship": "The graph can consume runpack source statuses and degraded reasons as advisory evidence, but operator runpacks remain the handoff artifact and source-status authority.",
+      "not_replaced": true
+    },
+    {
+      "system_id": "readme_evidence_freshness_gate",
+      "paths": [
+        "scripts/check_readme_evidence_freshness.py"
+      ],
+      "relationship": "The graph can expose README citation freshness as context metadata, but the freshness checker remains the claim gate for README proof obligations.",
+      "not_replaced": true
+    },
+    {
+      "system_id": "beads",
+      "paths": [
+        ".beads/issues.jsonl"
+      ],
+      "relationship": "The graph may classify issue relevance and actionability for bundle planning; Beads remains authoritative for status, ownership, dependency graph, and closure.",
+      "not_replaced": true
+    },
+    {
+      "system_id": "agent_mail",
+      "paths": [
+        "/home/ubuntu/.mcp_agent_mail_git_mailbox_repo"
+      ],
+      "relationship": "The graph may reference coordination health and reservation summaries when provided, but it must never infer reservations or send messages.",
+      "not_replaced": true
+    }
+  ],
+  "classification_fixtures": [
+    {
+      "fixture_id": "stale-evidence-generated-at-expired",
+      "input": {
+        "node_type": "evidence_artifact",
+        "path": "docs/evidence/dropin-certification-verdict.json",
+        "artifact_schema": "pi.dropin_certification.verdict.v1",
+        "generated_at": "2026-01-01T00:00:00Z",
+        "claim_surface": "release_facing",
+        "citation_value": "strict replacement wording"
+      },
+      "expected": {
+        "freshness_status": "stale",
+        "release_claim_allowed": false,
+        "reason": "generated_at_older_than_policy"
+      }
+    },
+    {
+      "fixture_id": "current-historical-evidence-is-not-release-proof",
+      "input": {
+        "node_type": "evidence_artifact",
+        "path": "docs/planning/old-benchmark-snapshot.json",
+        "artifact_schema": "pi.perf.budget_summary.v1",
+        "generated_at": "2026-05-13T00:00:00Z",
+        "claim_surface": "historical_snapshot"
+      },
+      "expected": {
+        "freshness_status": "historical_snapshot",
+        "release_claim_allowed": false,
+        "reason": "claim_surface_is_historical_snapshot"
+      }
+    },
+    {
+      "fixture_id": "closed-bead-reference-only",
+      "input": {
+        "node_type": "bead",
+        "id": "bd-closed-example",
+        "status": "closed",
+        "closed_at": "2026-05-01T00:00:00Z",
+        "close_reason": "completed"
+      },
+      "expected": {
+        "actionability_status": "closed_reference_only",
+        "planner_may_claim": false,
+        "reason": "closed_work_is_context_only"
+      }
+    },
+    {
+      "fixture_id": "tombstone-bead-reference-only",
+      "input": {
+        "node_type": "bead",
+        "id": "bd-tombstone-example",
+        "status": "tombstone",
+        "deleted": true
+      },
+      "expected": {
+        "actionability_status": "tombstone_reference_only",
+        "planner_may_claim": false,
+        "reason": "tombstone_is_never_actionable"
+      }
+    },
+    {
+      "fixture_id": "malformed-bead-fails-closed",
+      "input": {
+        "node_type": "bead",
+        "id": "bd-malformed-example"
+      },
+      "expected": {
+        "actionability_status": "unknown_fail_closed",
+        "planner_may_claim": false,
+        "reason": "missing_status"
+      }
+    }
+  ],
+  "validation_commands": [
+    {
+      "id": "semantic-workspace-graph-contract-test",
+      "command": "cargo test --test semantic_workspace_graph_contract",
+      "workdir": ".",
+      "requires_rch": true,
+      "target_dir_policy": "agent_specific_CARGO_TARGET_DIR_and_TMPDIR_required_for_heavy_runs",
+      "proves": [
+        "contract JSON is parseable",
+        "required node schemas are complete",
+        "freshness and actionability policies are fail closed",
+        "stale evidence and closed or tombstone beads are explicitly classified",
+        "authority boundaries preserve existing sources of truth"
+      ],
+      "expected_artifacts": [
+        "docs/contracts/semantic-workspace-graph-contract.json"
+      ]
+    }
+  ],
+  "must_requirements": [
+    {
+      "id": "SWG-MUST-001",
+      "description": "The contract declares the graph schema, bead linkage, purpose, non-goals, and authority boundaries before any implementation bead can rely on it.",
+      "validated_by": [
+        "schema",
+        "bead_id",
+        "purpose",
+        "non_goals",
+        "authority_boundaries"
+      ]
+    },
+    {
+      "id": "SWG-MUST-002",
+      "description": "The contract defines schemas for code_symbol, file_region, test_case, doc_section, evidence_artifact, bead, provider_surface, and validation_command nodes.",
+      "validated_by": [
+        "required_node_types",
+        "node_schemas"
+      ]
+    },
+    {
+      "id": "SWG-MUST-003",
+      "description": "The contract inventories current code, test, docs, evidence, cache, session, resource, Beads, provider, and runpack surfaces that future graph builders must treat as inputs.",
+      "validated_by": [
+        "current_surface_inventory"
+      ]
+    },
+    {
+      "id": "SWG-MUST-004",
+      "description": "The contract explicitly classifies stale, missing, malformed, uncertified, historical, closed, tombstoned, and unknown inputs instead of treating them as usable current context.",
+      "validated_by": [
+        "freshness_policy",
+        "bead_actionability_policy",
+        "classification_fixtures"
+      ]
+    },
+    {
+      "id": "SWG-MUST-005",
+      "description": "The contract requires redaction summaries and blocks raw secrets, prompts, credentials, tokens, cookies, and VCR/session payloads from graph artifacts.",
+      "validated_by": [
+        "redaction_policy"
+      ]
+    },
+    {
+      "id": "SWG-MUST-006",
+      "description": "The graph contract distinguishes itself from the existing tool-output cache, session index cache, swarm runpack, README freshness gate, Beads, and Agent Mail.",
+      "validated_by": [
+        "relationship_to_existing_systems"
+      ]
+    }
+  ]
+}
