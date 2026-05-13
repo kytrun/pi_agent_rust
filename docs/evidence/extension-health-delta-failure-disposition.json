@@ -1,61 +1,80 @@
 {
   "schema": "pi.ext.health_delta_failure_disposition.v1",
-  "generated_at": "2026-05-13T01:43:31Z",
-  "source_bead": "bd-d7v9g.5",
+  "generated_at": "2026-05-13T03:10:00Z",
+  "source_bead": "bd-d7v9g.6",
+  "owner_bead": "bd-0bu83",
   "source_report": "tests/ext_conformance/reports/health_delta/health_delta_report.json",
-  "source_report_generated_at": "2026-05-01T04:10:28.485Z",
+  "source_report_generated_at": "2026-05-13T03:07:06.361Z",
   "source_report_current_summary": {
     "manifest_count": 224,
     "tested": 224,
-    "passed": 221,
-    "failed": 3,
+    "passed": 219,
+    "failed": 5,
     "skipped": 0,
-    "pass_rate_pct": 98.66071428571429
+    "pass_rate_pct": 97.76785714285714
   },
+  "remaining_failure_count": 5,
+  "remaining_failure_owner": "bd-0bu83",
   "dispositions": [
     {
-      "extension_id": "community/nicobailon-subagents",
+      "extension_id": "base_fixtures",
+      "artifact_path": "tests/ext_conformance/artifacts/base_fixtures/negative_invalid_tool_schema/index.ts",
+      "source_report_bucket": "unchanged_failures",
+      "owner_bead": "bd-0bu83",
+      "current_status": "fail",
+      "failure_reason": "Load error: Extension error: registerTool: spec.name is required",
+      "root_cause": "The manifest includes a test-only negative fixture whose purpose is to exercise invalid registerTool schema handling. It is not a real extension compatibility target and should not silently count as a production extension regression.",
+      "disposition": "followup_required",
+      "rationale": "bd-0bu83 owns deciding whether this negative fixture should move out of full-manifest health accounting or remain as an explicit non-pass fixture with separate wording."
+    },
+    {
+      "extension_id": "npm/marckrenn-pi-sub-core",
+      "artifact_path": "tests/ext_conformance/fixtures/npm__marckrenn-pi-sub-core.json",
+      "source_report_bucket": "unchanged_failures",
+      "owner_bead": "bd-0bu83",
+      "current_status": "fail",
+      "failure_reason": "Manifest expects tools but none registered",
+      "root_cause": "The extension loads without registering the manifest-expected tool surface, indicating an initialization/runtime dependency gap.",
+      "disposition": "followup_required",
+      "rationale": "bd-0bu83 owns focused reproduction and either fixing the runtime gap or narrowing the fixture expectations."
+    },
+    {
+      "extension_id": "third-party/marckrenn-pi-sub",
+      "artifact_path": "tests/ext_conformance/fixtures/third-party__marckrenn-pi-sub.json",
       "source_report_bucket": "new_extensions",
-      "focused_reproduce": {
-        "command": "env RCH_ENV_ALLOWLIST=CARGO_TARGET_DIR,TMPDIR CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/goldenglacier/target TMPDIR=/data/tmp/pi_agent_rust_cargo/goldenglacier/tmp rch exec -- cargo test --test ext_conformance_generated --features ext-conformance -- ext_community_nicobailon_subagents --nocapture --exact",
-        "exit_code": 101,
-        "observed_failure": "Load error: Error loading module '/tmp/pi-async-subagent-results': host write denied: path outside extension root"
-      },
-      "root_cause": "The extension hardcodes global temp paths such as /tmp/pi-async-subagent-results and /tmp/pi-async-subagent-runs during activation, then calls node:fs mkdirSync before registration completes.",
-      "user_impact": "The extension cannot load or register in PiJS while the host write policy rejects global temp paths. This prevents its subagent tool/commands from becoming available.",
-      "disposition": "intentional_non_pass_fail_closed",
-      "rationale": "The write is not under the workspace or the active extension root. Allowing arbitrary global /tmp writes would broaden the filesystem policy beyond the current extension-root contract. A future fix should provide an explicitly scoped extension temp namespace or require the extension to use os.tmpdir() after Pi maps it to a policy-allowed location."
+      "owner_bead": "bd-0bu83",
+      "current_status": "fail",
+      "failure_reason": "Manifest expects tools but none registered",
+      "root_cause": "The extension loads without registering the manifest-expected tool surface, indicating an initialization/runtime dependency gap.",
+      "disposition": "followup_required",
+      "rationale": "bd-0bu83 owns focused reproduction and either fixing the runtime gap or narrowing the fixture expectations."
     },
     {
-      "extension_id": "npm/aliou-pi-processes",
-      "source_report_bucket": "unchanged_failures",
-      "focused_reproduce": {
-        "command": "env RCH_ENV_ALLOWLIST=CARGO_TARGET_DIR,TMPDIR CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/goldenglacier/target TMPDIR=/data/tmp/pi_agent_rust_cargo/goldenglacier/tmp rch exec -- cargo test --test ext_conformance_generated --features ext-conformance -- ext_npm_aliou_pi_processes --ignored --nocapture --exact",
-        "exit_code": 101,
-        "observed_failure": "Load error: cannot read property 'onEvent' of undefined at setupProcessEndHook"
-      },
-      "root_cause": "The stored health report's temp-write denial is stale for the focused RCH harness path: the conformance TMPDIR resolves inside the worker workspace, so the initial ProcessManager temp directory creation is policy-valid. The live failure is now a runtime/loader gap where the process hook setup receives an undefined manager before command registration completes.",
-      "user_impact": "The processes extension still cannot load or register its /processes command in the generated conformance harness.",
-      "disposition": "live_non_pass_followup_required",
-      "rationale": "This bead does not relax filesystem policy for npm/aliou-pi-processes because the old host-write denial is not the current focused failure. The remaining loader/hook failure needs a targeted runtime investigation and regression test."
+      "extension_id": "third-party/openclaw-openclaw",
+      "artifact_path": "tests/ext_conformance/fixtures/third-party__openclaw-openclaw.json",
+      "source_report_bucket": "new_extensions",
+      "owner_bead": "bd-0bu83",
+      "current_status": "fail",
+      "failure_reason": "Missing command 'files'. Actual: [\"diff\"]",
+      "root_cause": "The fixture or runtime exposes only the diff command while the manifest expects a files command as well.",
+      "disposition": "followup_required",
+      "rationale": "bd-0bu83 owns focused reproduction and deciding whether the command registration or manifest expectation is incorrect."
     },
     {
-      "extension_id": "third-party/aliou-pi-extensions",
-      "source_report_bucket": "unchanged_failures",
-      "focused_reproduce": {
-        "command": "env RCH_ENV_ALLOWLIST=CARGO_TARGET_DIR,TMPDIR CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/goldenglacier/target TMPDIR=/data/tmp/pi_agent_rust_cargo/goldenglacier/tmp rch exec -- cargo test --test ext_conformance_generated --features ext-conformance -- ext_third_party_aliou_pi_extensions --nocapture --exact",
-        "exit_code": 0,
-        "observed_failure": null
-      },
-      "root_cause": "The generated conformance test now registers the manifest-expected command set successfully. The health-delta report still records the older missing-command failure because it has not been regenerated since 2026-05-01.",
-      "user_impact": "No current runtime impact was reproduced for this extension in the focused generated conformance test.",
-      "disposition": "stale_report_entry_verified_pass",
-      "rationale": "The report should be refreshed by the health evidence snapshot follow-up, not hand-edited."
+      "extension_id": "third-party/w-winter-dot314",
+      "artifact_path": "tests/ext_conformance/fixtures/third-party__w-winter-dot314.json",
+      "source_report_bucket": "new_extensions",
+      "owner_bead": "bd-0bu83",
+      "current_status": "fail",
+      "failure_reason": "Missing command 'skill'. Actual command inventory includes code, files, rp, sandbox, branch, and related commands.",
+      "root_cause": "The fixture or runtime no longer exposes the manifest-expected skill command even though many adjacent commands register successfully.",
+      "disposition": "followup_required",
+      "rationale": "bd-0bu83 owns focused reproduction and deciding whether the command registration or manifest expectation is incorrect."
     }
   ],
   "redaction": {
     "contains_extension_output": false,
     "contains_secrets": false,
-    "notes": "Evidence records only extension ids, commands, exit codes, and summarized failure strings."
+    "notes": "Evidence records only extension ids, fixture paths, owner bead ids, and summarized failure strings."
   }
 }
