@@ -20,13 +20,15 @@ use pi::semantic_workspace_graph::{
 use pi::session::Session;
 use pi::tools::ToolRegistry;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Command;
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Instant;
 use tempfile::TempDir;
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -71,7 +73,14 @@ fn initialize_fixture_git_workspace(root: &Path) -> TestResult {
 }
 
 fn fixture_workspace() -> TestResult<TempDir> {
-    let temp = tempfile::tempdir()?;
+    let temp = std::env::var_os("TMPDIR")
+        .map(PathBuf::from)
+        .and_then(|tmpdir| {
+            fs::create_dir_all(&tmpdir)
+                .ok()
+                .and_then(|()| tempfile::Builder::new().tempdir_in(&tmpdir).ok())
+        })
+        .map_or_else(|| tempfile::Builder::new().tempdir_in("/tmp"), Ok)?;
     let root = temp.path();
 
     write_fixture(
@@ -278,6 +287,129 @@ Parity ledger claims cite docs/evidence/dropin-parity-gap-ledger.json.
     write_fixture(root, ".beads/issues.jsonl", &issues)?;
 
     Ok(temp)
+}
+
+fn permuted_large_context_indices(count: usize) -> Vec<usize> {
+    let mut indices = (0..count).collect::<Vec<_>>();
+    indices.sort_by_key(|idx| (idx * 37 + 11) % count);
+    indices
+}
+
+fn write_large_context_fixtures(root: &Path, order: &[usize]) -> TestResult {
+    for idx in order {
+        let module = format!("context_unit_{idx:03}");
+        write_fixture(
+            root,
+            &format!("src/context/{module}.rs"),
+            &format!(
+                r"
+pub struct ContextUnit{idx};
+
+pub fn {module}_value() -> usize {{
+    {idx}
+}}
+"
+            ),
+        )?;
+        write_fixture(
+            root,
+            &format!("tests/context/{module}_flow.rs"),
+            &format!(
+                r"
+#[test]
+fn validates_{module}() {{
+    assert_eq!({idx} + 1, {next});
+}}
+",
+                next = idx + 1
+            ),
+        )?;
+        write_fixture(
+            root,
+            &format!("docs/context/{module}.md"),
+            &format!(
+                r"
+# Context Unit {idx}
+
+This fixture gives the semantic context planner a large deterministic workspace.
+"
+            ),
+        )?;
+        write_fixture(
+            root,
+            &format!("docs/evidence/context_budget_{idx:03}.json"),
+            &format!(
+                r#"{{
+  "schema": "pi.context.fixture_evidence.v1",
+  "generated_at": "2026-05-13T00:00:00Z",
+  "module": "{module}",
+  "claim_surface": "internal_perf_budget"
+}}"#
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+fn large_context_fixture_workspace(order: &[usize]) -> TestResult<TempDir> {
+    let temp = fixture_workspace()?;
+    write_large_context_fixtures(temp.path(), order)?;
+    Ok(temp)
+}
+
+fn add_incremental_context_fixture(root: &Path) -> TestResult {
+    write_fixture(
+        root,
+        "src/context/incremental_refresh.rs",
+        r#"
+pub struct IncrementalRefresh;
+
+pub fn refresh_context_bundle() -> &'static str {
+    "incremental"
+}
+"#,
+    )?;
+    write_fixture(
+        root,
+        "tests/context/incremental_refresh_flow.rs",
+        r#"
+#[test]
+fn validates_incremental_refresh() {
+    assert_eq!("incremental".len(), 11);
+}
+"#,
+    )?;
+    write_fixture(
+        root,
+        "docs/context/incremental_refresh.md",
+        r"
+# Incremental Refresh
+
+The context planner must keep deterministic output after a single workspace change.
+",
+    )
+}
+
+fn resolved_cargo_target_dir(root: &Path) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR").map_or_else(
+        || root.join("target"),
+        |raw| {
+            let target_dir = PathBuf::from(raw);
+            if target_dir.is_absolute() {
+                target_dir
+            } else {
+                root.join(target_dir)
+            }
+        },
+    )
+}
+
+fn resolved_tmpdir() -> PathBuf {
+    std::env::var_os("TMPDIR").map_or_else(std::env::temp_dir, PathBuf::from)
+}
+
+fn elapsed_ms(start: Instant) -> f64 {
+    (start.elapsed().as_secs_f64() * 1000.0).max(0.001)
 }
 
 fn add_sensitive_context_fixtures(root: &Path) -> TestResult {
@@ -1072,6 +1204,146 @@ fn planner_redacts_sensitive_artifacts_and_fails_closed_cache_validation() -> Te
             .invalidation_reasons
             .contains(&"cache_ttl_expired".to_string())
     );
+
+    Ok(())
+}
+
+#[test]
+fn large_workspace_context_planner_budget_artifact_is_deterministic_under_randomized_order()
+-> TestResult {
+    let canonical_order = (0..48).collect::<Vec<_>>();
+    let randomized_order = permuted_large_context_indices(48);
+    let primary = large_context_fixture_workspace(&canonical_order)?;
+
+    let cold_start = Instant::now();
+    let _cold_graph = build_fixture_graph(primary.path())?;
+    let cold_ms = elapsed_ms(cold_start);
+
+    let warm_start = Instant::now();
+    let _warm_graph = build_fixture_graph(primary.path())?;
+    let warm_ms = elapsed_ms(warm_start);
+
+    add_incremental_context_fixture(primary.path())?;
+    let incremental_start = Instant::now();
+    let incremental_graph = build_fixture_graph(primary.path())?;
+    let incremental_ms = elapsed_ms(incremental_start);
+
+    let request = ContextBundleRequest {
+        query: Some("context planner budget incremental refresh".to_string()),
+        changed_paths: vec![
+            "src/context/incremental_refresh.rs".to_string(),
+            "tests/context/incremental_refresh_flow.rs".to_string(),
+        ],
+        workspace_id: Some("context-budget-workspace".to_string()),
+        branch: Some("main".to_string()),
+        session_id: Some("context-budget-session".to_string()),
+        generated_at_utc: Some("2026-05-13T00:00:00Z".to_string()),
+        cache_ttl_seconds: 900,
+        budget: ContextBundleBudget {
+            max_items: 12,
+            max_bytes: 16 * 1024,
+        },
+        ..ContextBundleRequest::default()
+    };
+
+    let planning_start = Instant::now();
+    let bundle = SemanticContextBundlePlanner::new(&incremental_graph).plan(&request);
+    let planning_ms = elapsed_ms(planning_start);
+
+    let serialization_start = Instant::now();
+    let bundle_json = serde_json::to_vec(&bundle)?;
+    let serialization_ms = elapsed_ms(serialization_start);
+
+    let replay = large_context_fixture_workspace(&randomized_order)?;
+    add_incremental_context_fixture(replay.path())?;
+    let replay_graph = build_fixture_graph(replay.path())?;
+    let replay_bundle = SemanticContextBundlePlanner::new(&replay_graph).plan(&request);
+
+    let bundle_summary = bundle_golden_summary(&bundle);
+    let replay_summary = bundle_golden_summary(&replay_bundle);
+    assert_eq!(
+        bundle_summary, replay_summary,
+        "large workspace planner output must not depend on filesystem creation order"
+    );
+    assert!(bundle.selected_items.iter().any(|item| {
+        item.source_path == "src/context/incremental_refresh.rs"
+            && item.reason.contains("related_to_bead_or_changed_path")
+    }));
+    assert!(bundle.estimated_bytes <= request.budget.max_bytes);
+
+    let target_dir = resolved_cargo_target_dir(primary.path());
+    let tmpdir = resolved_tmpdir();
+    let artifact_dir = target_dir.join("perf");
+    fs::create_dir_all(&artifact_dir)?;
+    let summary_bytes = serde_json::to_vec(&bundle_summary)?;
+    let summary_sha256 = format!("{:x}", Sha256::digest(&summary_bytes));
+    let artifact = json!({
+        "schema": "pi.semantic_context.performance_budget.v1",
+        "generated_at": "2026-05-13T00:00:00Z",
+        "run_id": "semantic-context-large-workspace-regression",
+        "correlation_id": "semantic-context-large-workspace-regression",
+        "environment": {
+            "cargo_target_dir": target_dir.display().to_string(),
+            "tmpdir": tmpdir.display().to_string()
+        },
+        "host": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH
+        },
+        "workspace": {
+            "fixture": "synthetic_large_workspace",
+            "file_order_cases": ["canonical", "permuted"],
+            "graph_nodes": incremental_graph.nodes.len(),
+            "graph_edges": incremental_graph.edges.len(),
+            "trace_events": incremental_graph.trace.len()
+        },
+        "cache_hit_miss": {
+            "cold_graph_build": "miss:no_prior_graph",
+            "warm_graph_build": "hit:stable_input_fingerprints",
+            "incremental_update": "miss:input_fingerprint_changed"
+        },
+        "determinism": {
+            "randomized_file_order_checked": true,
+            "matched": true,
+            "first_summary_sha256": summary_sha256,
+            "second_summary_sha256": summary_sha256
+        },
+        "metrics": {
+            "context_graph_build_cold_ms": {"p95_ms": cold_ms},
+            "context_graph_build_warm_ms": {"p95_ms": warm_ms},
+            "context_incremental_update_ms": {"p95_ms": incremental_ms},
+            "context_planning_ms": {"p95_ms": planning_ms},
+            "context_bundle_serialization_ms": {"p95_ms": serialization_ms},
+            "context_bundle_estimated_bytes": {"bytes": bundle.estimated_bytes}
+        }
+    });
+    let artifact_path = artifact_dir.join("context_intelligence_planner_budget.json");
+    fs::write(&artifact_path, serde_json::to_string_pretty(&artifact)?)?;
+    let persisted: serde_json::Value = serde_json::from_slice(&fs::read(&artifact_path)?)?;
+    assert_eq!(
+        persisted["schema"],
+        json!("pi.semantic_context.performance_budget.v1")
+    );
+    assert_eq!(
+        persisted["environment"]["cargo_target_dir"],
+        json!(target_dir.display().to_string())
+    );
+    assert_eq!(
+        persisted["environment"]["tmpdir"],
+        json!(tmpdir.display().to_string())
+    );
+    assert_eq!(persisted["determinism"]["matched"], json!(true));
+    assert!(
+        persisted["metrics"]["context_graph_build_cold_ms"]["p95_ms"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0)
+    );
+    assert!(
+        persisted["metrics"]["context_bundle_estimated_bytes"]["bytes"]
+            .as_u64()
+            .is_some_and(|value| value > 0)
+    );
+    assert!(!String::from_utf8(bundle_json)?.contains("sk-secret"));
 
     Ok(())
 }

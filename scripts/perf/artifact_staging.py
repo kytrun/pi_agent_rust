@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from preflight_budget_inputs import (
+    CONTEXT_BUDGET_ARTIFACTS,
     DEFAULT_EVIDENCE_CACHE_TTL_HOURS,
     DEFAULT_MAX_ARTIFACT_AGE_HOURS,
     EVIDENCE_CACHE_ENTRY_SCHEMA,
@@ -25,6 +26,7 @@ from preflight_budget_inputs import (
     current_git_commit,
     current_host_fingerprint,
     current_toolchain,
+    context_criterion_relative,
     evidence_cache_for_group,
     file_age_hours,
     iso_now,
@@ -496,6 +498,10 @@ def write_fixture(root: Path, include_policy: bool) -> None:
         root / "target/criterion/ext_load_init/load_init_cold/hello/new/estimates.json",
         root / "target/criterion/ext_protocol/parse_and_validate/log/new/estimates.json",
     ]
+    estimate_paths.extend(
+        root / "target" / context_criterion_relative(bench_name)
+        for _budget_name, bench_name in CONTEXT_BUDGET_ARTIFACTS
+    )
     if include_policy:
         estimate_paths.append(root / "target/criterion/ext_policy/evaluate/safe/new/estimates.json")
     for path in estimate_paths:
@@ -513,6 +519,38 @@ def write_fixture(root: Path, include_policy: bool) -> None:
     )
     (root / "target/perf/results/phase1_matrix_validation.json").write_text(
         '{"schema":"pi.perf.phase1_matrix_validation.v1"}',
+        encoding="utf-8",
+    )
+    context_budget_path = root / "target/perf/context_intelligence/perf_budget.json"
+    context_budget_path.parent.mkdir(parents=True, exist_ok=True)
+    context_budget_path.write_text(
+        json.dumps(
+            {
+                "schema": "pi.semantic_context.performance_budget.v1",
+                "environment": {
+                    "cargo_target_dir": str(root / "target"),
+                    "tmpdir": str(root / "tmp"),
+                },
+                "host": {"os": "self-test", "arch": "x86_64"},
+                "determinism": {
+                    "randomized_file_order_checked": True,
+                    "matched": True,
+                },
+                "cache_hit_miss": {
+                    "cold_graph_build": "fresh_fixture",
+                    "warm_graph_build": "same_workspace_rebuild",
+                    "incremental_update": "single_file_rebuild",
+                },
+                "metrics": {
+                    "context_graph_build_cold_ms": {"p95_ms": 1.0},
+                    "context_graph_build_warm_ms": {"p95_ms": 1.0},
+                    "context_incremental_update_ms": {"p95_ms": 1.0},
+                    "context_planning_ms": {"p95_ms": 1.0},
+                    "context_bundle_serialization_ms": {"p95_ms": 1.0},
+                    "context_bundle_estimated_bytes": {"bytes": 1024.0},
+                },
+            }
+        ),
         encoding="utf-8",
     )
 

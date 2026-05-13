@@ -112,6 +112,7 @@ declare -A CRITERION_BENCHES=(
   [criterion_tools]="tools"
   [criterion_extensions]="extensions"
   [criterion_system]="system"
+  [criterion_semantic_context]="semantic_context"
 )
 
 SELECTED_SUITES=()

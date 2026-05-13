@@ -887,6 +887,85 @@ def binary_candidates(
     return dedupe_paths(paths)
 
 
+CONTEXT_BUDGET_ARTIFACTS: tuple[tuple[str, str], ...] = (
+    ("context_graph_build_cold_p95", "graph_build_cold"),
+    ("context_graph_build_warm_p95", "graph_build_warm"),
+    ("context_incremental_update_p95", "incremental_update"),
+    ("context_planning_p95", "planning"),
+    ("context_bundle_serialization_p95", "bundle_serialization"),
+)
+CONTEXT_BUDGET_JSON_NAMES: tuple[str, ...] = tuple(
+    budget_name for budget_name, _bench_name in CONTEXT_BUDGET_ARTIFACTS
+) + ("context_bundle_estimated_bytes_max",)
+
+
+def context_criterion_relative(bench_name: str) -> Path:
+    return Path("criterion/semantic_context") / bench_name / "large_workspace/new/estimates.json"
+
+
+def context_artifact_groups(
+    repo_root: Path,
+    target_dir: Path,
+    bench_prefix: str,
+) -> list[ArtifactGroup]:
+    suggested = (
+        f"{bench_prefix} bench --bench semantic_context --profile perf semantic_context",
+    )
+    return [
+        ArtifactGroup(
+            contract_id=budget_name,
+            budget_names=(budget_name,),
+            candidates=evidence_then_target_paths(
+                repo_root,
+                target_dir,
+                (str(context_criterion_relative(bench_name)),),
+                (str(context_criterion_relative(bench_name)),),
+            ),
+            suggested_commands=suggested,
+            reason=(
+                f"semantic_context/{bench_name}/large_workspace Criterion estimate "
+                "required by tests/perf_budgets.rs"
+            ),
+            expected_outputs=(
+                target_dir / context_criterion_relative(bench_name),
+                repo_root / "tests/perf/reports" / context_criterion_relative(bench_name),
+            ),
+        )
+        for budget_name, bench_name in CONTEXT_BUDGET_ARTIFACTS
+    ]
+
+
+def context_budget_json_candidates(repo_root: Path, target_dir: Path) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    explicit = os.environ.get("PERF_CONTEXT_INTELLIGENCE_BUDGET_JSON")
+    if explicit:
+        path = resolve_env_path(repo_root, explicit)
+        if path is not None:
+            paths.append(path)
+    for evidence_dir in perf_evidence_dirs(repo_root):
+        paths.extend(
+            evidence_dir / relative
+            for relative in (
+                "context_intelligence_planner_budget.json",
+                "results/context_intelligence_planner_budget.json",
+                "perf/context_intelligence_planner_budget.json",
+                "perf/results/context_intelligence_planner_budget.json",
+                "context_intelligence/perf_budget.json",
+                "perf/context_intelligence/perf_budget.json",
+            )
+        )
+    paths.extend(
+        target_dir / relative
+        for relative in (
+            "perf/context_intelligence_planner_budget.json",
+            "perf/results/context_intelligence_planner_budget.json",
+            "perf/context_intelligence/perf_budget.json",
+        )
+    )
+    paths.append(repo_root / "tests/perf/reports/context_intelligence_planner_budget.json")
+    return dedupe_paths(paths)
+
+
 def artifact_groups(repo_root: Path, target_dir: Path) -> list[ArtifactGroup]:
     cargo_env = (
         'export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/data/tmp/pi_agent_rust_cargo/${USER:-agent}/target}" '
@@ -937,6 +1016,20 @@ def artifact_groups(repo_root: Path, target_dir: Path) -> list[ArtifactGroup]:
                 / "tests/perf/reports/criterion/ext_load_init/load_init_cold/hello/new/estimates.json",
             ),
             blocker=EXTENSION_BLOCKER_BEAD,
+        ),
+        *context_artifact_groups(repo_root, target_dir, bench_prefix),
+        ArtifactGroup(
+            contract_id="context_intelligence_budget_artifact",
+            budget_names=CONTEXT_BUDGET_JSON_NAMES,
+            candidates=context_budget_json_candidates(repo_root, target_dir),
+            suggested_commands=(
+                f"{bench_prefix} bench --bench semantic_context --profile perf semantic_context",
+            ),
+            reason="context_intelligence_planner_budget.json required by tests/perf_budgets.rs",
+            expected_outputs=(
+                target_dir / "perf/context_intelligence/perf_budget.json",
+                repo_root / "tests/perf/reports/context_intelligence_planner_budget.json",
+            ),
         ),
         ArtifactGroup(
             contract_id="pijs_workload",
@@ -1413,6 +1506,12 @@ def run_self_test() -> int:
               Budget { name: "ext_cold_load_simple_p95", category: "extension", metric: "p95", unit: "ms", threshold: 5.0, methodology: "criterion: ext_load_init", ci_enforced: true },
               Budget { name: "tool_call_latency_p99", category: "tool_call", metric: "p99", unit: "us", threshold: 200.0, methodology: "pijs_workload", ci_enforced: true },
               Budget { name: "tool_call_throughput_min", category: "tool_call", metric: "min", unit: "calls/sec", threshold: 5000.0, methodology: "pijs_workload", ci_enforced: true },
+              Budget { name: "context_graph_build_cold_p95", category: "context_intelligence", metric: "p95", unit: "ms", threshold: 500.0, methodology: "criterion: semantic_context/graph_build_cold", ci_enforced: true },
+              Budget { name: "context_graph_build_warm_p95", category: "context_intelligence", metric: "p95", unit: "ms", threshold: 250.0, methodology: "criterion: semantic_context/graph_build_warm", ci_enforced: true },
+              Budget { name: "context_incremental_update_p95", category: "context_intelligence", metric: "p95", unit: "ms", threshold: 250.0, methodology: "criterion: semantic_context/incremental_update", ci_enforced: true },
+              Budget { name: "context_planning_p95", category: "context_intelligence", metric: "p95", unit: "ms", threshold: 50.0, methodology: "criterion: semantic_context/planning", ci_enforced: true },
+              Budget { name: "context_bundle_serialization_p95", category: "context_intelligence", metric: "p95", unit: "ms", threshold: 25.0, methodology: "criterion: semantic_context/bundle_serialization", ci_enforced: true },
+              Budget { name: "context_bundle_estimated_bytes_max", category: "context_intelligence", metric: "bytes", unit: "bytes", threshold: 262144.0, methodology: "semantic_context budget artifact", ci_enforced: true },
               Budget { name: "policy_eval_p99", category: "policy", metric: "p99", unit: "ns", threshold: 500.0, methodology: "criterion: ext_policy", ci_enforced: true },
               Budget { name: "idle_memory_rss", category: "memory", metric: "RSS", unit: "MB", threshold: 50.0, methodology: "sysinfo", ci_enforced: true },
               Budget { name: "binary_size_release", category: "binary", metric: "size", unit: "MB", threshold: BINARY_SIZE_RELEASE_BUDGET_MB, methodology: "ls", ci_enforced: true },
@@ -1427,6 +1526,10 @@ def run_self_test() -> int:
             root / "target/criterion/ext_load_init/load_init_cold/hello/new/estimates.json",
             root / "target/criterion/ext_protocol/parse_and_validate/log/new/estimates.json",
         ]
+        estimate_paths.extend(
+            root / "target" / context_criterion_relative(bench_name)
+            for _budget_name, bench_name in CONTEXT_BUDGET_ARTIFACTS
+        )
         if include_policy:
             estimate_paths.append(root / "target/criterion/ext_policy/evaluate/safe/new/estimates.json")
         for path in estimate_paths:
@@ -1443,6 +1546,38 @@ def run_self_test() -> int:
         )
         (root / "target/perf/results/phase1_matrix_validation.json").write_text(
             '{"schema":"pi.perf.phase1_matrix_validation.v1"}',
+            encoding="utf-8",
+        )
+        context_budget_path = root / "target/perf/context_intelligence/perf_budget.json"
+        context_budget_path.parent.mkdir(parents=True, exist_ok=True)
+        context_budget_path.write_text(
+            json.dumps(
+                {
+                    "schema": "pi.semantic_context.performance_budget.v1",
+                    "environment": {
+                        "cargo_target_dir": str(root / "target"),
+                        "tmpdir": str(root / "tmp"),
+                    },
+                    "host": {"os": "self-test", "arch": "x86_64"},
+                    "determinism": {
+                        "randomized_file_order_checked": True,
+                        "matched": True,
+                    },
+                    "cache_hit_miss": {
+                        "cold_graph_build": "fresh_fixture",
+                        "warm_graph_build": "same_workspace_rebuild",
+                        "incremental_update": "single_file_rebuild",
+                    },
+                    "metrics": {
+                        "context_graph_build_cold_ms": {"p95_ms": 1.0},
+                        "context_graph_build_warm_ms": {"p95_ms": 1.0},
+                        "context_incremental_update_ms": {"p95_ms": 1.0},
+                        "context_planning_ms": {"p95_ms": 1.0},
+                        "context_bundle_serialization_ms": {"p95_ms": 1.0},
+                        "context_bundle_estimated_bytes": {"bytes": 1024.0},
+                    },
+                }
+            ),
             encoding="utf-8",
         )
         (root / "tests/perf/reports/budget_summary.json").write_text(

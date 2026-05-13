@@ -118,6 +118,61 @@ const BUDGETS: &[Budget] = &[
         methodology: "criterion: event_hook dispatch for before_agent_start (100 samples)",
         ci_enforced: false,
     },
+    // ── Context Intelligence ─────────────────────────────────────────────
+    Budget {
+        name: "context_graph_build_cold_p95",
+        category: "context_intelligence",
+        metric: "p95 cold graph build latency",
+        unit: "ms",
+        threshold: 500.0,
+        methodology: "criterion: semantic_context/graph_build_cold on large filesystem fixture",
+        ci_enforced: true,
+    },
+    Budget {
+        name: "context_graph_build_warm_p95",
+        category: "context_intelligence",
+        metric: "p95 warm graph build latency",
+        unit: "ms",
+        threshold: 250.0,
+        methodology: "criterion: semantic_context/graph_build_warm on large filesystem fixture",
+        ci_enforced: true,
+    },
+    Budget {
+        name: "context_incremental_update_p95",
+        category: "context_intelligence",
+        metric: "p95 single-change rebuild latency",
+        unit: "ms",
+        threshold: 250.0,
+        methodology: "criterion: semantic_context/incremental_update rebuild after one changed file",
+        ci_enforced: true,
+    },
+    Budget {
+        name: "context_planning_p95",
+        category: "context_intelligence",
+        metric: "p95 planner latency",
+        unit: "ms",
+        threshold: 50.0,
+        methodology: "criterion: semantic_context/planning on large graph fixture",
+        ci_enforced: true,
+    },
+    Budget {
+        name: "context_bundle_serialization_p95",
+        category: "context_intelligence",
+        metric: "p95 bundle serialization latency",
+        unit: "ms",
+        threshold: 25.0,
+        methodology: "criterion: semantic_context/bundle_serialization on large bundle fixture",
+        ci_enforced: true,
+    },
+    Budget {
+        name: "context_bundle_estimated_bytes_max",
+        category: "context_intelligence",
+        metric: "bundle estimated size",
+        unit: "bytes",
+        threshold: 262_144.0,
+        methodology: "semantic_context budget artifact: estimated selected bundle bytes",
+        ci_enforced: true,
+    },
     // ── Policy Evaluation ────────────────────────────────────────────────
     Budget {
         name: "policy_eval_p99",
@@ -171,6 +226,33 @@ const BUDGETS: &[Budget] = &[
 
 const DEFAULT_MAX_ARTIFACT_AGE_HOURS: f64 = 24.0;
 const BUN_KILLER_MAX_RUST_VS_BUN_RATIO: f64 = 0.33;
+const CONTEXT_BENCH_CASE: &str = "large_workspace";
+const CONTEXT_INTELLIGENCE_PERF_SCHEMA: &str = "pi.semantic_context.performance_budget.v1";
+const CONTEXT_INTELLIGENCE_BUDGET_METRICS: &[(&str, &str)] = &[
+    (
+        "context_graph_build_cold_p95",
+        "context_graph_build_cold_ms",
+    ),
+    (
+        "context_graph_build_warm_p95",
+        "context_graph_build_warm_ms",
+    ),
+    (
+        "context_incremental_update_p95",
+        "context_incremental_update_ms",
+    ),
+    ("context_planning_p95", "context_planning_ms"),
+    (
+        "context_bundle_serialization_p95",
+        "context_bundle_serialization_ms",
+    ),
+    (
+        "context_bundle_estimated_bytes_max",
+        "context_bundle_estimated_bytes",
+    ),
+];
+const CONTEXT_INTELLIGENCE_CACHE_FIELDS: &[&str] =
+    &["cold_graph_build", "warm_graph_build", "incremental_update"];
 
 // ─── Data Readers ────────────────────────────────────────────────────────────
 
@@ -433,6 +515,20 @@ fn budget_artifact_candidates(root: &Path, budget_name: &str) -> Vec<PathBuf> {
             root,
             "criterion/startup/version/warm/new/estimates.json",
         ),
+        "context_graph_build_cold_p95" => {
+            context_criterion_estimate_candidate_paths(root, "graph_build_cold")
+        }
+        "context_graph_build_warm_p95" => {
+            context_criterion_estimate_candidate_paths(root, "graph_build_warm")
+        }
+        "context_incremental_update_p95" => {
+            context_criterion_estimate_candidate_paths(root, "incremental_update")
+        }
+        "context_planning_p95" => context_criterion_estimate_candidate_paths(root, "planning"),
+        "context_bundle_serialization_p95" => {
+            context_criterion_estimate_candidate_paths(root, "bundle_serialization")
+        }
+        "context_bundle_estimated_bytes_max" => context_intelligence_budget_candidate_paths(root),
         "policy_eval_p99" => collect_estimate_json_files_from_bases(&criterion_base_candidates(
             root,
             "criterion/ext_policy/evaluate",
@@ -531,6 +627,74 @@ fn criterion_estimate_candidate_paths(root: &Path, relative: &str) -> Vec<PathBu
     evidence_then_target_paths(root, &[relative], &[relative])
 }
 
+fn context_criterion_relative(bench_name: &str) -> String {
+    format!("criterion/semantic_context/{bench_name}/{CONTEXT_BENCH_CASE}/new/estimates.json")
+}
+
+fn context_criterion_estimate_candidate_paths(root: &Path, bench_name: &str) -> Vec<PathBuf> {
+    let relative = context_criterion_relative(bench_name);
+    criterion_estimate_candidate_paths(root, &relative)
+}
+
+fn context_intelligence_budget_metric_key(budget_name: &str) -> Option<&'static str> {
+    CONTEXT_INTELLIGENCE_BUDGET_METRICS
+        .iter()
+        .find_map(|(name, metric)| (*name).eq(budget_name).then_some(*metric))
+}
+
+fn context_intelligence_budget_candidate_paths(root: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(path) = std::env::var("PERF_CONTEXT_INTELLIGENCE_BUDGET_JSON") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            if let Some(path) = resolve_env_path(root, PathBuf::from(trimmed)) {
+                paths.push(path);
+            }
+        }
+    }
+    for dir in perf_evidence_dirs(root) {
+        paths.extend(context_intelligence_budget_candidate_paths_in_evidence_dir(
+            &dir,
+        ));
+    }
+    for dir in target_dir_candidates(root) {
+        paths.extend(context_intelligence_budget_candidate_paths_in_target_dir(
+            &dir,
+        ));
+    }
+    paths.push(root.join("tests/perf/reports/context_intelligence_planner_budget.json"));
+    dedup_paths(paths)
+}
+
+fn context_intelligence_budget_candidate_paths_in_target_dir(target_dir: &Path) -> Vec<PathBuf> {
+    [
+        "perf/context_intelligence_planner_budget.json",
+        "perf/results/context_intelligence_planner_budget.json",
+        "perf/context_intelligence/perf_budget.json",
+    ]
+    .into_iter()
+    .map(|relative| target_dir.join(relative))
+    .collect()
+}
+
+fn context_intelligence_budget_candidate_paths_in_evidence_dir(
+    evidence_dir: &Path,
+) -> Vec<PathBuf> {
+    dedup_paths(
+        [
+            "context_intelligence_planner_budget.json",
+            "results/context_intelligence_planner_budget.json",
+            "perf/context_intelligence_planner_budget.json",
+            "perf/results/context_intelligence_planner_budget.json",
+            "context_intelligence/perf_budget.json",
+            "perf/context_intelligence/perf_budget.json",
+        ]
+        .into_iter()
+        .map(|relative| evidence_dir.join(relative))
+        .collect(),
+    )
+}
+
 fn extension_stratification_candidates(root: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Ok(path) = std::env::var("PERF_EXTENSION_STRATIFICATION_JSON") {
@@ -579,6 +743,17 @@ fn phase1_matrix_validation_candidates(root: &Path) -> Vec<PathBuf> {
 
 fn first_existing_path(paths: &[PathBuf]) -> Option<PathBuf> {
     paths.iter().find(|p| p.exists()).cloned()
+}
+
+fn first_fresh_existing_path(paths: &[PathBuf], max_age_hours: f64) -> Option<PathBuf> {
+    paths
+        .iter()
+        .find(|path| {
+            path.exists()
+                && artifact_age_hours(path).is_some_and(|age_hours| age_hours <= max_age_hours)
+        })
+        .cloned()
+        .or_else(|| first_existing_path(paths))
 }
 
 fn is_positive_finite_metric(value: Option<f64>) -> bool {
@@ -1044,6 +1219,204 @@ fn evaluate_required_e2e_ratio_contract(
     failures
 }
 
+fn context_intelligence_metric_value(payload: &Value, metric_key: &str) -> Option<f64> {
+    let metric = payload
+        .get("metrics")
+        .and_then(Value::as_object)?
+        .get(metric_key)?;
+    ["p95_ms", "value_ms", "bytes", "value"]
+        .into_iter()
+        .find_map(|field| metric.get(field).and_then(Value::as_f64))
+}
+
+fn required_non_empty_string(payload: &Value, pointer: &str) -> bool {
+    payload
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn context_intelligence_failure(
+    contract_id: &str,
+    budget_name: Option<&str>,
+    detail: impl Into<String>,
+    remediation: &str,
+) -> DataContractFailure {
+    DataContractFailure {
+        contract_id: contract_id.to_string(),
+        budget_name: budget_name.map(str::to_string),
+        detail: detail.into(),
+        remediation: remediation.to_string(),
+    }
+}
+
+fn load_context_intelligence_budget_payload(
+    root: &Path,
+    max_age_hours: f64,
+) -> Result<(PathBuf, Value), DataContractFailure> {
+    let candidates = context_intelligence_budget_candidate_paths(root);
+    if let Some(detail) = evaluate_artifact_contract(&candidates, max_age_hours) {
+        return Err(context_intelligence_failure(
+            "missing_or_stale_context_intelligence_budget_evidence",
+            None,
+            detail,
+            "Generate fresh context_intelligence_planner_budget.json in the current perf run.",
+        ));
+    }
+
+    let Some(path) = first_fresh_existing_path(&candidates, max_age_hours) else {
+        return Err(context_intelligence_failure(
+            "invalid_context_intelligence_budget_contract",
+            None,
+            "context intelligence budget artifact not found",
+            "Emit context_intelligence_planner_budget.json before evaluating perf budgets.",
+        ));
+    };
+
+    let Some(payload) = read_json_file(&path) else {
+        return Err(context_intelligence_failure(
+            "invalid_context_intelligence_budget_contract",
+            None,
+            format!("failed to parse JSON at {}", path.display()),
+            "Write valid JSON for context intelligence perf evidence.",
+        ));
+    };
+
+    Ok((path, payload))
+}
+
+fn validate_context_intelligence_schema(
+    failures: &mut Vec<DataContractFailure>,
+    path: &Path,
+    payload: &Value,
+) {
+    let schema = payload.get("schema").and_then(Value::as_str);
+    if schema != Some(CONTEXT_INTELLIGENCE_PERF_SCHEMA) {
+        failures.push(context_intelligence_failure(
+            "invalid_context_intelligence_budget_contract",
+            None,
+            format!(
+                "context intelligence budget schema must be {CONTEXT_INTELLIGENCE_PERF_SCHEMA} (observed={}) in {}",
+                schema.unwrap_or("missing_or_non_string"),
+                path.display()
+            ),
+            "Set context_intelligence_planner_budget.schema to the versioned perf contract.",
+        ));
+    }
+}
+
+fn validate_context_intelligence_environment(
+    failures: &mut Vec<DataContractFailure>,
+    path: &Path,
+    payload: &Value,
+) {
+    for pointer in [
+        "/environment/cargo_target_dir",
+        "/environment/tmpdir",
+        "/host/os",
+        "/host/arch",
+    ] {
+        if !required_non_empty_string(payload, pointer) {
+            failures.push(context_intelligence_failure(
+                "invalid_context_intelligence_budget_contract",
+                None,
+                format!(
+                    "context intelligence budget artifact missing non-empty {pointer} in {}",
+                    path.display()
+                ),
+                "Emit CARGO_TARGET_DIR/TMPDIR and host fingerprint fields in the budget artifact.",
+            ));
+        }
+    }
+}
+
+fn validate_context_intelligence_determinism(
+    failures: &mut Vec<DataContractFailure>,
+    path: &Path,
+    payload: &Value,
+) {
+    let randomized_checked = payload
+        .pointer("/determinism/randomized_file_order_checked")
+        .and_then(Value::as_bool);
+    let deterministic_match = payload
+        .pointer("/determinism/matched")
+        .and_then(Value::as_bool);
+    if randomized_checked != Some(true) || deterministic_match != Some(true) {
+        failures.push(context_intelligence_failure(
+            "invalid_context_intelligence_determinism_contract",
+            None,
+            format!(
+                "determinism requires randomized_file_order_checked=true and matched=true (randomized_file_order_checked={}, matched={}) in {}",
+                required_bool_state(randomized_checked),
+                required_bool_state(deterministic_match),
+                path.display()
+            ),
+            "Replay the synthetic large workspace with randomized file order and record a matching bundle summary.",
+        ));
+    }
+}
+
+fn validate_context_intelligence_cache(
+    failures: &mut Vec<DataContractFailure>,
+    path: &Path,
+    payload: &Value,
+) {
+    for field in CONTEXT_INTELLIGENCE_CACHE_FIELDS {
+        let pointer = format!("/cache_hit_miss/{field}");
+        if !required_non_empty_string(payload, &pointer) {
+            failures.push(context_intelligence_failure(
+                "invalid_context_intelligence_cache_contract",
+                None,
+                format!(
+                    "context intelligence budget artifact missing non-empty cache_hit_miss.{field} in {}",
+                    path.display()
+                ),
+                "Record cold, warm, and incremental cache hit/miss reasons in the budget artifact.",
+            ));
+        }
+    }
+}
+
+fn validate_context_intelligence_metrics(
+    failures: &mut Vec<DataContractFailure>,
+    path: &Path,
+    payload: &Value,
+) {
+    for &(budget_name, metric_key) in CONTEXT_INTELLIGENCE_BUDGET_METRICS {
+        let metric_value = context_intelligence_metric_value(payload, metric_key);
+        if !is_positive_finite_metric(metric_value) {
+            failures.push(context_intelligence_failure(
+                "invalid_context_intelligence_budget_metric",
+                Some(budget_name),
+                format!(
+                    "context intelligence metric {metric_key} is {} in {}",
+                    metric_state(metric_value),
+                    path.display()
+                ),
+                "Emit every context-intelligence budget metric as a finite positive number.",
+            ));
+        }
+    }
+}
+
+fn evaluate_context_intelligence_budget_contract(
+    root: &Path,
+    max_age_hours: f64,
+) -> Vec<DataContractFailure> {
+    let mut failures = Vec::new();
+    let (path, payload) = match load_context_intelligence_budget_payload(root, max_age_hours) {
+        Ok(payload) => payload,
+        Err(failure) => return vec![failure],
+    };
+
+    validate_context_intelligence_schema(&mut failures, &path, &payload);
+    validate_context_intelligence_environment(&mut failures, &path, &payload);
+    validate_context_intelligence_determinism(&mut failures, &path, &payload);
+    validate_context_intelligence_cache(&mut failures, &path, &payload);
+    validate_context_intelligence_metrics(&mut failures, &path, &payload);
+    failures
+}
+
 fn collect_data_contract_failures(root: &Path) -> Vec<DataContractFailure> {
     let max_age_hours = max_artifact_age_hours();
     let mut failures = Vec::new();
@@ -1069,6 +1442,10 @@ fn collect_data_contract_failures(root: &Path) -> Vec<DataContractFailure> {
         root,
         max_age_hours,
     ));
+    failures.extend(evaluate_context_intelligence_budget_contract(
+        root,
+        max_age_hours,
+    ));
     failures
 }
 
@@ -1087,6 +1464,34 @@ fn check_budget(budget: &Budget) -> BudgetResult {
         "startup_version_p95" => read_criterion_startup(&root, "version"),
         "startup_full_agent_p95" => read_criterion_startup(&root, "help"),
         "event_dispatch_p99" => read_scenario_runner_per_call(&root, "event_dispatch"),
+        "context_graph_build_cold_p95" => read_context_intelligence_budget_metric(
+            &root,
+            "context_graph_build_cold_p95",
+            Some("graph_build_cold"),
+        ),
+        "context_graph_build_warm_p95" => read_context_intelligence_budget_metric(
+            &root,
+            "context_graph_build_warm_p95",
+            Some("graph_build_warm"),
+        ),
+        "context_incremental_update_p95" => read_context_intelligence_budget_metric(
+            &root,
+            "context_incremental_update_p95",
+            Some("incremental_update"),
+        ),
+        "context_planning_p95" => {
+            read_context_intelligence_budget_metric(&root, "context_planning_p95", Some("planning"))
+        }
+        "context_bundle_serialization_p95" => read_context_intelligence_budget_metric(
+            &root,
+            "context_bundle_serialization_p95",
+            Some("bundle_serialization"),
+        ),
+        "context_bundle_estimated_bytes_max" => read_context_intelligence_budget_metric(
+            &root,
+            "context_bundle_estimated_bytes_max",
+            None,
+        ),
         "policy_eval_p99" => read_criterion_policy_eval(&root),
         "idle_memory_rss" => read_idle_memory_rss(),
         "binary_size_release" => read_binary_size(&root),
@@ -1296,6 +1701,61 @@ fn read_criterion_startup(root: &Path, subcommand: &str) -> (Option<f64>, String
     (None, format!("no criterion data for startup/{subcommand}"))
 }
 
+fn read_criterion_context_intelligence(root: &Path, bench_name: &str) -> (Option<f64>, String) {
+    for path in context_criterion_estimate_candidate_paths(root, bench_name) {
+        if let Some(estimates) = read_json_file(&path) {
+            if let Some(mean_ns) = estimates
+                .get("mean")
+                .and_then(|m| m.get("point_estimate"))
+                .and_then(Value::as_f64)
+            {
+                return (
+                    Some(mean_ns / 1_000_000.0),
+                    display_source_path(root, &path),
+                );
+            }
+        }
+    }
+    (
+        None,
+        format!("no criterion data for semantic_context/{bench_name}/{CONTEXT_BENCH_CASE}"),
+    )
+}
+
+fn read_context_intelligence_budget_metric(
+    root: &Path,
+    budget_name: &str,
+    criterion_bench_name: Option<&str>,
+) -> (Option<f64>, String) {
+    let Some(metric_key) = context_intelligence_budget_metric_key(budget_name) else {
+        return (
+            None,
+            format!("no context intelligence metric key for {budget_name}"),
+        );
+    };
+    for path in context_intelligence_budget_candidate_paths(root) {
+        let Some(payload) = read_json_file(&path) else {
+            continue;
+        };
+        if payload.get("schema").and_then(Value::as_str) != Some(CONTEXT_INTELLIGENCE_PERF_SCHEMA) {
+            continue;
+        }
+        if let Some(value) = context_intelligence_metric_value(&payload, metric_key) {
+            return (Some(value), display_source_path(root, &path));
+        }
+    }
+
+    criterion_bench_name.map_or_else(
+        || {
+            (
+                None,
+                format!("no context intelligence budget artifact metric {metric_key}"),
+            )
+        },
+        |bench_name| read_criterion_context_intelligence(root, bench_name),
+    )
+}
+
 fn read_scenario_runner_per_call(root: &Path, scenario: &str) -> (Option<f64>, String) {
     let candidates = evidence_then_target_paths(
         root,
@@ -1464,6 +1924,34 @@ fn pijs_workload_candidates_accept_staged_evidence_dir_layout() {
     assert_eq!(
         candidates[9],
         evidence_dir.join("perf/results/pijs_workload.jsonl")
+    );
+}
+
+#[test]
+fn context_intelligence_budget_artifacts_follow_resolved_target_dir() {
+    let root = Path::new("/workspace/pi_agent_rust");
+    let candidates = budget_artifact_candidates(root, "context_graph_build_cold_p95");
+    let machine_candidates = context_intelligence_budget_candidate_paths(root);
+
+    assert!(
+        candidates.contains(&root.join(
+            "target/criterion/semantic_context/graph_build_cold/large_workspace/new/estimates.json"
+        )),
+        "context graph build budget must inspect the resolved cargo target dir: {candidates:?}"
+    );
+    assert!(
+        machine_candidates
+            .contains(&root.join("target/perf/context_intelligence_planner_budget.json")),
+        "context intelligence budget artifact must inspect the resolved cargo target dir: {machine_candidates:?}"
+    );
+    assert!(
+        context_intelligence_budget_candidate_paths_in_evidence_dir(Path::new(
+            "/workspace/pi_agent_rust/docs/evidence/perf"
+        ))
+        .contains(&PathBuf::from(
+            "/workspace/pi_agent_rust/docs/evidence/perf/perf/results/context_intelligence_planner_budget.json"
+        )),
+        "staged perf evidence dirs must support nested perf/results artifacts"
     );
 }
 
@@ -1869,6 +2357,7 @@ fn generate_budget_report() {
         "extension",
         "tool_call",
         "event_dispatch",
+        "context_intelligence",
         "policy",
         "memory",
         "binary",
@@ -2125,6 +2614,133 @@ fn binary_size_candidate_builder_trims_profile_before_dedup() {
     assert_eq!(
         candidates,
         vec![target_dir.join("release/pi"), target_dir.join("perf/pi")]
+    );
+}
+
+fn valid_context_intelligence_budget_artifact_fixture() -> Value {
+    json!({
+        "schema": CONTEXT_INTELLIGENCE_PERF_SCHEMA,
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "run_id": "context-budget-test",
+        "correlation_id": "context-budget-test",
+        "environment": {
+            "cargo_target_dir": "/data/tmp/pi_agent_rust_cargo/test/target",
+            "tmpdir": "/data/tmp/pi_agent_rust_cargo/test/tmp"
+        },
+        "host": {
+            "os": "linux",
+            "arch": "x86_64"
+        },
+        "workspace": {
+            "fixture": "synthetic_large_workspace",
+            "files": 128,
+            "graph_nodes": 512,
+            "graph_edges": 768
+        },
+        "cache_hit_miss": {
+            "cold_graph_build": "miss:no_prior_graph",
+            "warm_graph_build": "hit:fingerprint_stable",
+            "incremental_update": "miss:input_fingerprint_changed"
+        },
+        "determinism": {
+            "randomized_file_order_checked": true,
+            "matched": true,
+            "first_summary_sha256": "abc123",
+            "second_summary_sha256": "abc123"
+        },
+        "metrics": {
+            "context_graph_build_cold_ms": {"p95_ms": 42.0},
+            "context_graph_build_warm_ms": {"p95_ms": 12.0},
+            "context_incremental_update_ms": {"p95_ms": 18.0},
+            "context_planning_ms": {"p95_ms": 3.0},
+            "context_bundle_serialization_ms": {"p95_ms": 1.5},
+            "context_bundle_estimated_bytes": {"bytes": 8192.0}
+        }
+    })
+}
+
+fn write_context_intelligence_budget_artifact(path: &Path, payload: &Value) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create context budget artifact dir");
+    }
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(payload).unwrap_or_default(),
+    )
+    .expect("write context intelligence budget artifact");
+}
+
+#[test]
+fn context_intelligence_budget_reader_prefers_machine_artifact() {
+    let tmp = tempfile::tempdir().expect("create tempdir");
+    let artifact = tmp
+        .path()
+        .join("target/perf/context_intelligence_planner_budget.json");
+    write_context_intelligence_budget_artifact(
+        &artifact,
+        &valid_context_intelligence_budget_artifact_fixture(),
+    );
+
+    let (actual, source) = read_context_intelligence_budget_metric(
+        tmp.path(),
+        "context_graph_build_cold_p95",
+        Some("graph_build_cold"),
+    );
+
+    assert_eq!(actual, Some(42.0));
+    assert_eq!(
+        source,
+        "target/perf/context_intelligence_planner_budget.json"
+    );
+}
+
+#[test]
+fn context_intelligence_budget_contract_accepts_valid_artifact() {
+    let tmp = tempfile::tempdir().expect("create tempdir");
+    let artifact = tmp
+        .path()
+        .join("target/perf/context_intelligence_planner_budget.json");
+    write_context_intelligence_budget_artifact(
+        &artifact,
+        &valid_context_intelligence_budget_artifact_fixture(),
+    );
+
+    let failures = evaluate_context_intelligence_budget_contract(tmp.path(), 24.0);
+    assert!(
+        failures.is_empty(),
+        "did not expect context intelligence budget failures, got: {failures:?}",
+    );
+}
+
+#[test]
+fn context_intelligence_budget_contract_fails_closed_when_missing() {
+    let tmp = tempfile::tempdir().expect("create tempdir");
+
+    let failures = evaluate_context_intelligence_budget_contract(tmp.path(), 24.0);
+    assert!(
+        failures.iter().any(|failure| {
+            failure.contract_id == "missing_or_stale_context_intelligence_budget_evidence"
+        }),
+        "expected missing context budget evidence failure, got: {failures:?}",
+    );
+}
+
+#[test]
+fn context_intelligence_budget_contract_requires_randomized_order_replay() {
+    let tmp = tempfile::tempdir().expect("create tempdir");
+    let artifact = tmp
+        .path()
+        .join("target/perf/context_intelligence_planner_budget.json");
+    let mut payload = valid_context_intelligence_budget_artifact_fixture();
+    payload["determinism"]["matched"] = json!(false);
+    write_context_intelligence_budget_artifact(&artifact, &payload);
+
+    let failures = evaluate_context_intelligence_budget_contract(tmp.path(), 24.0);
+    assert!(
+        failures.iter().any(|failure| {
+            failure.contract_id == "invalid_context_intelligence_determinism_contract"
+        }),
+        "expected determinism contract failure, got: {failures:?}",
     );
 }
 
