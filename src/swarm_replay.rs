@@ -297,6 +297,644 @@ pub struct SwarmReplayTrace {
     pub replay_guards: SwarmReplayGuards,
 }
 
+/// Schema emitted by the deterministic replay engine.
+pub const SWARM_REPLAY_REPORT_SCHEMA: &str = "pi.swarm.replay_report.v1";
+
+/// Deterministic report emitted after replaying a normalized trace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayReport {
+    pub schema: String,
+    pub trace_id: String,
+    pub replayed_event_count: u64,
+    pub final_logical_clock: u64,
+    pub snapshots: Vec<SwarmReplayStateSnapshot>,
+    pub final_state: SwarmReplayState,
+    pub diagnostics: Vec<SwarmReplayDiagnostic>,
+    pub replay_guards: SwarmReplayEngineGuards,
+}
+
+/// Replay-engine guards proving the engine stayed offline and read-only.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayEngineGuards {
+    pub read_only: bool,
+    pub no_live_mutation: bool,
+    pub no_network_required: bool,
+    pub consumed_trace_only: bool,
+}
+
+/// Full swarm state after one replayed event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayStateSnapshot {
+    pub logical_clock: u64,
+    pub event_id: String,
+    pub occurred_at_utc: String,
+    pub state: SwarmReplayState,
+    pub diagnostic_count: u64,
+}
+
+/// Diagnostic emitted for invariant violations or uncertain replay evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayDiagnostic {
+    pub code: String,
+    pub severity: String,
+    pub event_id: Option<String>,
+    pub logical_clock: Option<u64>,
+    pub message: String,
+    pub details: Value,
+}
+
+/// Reconstructed swarm state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayState {
+    pub beads: BTreeMap<String, SwarmReplayBeadState>,
+    pub agents: BTreeMap<String, SwarmReplayAgentState>,
+    pub reservations: BTreeMap<String, SwarmReplayReservationState>,
+    pub build_slots: BTreeMap<String, SwarmReplayBuildSlotState>,
+    pub rch_jobs: BTreeMap<String, SwarmReplayRchJobState>,
+    pub validation_gates: BTreeMap<String, SwarmReplayValidationGateState>,
+    pub runpack_recommendations: BTreeMap<String, SwarmReplayRunpackRecommendationState>,
+    pub operator_handoffs: BTreeMap<String, SwarmReplayOperatorHandoffState>,
+    pub coordination: SwarmReplayCoordinationState,
+}
+
+impl Default for SwarmReplayState {
+    fn default() -> Self {
+        Self {
+            beads: BTreeMap::new(),
+            agents: BTreeMap::new(),
+            reservations: BTreeMap::new(),
+            build_slots: BTreeMap::new(),
+            rch_jobs: BTreeMap::new(),
+            validation_gates: BTreeMap::new(),
+            runpack_recommendations: BTreeMap::new(),
+            operator_handoffs: BTreeMap::new(),
+            coordination: SwarmReplayCoordinationState {
+                agent_mail_available: true,
+                missing_agent_mail_evidence: false,
+                reservation_conflict_count: 0,
+                last_operator_action: None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayBeadState {
+    pub bead_id: String,
+    pub status: String,
+    pub priority: i64,
+    pub assignee: String,
+    pub last_event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayAgentState {
+    pub agent_name: String,
+    pub last_event_id: String,
+    pub last_seen_at_utc: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayReservationState {
+    pub reservation_id: String,
+    pub holder: String,
+    pub path_patterns: Vec<String>,
+    pub exclusive: bool,
+    pub state: String,
+    pub active: bool,
+    pub last_event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayBuildSlotState {
+    pub slot: String,
+    pub holder: String,
+    pub state: String,
+    pub expires_at_utc: String,
+    pub last_event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayRchJobState {
+    pub job_id: String,
+    pub state: String,
+    pub worker: String,
+    pub command: String,
+    pub queue_position: i64,
+    pub stale_progress: bool,
+    pub last_event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayValidationGateState {
+    pub gate_id: String,
+    pub command: String,
+    pub runner: String,
+    pub exit_code: i64,
+    pub target_dir: String,
+    pub tmpdir: String,
+    pub last_event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayRunpackRecommendationState {
+    pub action: String,
+    pub severity: String,
+    pub evidence_paths: Vec<String>,
+    pub last_event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayOperatorHandoffState {
+    pub handoff_id: String,
+    pub summary: String,
+    pub next_actions: Vec<String>,
+    pub evidence_paths: Vec<String>,
+    pub last_event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayCoordinationState {
+    pub agent_mail_available: bool,
+    pub missing_agent_mail_evidence: bool,
+    pub reservation_conflict_count: u64,
+    pub last_operator_action: Option<String>,
+}
+
+/// Replay a normalized trace into deterministic state snapshots and diagnostics.
+pub fn replay_swarm_trace(trace: &SwarmReplayTrace) -> Result<SwarmReplayReport> {
+    validate_trace_for_replay(trace)?;
+
+    let mut state = SwarmReplayState::default();
+    let mut diagnostics = Vec::new();
+    let mut snapshots = Vec::new();
+    let mut seen_event_ids = BTreeSet::new();
+    let mut last_timestamp: Option<String> = None;
+    let mut logical_clock = 0_u64;
+
+    for event in ordered_trace_events(trace) {
+        if !seen_event_ids.insert(event.event_id.clone()) {
+            diagnostics.push(replay_diagnostic(
+                "duplicate_event_id_skipped",
+                "warning",
+                Some(event),
+                Some(logical_clock),
+                "duplicate replay event id skipped to preserve deterministic state",
+                json!({ "event_id": event.event_id }),
+            ));
+            continue;
+        }
+
+        logical_clock = logical_clock.saturating_add(1);
+        if let Some(previous) = &last_timestamp
+            && timestamp_is_before(&event.occurred_at_utc, previous)
+        {
+            diagnostics.push(replay_diagnostic(
+                "event_timestamp_regressed",
+                "warning",
+                Some(event),
+                Some(logical_clock),
+                "event timestamp is earlier than a previously replayed event; logical clock order preserved",
+                json!({
+                    "previous_occurred_at_utc": previous,
+                    "event_occurred_at_utc": event.occurred_at_utc
+                }),
+            ));
+        }
+        if last_timestamp
+            .as_ref()
+            .is_none_or(|previous| timestamp_is_before(previous, &event.occurred_at_utc))
+        {
+            last_timestamp = Some(event.occurred_at_utc.clone());
+        }
+
+        observe_actor(event, &mut state);
+        apply_replay_event(event, logical_clock, &mut state, &mut diagnostics);
+        snapshots.push(SwarmReplayStateSnapshot {
+            logical_clock,
+            event_id: event.event_id.clone(),
+            occurred_at_utc: event.occurred_at_utc.clone(),
+            state: state.clone(),
+            diagnostic_count: u64::try_from(diagnostics.len()).unwrap_or(u64::MAX),
+        });
+    }
+
+    emit_end_of_trace_invariants(&state, &mut diagnostics);
+
+    Ok(SwarmReplayReport {
+        schema: SWARM_REPLAY_REPORT_SCHEMA.to_string(),
+        trace_id: trace.trace_id.clone(),
+        replayed_event_count: logical_clock,
+        final_logical_clock: logical_clock,
+        snapshots,
+        final_state: state,
+        diagnostics,
+        replay_guards: SwarmReplayEngineGuards {
+            read_only: true,
+            no_live_mutation: true,
+            no_network_required: true,
+            consumed_trace_only: true,
+        },
+    })
+}
+
+fn validate_trace_for_replay(trace: &SwarmReplayTrace) -> Result<()> {
+    if trace.schema != SWARM_REPLAY_TRACE_SCHEMA {
+        return Err(Error::validation(format!(
+            "unsupported swarm replay trace schema {}",
+            trace.schema
+        )));
+    }
+    if !trace.replay_guards.read_only || !trace.replay_guards.no_live_mutation {
+        return Err(Error::validation(
+            "swarm replay trace guards must prove read-only no-mutation evidence",
+        ));
+    }
+    Ok(())
+}
+
+fn ordered_trace_events(trace: &SwarmReplayTrace) -> Vec<&SwarmReplayEvent> {
+    let mut events = trace.events.iter().collect::<Vec<_>>();
+    events.sort_by(|left, right| {
+        left.sequence
+            .cmp(&right.sequence)
+            .then_with(|| left.source_ref.cmp(&right.source_ref))
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    events
+}
+
+fn apply_replay_event(
+    event: &SwarmReplayEvent,
+    logical_clock: u64,
+    state: &mut SwarmReplayState,
+    diagnostics: &mut Vec<SwarmReplayDiagnostic>,
+) {
+    match event.event_type.as_str() {
+        "bead_lifecycle" => apply_bead_event(event, logical_clock, state, diagnostics),
+        "reservation_intent" => apply_reservation_event(event, logical_clock, state, diagnostics),
+        "reservation_conflict" => apply_reservation_conflict(event, state),
+        "agent_message" => apply_agent_message_event(event, logical_clock, state, diagnostics),
+        "build_slot_state" => apply_build_slot_event(event, state),
+        "rch_job_state" => apply_rch_event(event, logical_clock, state, diagnostics),
+        "cargo_gate_result" => apply_cargo_gate_event(event, logical_clock, state, diagnostics),
+        "runpack_recommendation" => apply_runpack_recommendation(event, state),
+        "operator_handoff" => apply_operator_handoff(event, state),
+        "worktree_state" | "doctor_finding" | "validation_artifact" => {}
+        _ => diagnostics.push(replay_diagnostic(
+            "unknown_event_type_ignored",
+            "info",
+            Some(event),
+            Some(logical_clock),
+            "unknown replay event type ignored without mutation",
+            json!({ "event_type": event.event_type }),
+        )),
+    }
+}
+
+fn observe_actor(event: &SwarmReplayEvent, state: &mut SwarmReplayState) {
+    if event.actor.trim().is_empty() || event.actor == "unknown" {
+        return;
+    }
+    state.agents.insert(
+        event.actor.clone(),
+        SwarmReplayAgentState {
+            agent_name: event.actor.clone(),
+            last_event_id: event.event_id.clone(),
+            last_seen_at_utc: event.occurred_at_utc.clone(),
+        },
+    );
+}
+
+fn apply_bead_event(
+    event: &SwarmReplayEvent,
+    logical_clock: u64,
+    state: &mut SwarmReplayState,
+    diagnostics: &mut Vec<SwarmReplayDiagnostic>,
+) {
+    let bead_id = payload_string(&event.payload, &["bead_id"], "unknown");
+    let to_status = payload_string(&event.payload, &["to_status", "status"], "unknown");
+    if let Some(existing) = state.beads.get(&bead_id)
+        && existing.status == "closed"
+        && matches!(to_status.as_str(), "open" | "in_progress")
+        && !event_explicitly_reopens(event)
+    {
+        diagnostics.push(replay_diagnostic(
+            "closed_bead_reopened_without_explicit_reopen",
+            "error",
+            Some(event),
+            Some(logical_clock),
+            "closed bead transitioned back to open state without explicit reopen evidence",
+            json!({
+                "bead_id": bead_id,
+                "previous_status": existing.status,
+                "to_status": to_status
+            }),
+        ));
+    }
+
+    state.beads.insert(
+        bead_id.clone(),
+        SwarmReplayBeadState {
+            bead_id,
+            status: to_status,
+            priority: payload_i64(&event.payload, "priority", 0),
+            assignee: payload_string(&event.payload, &["assignee"], "unassigned"),
+            last_event_id: event.event_id.clone(),
+        },
+    );
+}
+
+fn event_explicitly_reopens(event: &SwarmReplayEvent) -> bool {
+    event
+        .payload
+        .get("reopen")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || event
+            .payload
+            .get("reopened")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        || ["action", "reason", "close_reason"]
+            .iter()
+            .filter_map(|key| event.payload.get(*key).and_then(Value::as_str))
+            .any(|value| value.to_ascii_lowercase().contains("reopen"))
+}
+
+fn apply_reservation_event(
+    event: &SwarmReplayEvent,
+    logical_clock: u64,
+    state: &mut SwarmReplayState,
+    diagnostics: &mut Vec<SwarmReplayDiagnostic>,
+) {
+    let reservation_id = payload_string(&event.payload, &["reservation_id"], "unknown");
+    let reservation_state = payload_string(&event.payload, &["state"], "active");
+    let release_state = matches!(
+        reservation_state.as_str(),
+        "released" | "expired" | "cancelled" | "canceled"
+    );
+    if release_state && !state.reservations.contains_key(&reservation_id) {
+        diagnostics.push(replay_diagnostic(
+            "impossible_reservation_release",
+            "error",
+            Some(event),
+            Some(logical_clock),
+            "reservation release observed before an active reservation intent",
+            json!({
+                "reservation_id": reservation_id,
+                "state": reservation_state
+            }),
+        ));
+    }
+
+    state.reservations.insert(
+        reservation_id.clone(),
+        SwarmReplayReservationState {
+            reservation_id,
+            holder: payload_string(&event.payload, &["holder", "agent"], event.actor.as_str()),
+            path_patterns: payload_string_array(&event.payload, "path_patterns"),
+            exclusive: event
+                .payload
+                .get("exclusive")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            active: !release_state,
+            state: reservation_state,
+            last_event_id: event.event_id.clone(),
+        },
+    );
+}
+
+fn apply_reservation_conflict(event: &SwarmReplayEvent, state: &mut SwarmReplayState) {
+    state.coordination.reservation_conflict_count = state
+        .coordination
+        .reservation_conflict_count
+        .saturating_add(1);
+    state.coordination.last_operator_action = Some(payload_string(
+        &event.payload,
+        &["conflict_reason"],
+        "reservation_conflict",
+    ));
+}
+
+fn apply_agent_message_event(
+    event: &SwarmReplayEvent,
+    logical_clock: u64,
+    state: &mut SwarmReplayState,
+    diagnostics: &mut Vec<SwarmReplayDiagnostic>,
+) {
+    let missing_mail = event.source_ref == "agent_mail_archive"
+        && (event.uncertainty.state == "missing_source"
+            || event
+                .uncertainty
+                .reasons
+                .iter()
+                .any(|reason| reason == "source_missing"));
+    if missing_mail {
+        state.coordination.agent_mail_available = false;
+        state.coordination.missing_agent_mail_evidence = true;
+        diagnostics.push(replay_diagnostic(
+            "agent_mail_source_unavailable",
+            "warning",
+            Some(event),
+            Some(logical_clock),
+            "Agent Mail source unavailable; coordination facts remain suppressed",
+            json!({ "suppressed_claims": event.uncertainty.suppressed_claims }),
+        ));
+    }
+}
+
+fn apply_build_slot_event(event: &SwarmReplayEvent, state: &mut SwarmReplayState) {
+    let slot = payload_string(&event.payload, &["slot"], "unknown");
+    state.build_slots.insert(
+        slot.clone(),
+        SwarmReplayBuildSlotState {
+            slot,
+            holder: payload_string(&event.payload, &["holder"], "unknown"),
+            state: payload_string(&event.payload, &["state"], "unknown"),
+            expires_at_utc: payload_string(&event.payload, &["expires_at_utc"], "unknown"),
+            last_event_id: event.event_id.clone(),
+        },
+    );
+}
+
+fn apply_rch_event(
+    event: &SwarmReplayEvent,
+    logical_clock: u64,
+    state: &mut SwarmReplayState,
+    diagnostics: &mut Vec<SwarmReplayDiagnostic>,
+) {
+    let job_id = payload_string(&event.payload, &["job_id"], "unknown");
+    let queue_position = payload_i64(&event.payload, "queue_position", 0);
+    if queue_position < 0 {
+        diagnostics.push(replay_diagnostic(
+            "negative_rch_queue_position",
+            "error",
+            Some(event),
+            Some(logical_clock),
+            "RCH queue position cannot be negative",
+            json!({ "job_id": job_id, "queue_position": queue_position }),
+        ));
+    }
+    let stale_progress = event.uncertainty.state != "certain"
+        || event
+            .uncertainty
+            .reasons
+            .iter()
+            .any(|reason| reason == "source_stale" || reason == "source_declared_stale");
+    if stale_progress {
+        diagnostics.push(replay_diagnostic(
+            "rch_progress_from_uncertain_source",
+            "warning",
+            Some(event),
+            Some(logical_clock),
+            "RCH job progress came from stale or uncertain evidence",
+            json!({ "job_id": job_id, "uncertainty": event.uncertainty }),
+        ));
+    }
+
+    state.rch_jobs.insert(
+        job_id.clone(),
+        SwarmReplayRchJobState {
+            job_id,
+            state: payload_string(&event.payload, &["state"], "unknown"),
+            worker: payload_string(&event.payload, &["worker"], "unknown"),
+            command: payload_string(&event.payload, &["command"], "unknown"),
+            queue_position,
+            stale_progress,
+            last_event_id: event.event_id.clone(),
+        },
+    );
+}
+
+fn apply_cargo_gate_event(
+    event: &SwarmReplayEvent,
+    logical_clock: u64,
+    state: &mut SwarmReplayState,
+    diagnostics: &mut Vec<SwarmReplayDiagnostic>,
+) {
+    let command = payload_string(&event.payload, &["command"], "unknown");
+    let exit_code = payload_i64(&event.payload, "exit_code", 0);
+    if exit_code == 0 && (command.trim().is_empty() || command == "unknown") {
+        diagnostics.push(replay_diagnostic(
+            "successful_cargo_gate_missing_command_evidence",
+            "error",
+            Some(event),
+            Some(logical_clock),
+            "successful cargo gate requires concrete command evidence",
+            json!({ "event_id": event.event_id }),
+        ));
+    }
+    let gate_id = stable_id(&format!("cargo-gate-{command}"));
+    state.validation_gates.insert(
+        gate_id.clone(),
+        SwarmReplayValidationGateState {
+            gate_id,
+            command,
+            runner: payload_string(&event.payload, &["runner"], "unknown"),
+            exit_code,
+            target_dir: payload_string(&event.payload, &["target_dir"], "unknown"),
+            tmpdir: payload_string(&event.payload, &["tmpdir"], "unknown"),
+            last_event_id: event.event_id.clone(),
+        },
+    );
+}
+
+fn apply_runpack_recommendation(event: &SwarmReplayEvent, state: &mut SwarmReplayState) {
+    let action = payload_string(&event.payload, &["action"], "unknown");
+    state.coordination.last_operator_action = Some(action.clone());
+    state.runpack_recommendations.insert(
+        action.clone(),
+        SwarmReplayRunpackRecommendationState {
+            action,
+            severity: payload_string(&event.payload, &["severity"], "info"),
+            evidence_paths: payload_string_array(&event.payload, "evidence_paths"),
+            last_event_id: event.event_id.clone(),
+        },
+    );
+}
+
+fn apply_operator_handoff(event: &SwarmReplayEvent, state: &mut SwarmReplayState) {
+    let handoff_id = payload_string(&event.payload, &["handoff_id"], "unknown");
+    state.operator_handoffs.insert(
+        handoff_id.clone(),
+        SwarmReplayOperatorHandoffState {
+            handoff_id,
+            summary: payload_string(&event.payload, &["summary"], ""),
+            next_actions: payload_string_array(&event.payload, "next_actions"),
+            evidence_paths: payload_string_array(&event.payload, "evidence_paths"),
+            last_event_id: event.event_id.clone(),
+        },
+    );
+}
+
+fn emit_end_of_trace_invariants(
+    state: &SwarmReplayState,
+    diagnostics: &mut Vec<SwarmReplayDiagnostic>,
+) {
+    for reservation in state
+        .reservations
+        .values()
+        .filter(|reservation| reservation.active)
+    {
+        diagnostics.push(SwarmReplayDiagnostic {
+            code: "reservation_missing_release_event".to_string(),
+            severity: "warning".to_string(),
+            event_id: Some(reservation.last_event_id.clone()),
+            logical_clock: None,
+            message: "reservation remained active at end of replay without release evidence"
+                .to_string(),
+            details: json!({
+                "reservation_id": reservation.reservation_id,
+                "holder": reservation.holder,
+                "path_patterns": reservation.path_patterns
+            }),
+        });
+    }
+}
+
+fn replay_diagnostic(
+    code: &str,
+    severity: &str,
+    event: Option<&SwarmReplayEvent>,
+    logical_clock: Option<u64>,
+    message: &str,
+    details: Value,
+) -> SwarmReplayDiagnostic {
+    SwarmReplayDiagnostic {
+        code: code.to_string(),
+        severity: severity.to_string(),
+        event_id: event.map(|item| item.event_id.clone()),
+        logical_clock,
+        message: message.to_string(),
+        details,
+    }
+}
+
+fn timestamp_is_before(left: &str, right: &str) -> bool {
+    match (
+        DateTime::parse_from_rfc3339(left),
+        DateTime::parse_from_rfc3339(right),
+    ) {
+        (Ok(left), Ok(right)) => left < right,
+        _ => left < right,
+    }
+}
+
+fn payload_string(value: &Value, keys: &[&str], fallback: &str) -> String {
+    optional_string_field(value, keys).unwrap_or_else(|| fallback.to_string())
+}
+
+fn payload_string_array(value: &Value, key: &str) -> Vec<String> {
+    string_array_field(value, key)
+}
+
+fn payload_i64(value: &Value, key: &str, fallback: i64) -> i64 {
+    value.get(key).and_then(Value::as_i64).unwrap_or(fallback)
+}
+
 #[derive(Debug, Clone)]
 struct SourceAnalysis {
     row: SwarmReplaySourceInventoryRow,
@@ -795,7 +1433,9 @@ fn agent_mail_events(
             "path_patterns": string_array_field(reservation, "path_patterns"),
             "exclusive": reservation.get("exclusive").and_then(Value::as_bool).unwrap_or(false),
             "ttl_seconds": reservation.get("ttl_seconds").and_then(Value::as_u64).unwrap_or_default(),
-            "reason": string_field(reservation, &["reason"], "unknown")
+            "reason": string_field(reservation, &["reason"], "unknown"),
+            "holder": string_field(reservation, &["holder", "agent"], "unknown"),
+            "state": string_field(reservation, &["state"], "active")
         });
         events.push(pending_event(
             request,

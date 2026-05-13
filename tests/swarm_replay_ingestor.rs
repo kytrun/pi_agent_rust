@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pi::swarm_replay::{
-    SWARM_REPLAY_TRACE_SCHEMA, SwarmReplayIngestRequest, SwarmReplayTrace, build_swarm_replay_trace,
+    SWARM_REPLAY_REPORT_SCHEMA, SWARM_REPLAY_TRACE_SCHEMA, SwarmReplayEvent,
+    SwarmReplayEventUncertainty, SwarmReplayGuards, SwarmReplayIngestRequest, SwarmReplayOrdering,
+    SwarmReplayRedactionSummary, SwarmReplayTrace, SwarmReplayUncertaintySummary,
+    build_swarm_replay_trace, replay_swarm_trace,
 };
 use serde_json::{Value, json};
 
@@ -227,6 +230,107 @@ fn assert_monotonic_sequence(trace: &SwarmReplayTrace) -> TestResult {
     Ok(())
 }
 
+fn replay_event(
+    event_id: &str,
+    sequence: u64,
+    occurred_at_utc: &str,
+    event_type: &str,
+    source_ref: &str,
+    payload: Value,
+) -> SwarmReplayEvent {
+    SwarmReplayEvent {
+        event_id: event_id.to_string(),
+        sequence,
+        occurred_at_utc: occurred_at_utc.to_string(),
+        observed_at_utc: GENERATED_AT.to_string(),
+        event_type: event_type.to_string(),
+        actor: "AmberOsprey".to_string(),
+        source_ref: source_ref.to_string(),
+        source_hash: None,
+        redaction_state: "none".to_string(),
+        uncertainty: SwarmReplayEventUncertainty {
+            state: "certain".to_string(),
+            reasons: Vec::new(),
+            suppressed_claims: Vec::new(),
+        },
+        payload,
+    }
+}
+
+fn uncertain_replay_event(
+    event_id: &str,
+    sequence: u64,
+    event_type: &str,
+    source_ref: &str,
+    reasons: &[&str],
+    suppressed_claims: &[&str],
+    payload: Value,
+) -> SwarmReplayEvent {
+    let mut event = replay_event(
+        event_id,
+        sequence,
+        "2026-05-13T18:00:00Z",
+        event_type,
+        source_ref,
+        payload,
+    );
+    event.uncertainty = SwarmReplayEventUncertainty {
+        state: "missing_source".to_string(),
+        reasons: reasons.iter().map(ToString::to_string).collect(),
+        suppressed_claims: suppressed_claims.iter().map(ToString::to_string).collect(),
+    };
+    event
+}
+
+fn trace_from_events(events: Vec<SwarmReplayEvent>) -> SwarmReplayTrace {
+    SwarmReplayTrace {
+        schema: SWARM_REPLAY_TRACE_SCHEMA.to_string(),
+        trace_id: "engine-fixture".to_string(),
+        generated_at: GENERATED_AT.to_string(),
+        contract_version: "1.0.0".to_string(),
+        source_inventory: Vec::new(),
+        ordering: SwarmReplayOrdering {
+            monotonic_sequence_required: true,
+            timestamp_normalization: "utc_rfc3339_z".to_string(),
+            tie_breakers: vec![
+                "sequence".to_string(),
+                "source_ref".to_string(),
+                "event_id".to_string(),
+            ],
+        },
+        events,
+        redaction_summary: SwarmReplayRedactionSummary {
+            redacted_count: 0,
+            sensitive_omitted_count: 0,
+            raw_secret_bytes_emitted: 0,
+            redacted_fields: Vec::new(),
+        },
+        uncertainty_summary: SwarmReplayUncertaintySummary {
+            missing_sources: Vec::new(),
+            malformed_sources: Vec::new(),
+            stale_sources: Vec::new(),
+            suppressed_claims: Vec::new(),
+            event_count_by_uncertainty: std::collections::BTreeMap::default(),
+        },
+        replay_guards: SwarmReplayGuards {
+            read_only: true,
+            no_live_mutation: true,
+            no_network_required: true,
+            fail_closed_on_missing_required_sources: true,
+            requires_source_inventory: true,
+            disallowed_live_actions: Vec::new(),
+        },
+    }
+}
+
+fn diagnostic_codes(report: &pi::swarm_replay::SwarmReplayReport) -> BTreeSet<String> {
+    report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.clone())
+        .collect()
+}
+
 #[test]
 fn clean_sources_normalize_into_contract_events() -> TestResult {
     let root = test_workspace("clean_sources")?;
@@ -423,4 +527,289 @@ fn checked_in_golden_trace_fixture_is_downstream_consumable() -> TestResult {
             .any(|event| event.event_type == "validation_artifact")
     );
     assert_monotonic_sequence(&trace)
+}
+
+#[test]
+fn replay_engine_orders_events_by_sequence_not_input_order() -> TestResult {
+    let later = replay_event(
+        "event-a",
+        2,
+        "2026-05-13T18:00:00Z",
+        "bead_lifecycle",
+        "beads_jsonl",
+        json!({
+            "bead_id": "bd-a",
+            "to_status": "closed",
+            "priority": 3,
+            "assignee": "AmberOsprey"
+        }),
+    );
+    let earlier = replay_event(
+        "event-b",
+        1,
+        "2026-05-13T18:00:00Z",
+        "bead_lifecycle",
+        "beads_jsonl",
+        json!({
+            "bead_id": "bd-b",
+            "to_status": "in_progress",
+            "priority": 2,
+            "assignee": "SilentReef"
+        }),
+    );
+
+    let report_a = replay_swarm_trace(&trace_from_events(vec![later.clone(), earlier.clone()]))?;
+    let report_b = replay_swarm_trace(&trace_from_events(vec![earlier, later]))?;
+    let order_a = report_a
+        .snapshots
+        .iter()
+        .map(|snapshot| snapshot.event_id.clone())
+        .collect::<Vec<_>>();
+    let order_b = report_b
+        .snapshots
+        .iter()
+        .map(|snapshot| snapshot.event_id.clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(report_a.schema, SWARM_REPLAY_REPORT_SCHEMA);
+    assert_eq!(order_a, ["event-b", "event-a"]);
+    assert_eq!(order_a, order_b);
+    assert_eq!(report_a.final_logical_clock, 2);
+    assert_eq!(report_a.final_state.beads["bd-a"].status, "closed");
+    Ok(())
+}
+
+#[test]
+fn replay_engine_skips_duplicate_event_ids_deterministically() -> TestResult {
+    let trace = trace_from_events(vec![
+        replay_event(
+            "same-event",
+            1,
+            "2026-05-13T18:00:00Z",
+            "bead_lifecycle",
+            "beads_jsonl",
+            json!({
+                "bead_id": "bd-dup",
+                "to_status": "in_progress",
+                "priority": 3,
+                "assignee": "AmberOsprey"
+            }),
+        ),
+        replay_event(
+            "same-event",
+            2,
+            "2026-05-13T18:01:00Z",
+            "bead_lifecycle",
+            "beads_jsonl",
+            json!({
+                "bead_id": "bd-dup",
+                "to_status": "closed",
+                "priority": 3,
+                "assignee": "AmberOsprey"
+            }),
+        ),
+    ]);
+
+    let report = replay_swarm_trace(&trace)?;
+    assert_eq!(report.replayed_event_count, 1);
+    assert_eq!(report.final_state.beads["bd-dup"].status, "in_progress");
+    assert!(diagnostic_codes(&report).contains("duplicate_event_id_skipped"));
+    Ok(())
+}
+
+#[test]
+fn replay_engine_preserves_logical_clock_for_out_of_order_timestamps() -> TestResult {
+    let trace = trace_from_events(vec![
+        replay_event(
+            "newer",
+            1,
+            "2026-05-13T18:02:00Z",
+            "bead_lifecycle",
+            "beads_jsonl",
+            json!({
+                "bead_id": "bd-time",
+                "to_status": "open",
+                "priority": 3,
+                "assignee": "AmberOsprey"
+            }),
+        ),
+        replay_event(
+            "older",
+            2,
+            "2026-05-13T18:01:00Z",
+            "doctor_finding",
+            "doctor_swarm_diagnostics",
+            json!({
+                "finding_id": "old-finding",
+                "severity": "info",
+                "surface": "swarm",
+                "status": "observed"
+            }),
+        ),
+    ]);
+
+    let report = replay_swarm_trace(&trace)?;
+    assert_eq!(report.snapshots[0].logical_clock, 1);
+    assert_eq!(report.snapshots[1].logical_clock, 2);
+    assert!(diagnostic_codes(&report).contains("event_timestamp_regressed"));
+    Ok(())
+}
+
+#[test]
+fn replay_engine_flags_missing_and_impossible_reservation_releases() -> TestResult {
+    let missing_release = trace_from_events(vec![replay_event(
+        "reservation-active",
+        1,
+        "2026-05-13T18:00:00Z",
+        "reservation_intent",
+        "agent_mail_archive",
+        json!({
+            "reservation_id": "res-1",
+            "holder": "AmberOsprey",
+            "path_patterns": ["src/swarm_replay.rs"],
+            "exclusive": true,
+            "state": "active"
+        }),
+    )]);
+    let missing_release_report = replay_swarm_trace(&missing_release)?;
+    assert!(
+        diagnostic_codes(&missing_release_report).contains("reservation_missing_release_event")
+    );
+
+    let impossible_release = trace_from_events(vec![replay_event(
+        "reservation-release",
+        1,
+        "2026-05-13T18:00:00Z",
+        "reservation_intent",
+        "agent_mail_archive",
+        json!({
+            "reservation_id": "res-2",
+            "holder": "AmberOsprey",
+            "path_patterns": ["src/swarm_replay.rs"],
+            "exclusive": true,
+            "state": "released"
+        }),
+    )]);
+    let impossible_release_report = replay_swarm_trace(&impossible_release)?;
+    assert!(
+        diagnostic_codes(&impossible_release_report).contains("impossible_reservation_release")
+    );
+    assert!(!impossible_release_report.final_state.reservations["res-2"].active);
+    Ok(())
+}
+
+#[test]
+fn replay_engine_classifies_stale_rch_progress_and_negative_queue_depth() -> TestResult {
+    let mut event = replay_event(
+        "rch-stale",
+        1,
+        "2026-05-13T18:00:00Z",
+        "rch_job_state",
+        "rch_queue_status",
+        json!({
+            "job_id": "rch-1",
+            "state": "running",
+            "worker": "worker-1",
+            "command": "rch exec -- cargo check --all-targets",
+            "queue_position": -1
+        }),
+    );
+    event.uncertainty = SwarmReplayEventUncertainty {
+        state: "partial".to_string(),
+        reasons: vec!["source_stale".to_string()],
+        suppressed_claims: vec!["queue_depth".to_string()],
+    };
+
+    let report = replay_swarm_trace(&trace_from_events(vec![event]))?;
+    let codes = diagnostic_codes(&report);
+    assert!(codes.contains("rch_progress_from_uncertain_source"));
+    assert!(codes.contains("negative_rch_queue_position"));
+    assert!(report.final_state.rch_jobs["rch-1"].stale_progress);
+    Ok(())
+}
+
+#[test]
+fn replay_engine_requires_explicit_bead_reopen_evidence() -> TestResult {
+    let closed = replay_event(
+        "closed",
+        1,
+        "2026-05-13T18:00:00Z",
+        "bead_lifecycle",
+        "beads_jsonl",
+        json!({
+            "bead_id": "bd-reopen",
+            "to_status": "closed",
+            "priority": 3,
+            "assignee": "AmberOsprey"
+        }),
+    );
+    let implicit_reopen = replay_event(
+        "implicit-reopen",
+        2,
+        "2026-05-13T18:01:00Z",
+        "bead_lifecycle",
+        "beads_jsonl",
+        json!({
+            "bead_id": "bd-reopen",
+            "to_status": "open",
+            "priority": 3,
+            "assignee": "AmberOsprey"
+        }),
+    );
+    let implicit_report =
+        replay_swarm_trace(&trace_from_events(vec![closed.clone(), implicit_reopen]))?;
+    assert!(
+        diagnostic_codes(&implicit_report).contains("closed_bead_reopened_without_explicit_reopen")
+    );
+
+    let explicit_reopen = replay_event(
+        "explicit-reopen",
+        2,
+        "2026-05-13T18:01:00Z",
+        "bead_lifecycle",
+        "beads_jsonl",
+        json!({
+            "bead_id": "bd-reopen",
+            "to_status": "open",
+            "priority": 3,
+            "assignee": "AmberOsprey",
+            "reopen": true
+        }),
+    );
+    let explicit_report = replay_swarm_trace(&trace_from_events(vec![closed, explicit_reopen]))?;
+    assert!(
+        !diagnostic_codes(&explicit_report)
+            .contains("closed_bead_reopened_without_explicit_reopen")
+    );
+    assert_eq!(
+        explicit_report.final_state.beads["bd-reopen"].status,
+        "open"
+    );
+    Ok(())
+}
+
+#[test]
+fn replay_engine_classifies_agent_mail_outage_without_live_mail() -> TestResult {
+    let event = uncertain_replay_event(
+        "missing-mail",
+        1,
+        "agent_message",
+        "agent_mail_archive",
+        &["source_missing"],
+        &["mail_thread_completeness", "active_reservation_holder"],
+        json!({
+            "thread_id": "unknown",
+            "sender": "unknown",
+            "recipients": [],
+            "importance": "unknown",
+            "ack_required": false
+        }),
+    );
+
+    let report = replay_swarm_trace(&trace_from_events(vec![event]))?;
+    assert!(!report.final_state.coordination.agent_mail_available);
+    assert!(report.final_state.coordination.missing_agent_mail_evidence);
+    assert!(diagnostic_codes(&report).contains("agent_mail_source_unavailable"));
+    assert!(report.replay_guards.consumed_trace_only);
+    Ok(())
 }
