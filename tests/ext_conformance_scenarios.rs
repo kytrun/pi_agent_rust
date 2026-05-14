@@ -13,8 +13,9 @@ use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
 use pi::conformance::normalization::{is_path_key, path_suffix_match};
 use pi::extensions::{
-    ExtensionManager, ExtensionPolicy, ExtensionPolicyMode, ExtensionSession, HostcallInterceptor,
-    JsExtensionLoadSpec, JsExtensionRuntimeHandle,
+    ExtensionAiCompletionRequest, ExtensionHostActions, ExtensionManager, ExtensionPolicy,
+    ExtensionPolicyMode, ExtensionSendMessage, ExtensionSendUserMessage, ExtensionSession,
+    HostcallInterceptor, JsExtensionLoadSpec, JsExtensionRuntimeHandle,
 };
 use pi::extensions_js::{HostcallKind, HostcallRequest, PiJsRuntimeConfig};
 use pi::resources::{
@@ -3621,6 +3622,93 @@ fn scenario_pi_ai_helpers_fail_closed() {
         result.status, "pass",
         "Pi AI fail-closed scenario failed: diffs={:?} error={:?} skip={:?}",
         result.diffs, result.error, result.skip_reason
+    );
+}
+
+struct PiAiProviderBridgeHostActions {
+    completions: Mutex<Vec<ExtensionAiCompletionRequest>>,
+}
+
+impl PiAiProviderBridgeHostActions {
+    fn new() -> Self {
+        Self {
+            completions: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl ExtensionHostActions for PiAiProviderBridgeHostActions {
+    async fn send_message(&self, _message: ExtensionSendMessage) -> pi::error::Result<()> {
+        Ok(())
+    }
+
+    async fn send_user_message(&self, _message: ExtensionSendUserMessage) -> pi::error::Result<()> {
+        Ok(())
+    }
+
+    async fn complete_ai(&self, request: ExtensionAiCompletionRequest) -> pi::error::Result<Value> {
+        let simple = request.simple;
+        self.completions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(request);
+        if simple {
+            Ok(Value::String("bridge-simple-ok".to_string()))
+        } else {
+            Ok(serde_json::json!({
+                "text": "bridge-complete-ok",
+                "provider": "mock-provider",
+                "model": "mock-model"
+            }))
+        }
+    }
+
+    async fn list_ai_models(&self) -> pi::error::Result<Value> {
+        Ok(serde_json::json!([
+            {
+                "id": "mock-model",
+                "provider": "mock-provider",
+                "api": "mock-api"
+            }
+        ]))
+    }
+}
+
+/// Focused test: Pi AI SDK fixture succeeds when provider/session host bridge exists.
+#[test]
+fn scenario_pi_ai_helpers_provider_bridge_success() {
+    let (ext, items) = load_scenario_fixture("pi_ai_provider_bridge");
+    let scenario = ext
+        .scenarios
+        .iter()
+        .find(|s| s.id == "scn-pi-ai-provider-bridge-001")
+        .expect("scn-pi-ai-provider-bridge-001");
+    let ext_path = resolve_extension_path(&ext.extension_id, &items)
+        .expect("resolve pi_ai_provider_bridge artifact path");
+    let loaded = load_extension(&ext_path).expect("load pi_ai_provider_bridge extension");
+    let actions = Arc::new(PiAiProviderBridgeHostActions::new());
+    loaded.manager.set_host_actions(actions.clone());
+    loaded.manager.set_current_model(
+        Some("mock-provider".to_string()),
+        Some("mock-model".to_string()),
+    );
+
+    let result = execute_tool_scenario(&loaded, scenario, &ext_path);
+    let diffs = scenario.expect.as_ref().map_or_else(Vec::new, |expect| {
+        check_expectations(expect, &result, &loaded)
+    });
+    assert!(
+        diffs.is_empty(),
+        "Pi AI provider bridge scenario failed: result={result:?} diffs={diffs:?}"
+    );
+    assert_eq!(
+        actions
+            .completions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len(),
+        3
     );
 }
 

@@ -3168,6 +3168,7 @@ struct AgentSessionHostActions {
 struct ExtensionAiCompletionHostState {
     provider: Arc<dyn Provider>,
     stream_options: StreamOptions,
+    models: Vec<Value>,
 }
 
 impl AgentSessionHostActions {
@@ -3260,21 +3261,341 @@ impl ExtensionHostActions for AgentSessionHostActions {
     }
 
     async fn complete_ai(&self, request: ExtensionAiCompletionRequest) -> Result<Value> {
-        let (provider_name, model_id, has_api_key) = {
+        let (provider, mut stream_options) = {
             let state = self.ai_completion.lock().map_err(|_| {
                 Error::extension("extension completion host state mutex poisoned".to_string())
             })?;
-            (
-                state.provider.name().to_string(),
-                state.provider.model_id().to_string(),
-                state.stream_options.api_key.is_some(),
-            )
+            (Arc::clone(&state.provider), state.stream_options.clone())
         };
-        Err(Error::extension(format!(
-            "@mariozechner/pi-ai completion host bridge is not implemented for provider {provider_name}/{model_id} (simple={}, configured_api_key={has_api_key})",
-            request.simple
-        )))
+
+        apply_pi_ai_completion_options(&request.options, &mut stream_options)?;
+        let context = build_pi_ai_completion_context(&request)?;
+        let provider_name = provider.name().to_string();
+        let mut events = provider.stream(&context, &stream_options).await?;
+        let mut streamed_text = String::new();
+
+        while let Some(event) = events.next().await {
+            match event.map_err(|err| Error::provider(provider_name.clone(), err.to_string()))? {
+                StreamEvent::TextDelta { delta, .. } => streamed_text.push_str(&delta),
+                StreamEvent::TextEnd { content, .. } => {
+                    streamed_text.push_str(&content);
+                }
+                StreamEvent::Done { message, .. } => {
+                    if message.stop_reason == StopReason::Error {
+                        return Err(Error::provider(
+                            provider_name,
+                            pi_ai_assistant_error_message(&message),
+                        ));
+                    }
+                    return pi_ai_completion_response(&message, request.simple);
+                }
+                StreamEvent::Error { error, .. } => {
+                    return Err(Error::provider(
+                        provider_name,
+                        pi_ai_assistant_error_message(&error),
+                    ));
+                }
+                StreamEvent::Start { .. }
+                | StreamEvent::TextStart { .. }
+                | StreamEvent::ThinkingStart { .. }
+                | StreamEvent::ThinkingDelta { .. }
+                | StreamEvent::ThinkingEnd { .. }
+                | StreamEvent::ToolCallStart { .. }
+                | StreamEvent::ToolCallDelta { .. }
+                | StreamEvent::ToolCallEnd { .. } => {}
+            }
+        }
+
+        let suffix = if streamed_text.is_empty() {
+            String::new()
+        } else {
+            format!(" after streaming {} text bytes", streamed_text.len())
+        };
+        Err(Error::provider(
+            provider_name,
+            format!("pi-ai completion stream ended without Done event{suffix}"),
+        ))
     }
+
+    async fn list_ai_models(&self) -> Result<Value> {
+        let state = self.ai_completion.lock().map_err(|_| {
+            Error::extension("extension completion host state mutex poisoned".to_string())
+        })?;
+        if state.models.is_empty() {
+            return Ok(json!([{
+                "id": state.provider.model_id(),
+                "name": state.provider.model_id(),
+                "api": state.provider.api(),
+                "provider": state.provider.name(),
+            }]));
+        }
+        Ok(Value::Array(state.models.clone()))
+    }
+}
+
+fn pi_ai_model_entry_value(entry: &ModelEntry) -> Value {
+    json!({
+        "id": entry.model.id,
+        "name": entry.model.name,
+        "api": entry.model.api,
+        "provider": entry.model.provider,
+        "baseUrl": entry.model.base_url,
+        "reasoning": entry.model.reasoning,
+        "input": entry.model.input,
+        "cost": entry.model.cost,
+        "contextWindow": entry.model.context_window,
+        "maxTokens": entry.model.max_tokens,
+        "authHeader": entry.auth_header,
+        "hasCredentials": entry.api_key.is_some(),
+    })
+}
+
+fn pi_ai_model_registry_values(registry: &ModelRegistry) -> Vec<Value> {
+    registry
+        .models()
+        .iter()
+        .map(pi_ai_model_entry_value)
+        .collect()
+}
+
+fn apply_pi_ai_completion_options(
+    options: &Value,
+    stream_options: &mut StreamOptions,
+) -> Result<()> {
+    if let Some(value) = options
+        .get("temperature")
+        .or_else(|| options.get("temp"))
+        .filter(|value| !value.is_null())
+    {
+        let temperature = serde_json::from_value::<f32>(value.clone()).map_err(|err| {
+            Error::validation(format!(
+                "pi-ai completion temperature must be numeric: {err}"
+            ))
+        })?;
+        if !(0.0..=2.0).contains(&temperature) {
+            return Err(Error::validation(
+                "pi-ai completion temperature must be between 0 and 2".to_string(),
+            ));
+        }
+        stream_options.temperature = Some(temperature);
+    }
+
+    if let Some(value) = options
+        .get("maxTokens")
+        .or_else(|| options.get("max_tokens"))
+        .filter(|value| !value.is_null())
+    {
+        let raw = value.as_u64().ok_or_else(|| {
+            Error::validation("pi-ai completion maxTokens must be an unsigned integer".to_string())
+        })?;
+        let max_tokens = u32::try_from(raw).map_err(|_| {
+            Error::validation("pi-ai completion maxTokens exceeds u32::MAX".to_string())
+        })?;
+        if max_tokens == 0 {
+            return Err(Error::validation(
+                "pi-ai completion maxTokens must be greater than zero".to_string(),
+            ));
+        }
+        stream_options.max_tokens = Some(max_tokens);
+    }
+
+    Ok(())
+}
+
+fn build_pi_ai_completion_context(
+    request: &ExtensionAiCompletionRequest,
+) -> Result<Context<'static>> {
+    let mut system_prompts = Vec::new();
+    let mut messages = Vec::new();
+    collect_pi_ai_context_messages(&request.context, &mut system_prompts, &mut messages)?;
+
+    if messages.is_empty() {
+        return Err(Error::validation(
+            "@mariozechner/pi-ai completion requires at least one user or assistant message"
+                .to_string(),
+        ));
+    }
+
+    let system_prompt = system_prompts
+        .into_iter()
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    Ok(Context::owned(
+        if system_prompt.is_empty() {
+            None
+        } else {
+            Some(system_prompt)
+        },
+        messages,
+        Vec::new(),
+    ))
+}
+
+fn collect_pi_ai_context_messages(
+    value: &Value,
+    system_prompts: &mut Vec<String>,
+    messages: &mut Vec<Message>,
+) -> Result<()> {
+    match value {
+        Value::Null => {}
+        Value::String(text) => push_pi_ai_user_message(text, messages),
+        Value::Array(items) => {
+            for item in items {
+                push_pi_ai_message(item, system_prompts, messages)?;
+            }
+        }
+        Value::Object(map) => {
+            if let Some(system) = map
+                .get("systemPrompt")
+                .or_else(|| map.get("system_prompt"))
+                .or_else(|| map.get("system"))
+                .and_then(pi_ai_text_from_value)
+            {
+                system_prompts.push(system);
+            }
+
+            if let Some(items) = map.get("messages").and_then(Value::as_array) {
+                for item in items {
+                    push_pi_ai_message(item, system_prompts, messages)?;
+                }
+            } else if let Some(prompt) = map
+                .get("prompt")
+                .or_else(|| map.get("input"))
+                .or_else(|| map.get("message"))
+                .and_then(pi_ai_text_from_value)
+            {
+                push_pi_ai_user_message(&prompt, messages);
+            } else if map.contains_key("role") {
+                push_pi_ai_message(value, system_prompts, messages)?;
+            }
+        }
+        Value::Bool(_) | Value::Number(_) => push_pi_ai_user_message(&value.to_string(), messages),
+    }
+    Ok(())
+}
+
+fn push_pi_ai_message(
+    value: &Value,
+    system_prompts: &mut Vec<String>,
+    messages: &mut Vec<Message>,
+) -> Result<()> {
+    let Value::Object(map) = value else {
+        if let Some(text) = pi_ai_text_from_value(value) {
+            push_pi_ai_user_message(&text, messages);
+        }
+        return Ok(());
+    };
+
+    let role = map
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("user")
+        .trim()
+        .to_ascii_lowercase();
+    let content = map
+        .get("content")
+        .or_else(|| map.get("text"))
+        .and_then(pi_ai_text_from_value)
+        .unwrap_or_default();
+
+    match role.as_str() {
+        "system" => {
+            if !content.trim().is_empty() {
+                system_prompts.push(content);
+            }
+        }
+        "user" => push_pi_ai_user_message(&content, messages),
+        "assistant" => push_pi_ai_assistant_message(&content, messages),
+        other => {
+            return Err(Error::validation(format!(
+                "@mariozechner/pi-ai completion does not support {other:?} context messages"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn push_pi_ai_user_message(text: &str, messages: &mut Vec<Message>) {
+    messages.push(Message::User(UserMessage {
+        content: UserContent::Text(text.to_string()),
+        timestamp: Utc::now().timestamp_millis(),
+    }));
+}
+
+fn push_pi_ai_assistant_message(text: &str, messages: &mut Vec<Message>) {
+    messages.push(Message::assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextContent::new(text.to_string()))],
+        timestamp: Utc::now().timestamp_millis(),
+        ..AssistantMessage::default()
+    }));
+}
+
+fn pi_ai_text_from_value(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(text) => Some(text.clone()),
+        Value::Bool(_) | Value::Number(_) => Some(value.to_string()),
+        Value::Array(items) => {
+            let mut text = String::new();
+            for item in items {
+                if let Some(part) = pi_ai_text_from_value(item)
+                    && !part.is_empty()
+                {
+                    text.push_str(&part);
+                }
+            }
+            Some(text)
+        }
+        Value::Object(map) => map
+            .get("text")
+            .or_else(|| map.get("content"))
+            .or_else(|| map.get("delta"))
+            .and_then(pi_ai_text_from_value),
+    }
+}
+
+fn pi_ai_assistant_text(message: &AssistantMessage) -> String {
+    let mut text = String::new();
+    for block in &message.content {
+        if let ContentBlock::Text(text_block) = block {
+            text.push_str(&text_block.text);
+        }
+    }
+    text
+}
+
+fn pi_ai_assistant_error_message(message: &AssistantMessage) -> String {
+    message
+        .error_message
+        .clone()
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| {
+            let text = pi_ai_assistant_text(message);
+            if text.trim().is_empty() {
+                "provider returned an error without a message".to_string()
+            } else {
+                text
+            }
+        })
+}
+
+fn pi_ai_completion_response(message: &AssistantMessage, simple: bool) -> Result<Value> {
+    let text = pi_ai_assistant_text(message);
+    if simple {
+        return Ok(Value::String(text));
+    }
+
+    Ok(json!({
+        "message": serde_json::to_value(message)?,
+        "content": serde_json::to_value(&message.content)?,
+        "text": text,
+        "usage": serde_json::to_value(&message.usage)?,
+        "model": message.model,
+        "provider": message.provider,
+        "api": message.api,
+        "stopReason": message.stop_reason,
+    }))
 }
 
 #[cfg(test)]
@@ -4378,6 +4699,7 @@ mod extensions_integration_tests {
                 ai_completion: Arc::new(StdMutex::new(ExtensionAiCompletionHostState {
                     provider: Arc::new(NoopProvider),
                     stream_options: StreamOptions::default(),
+                    models: Vec::new(),
                 })),
             };
 
@@ -4416,6 +4738,134 @@ mod extensions_integration_tests {
                 guard.to_messages_for_current_path().is_empty(),
                 "cancelled send_message should not append a message"
             );
+        });
+    }
+
+    #[derive(Debug, Default)]
+    struct PiAiCapturedProviderContext {
+        system_prompt: Option<String>,
+        messages: Vec<Message>,
+    }
+
+    #[derive(Debug)]
+    struct PiAiCaptureProvider {
+        calls: Arc<StdMutex<Vec<PiAiCapturedProviderContext>>>,
+    }
+
+    #[async_trait]
+    impl Provider for PiAiCaptureProvider {
+        fn name(&self) -> &str {
+            "capturing-provider"
+        }
+
+        fn api(&self) -> &str {
+            "test-api"
+        }
+
+        fn model_id(&self) -> &str {
+            "capture-model"
+        }
+
+        async fn stream(
+            &self,
+            context: &Context<'_>,
+            _options: &StreamOptions,
+        ) -> crate::error::Result<
+            std::pin::Pin<
+                Box<dyn futures::Stream<Item = crate::error::Result<StreamEvent>> + Send>,
+            >,
+        > {
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(PiAiCapturedProviderContext {
+                    system_prompt: context.system_prompt.as_ref().map(ToString::to_string),
+                    messages: context.messages.iter().cloned().collect(),
+                });
+            let final_message = AssistantMessage {
+                content: vec![ContentBlock::Text(TextContent::new("captured"))],
+                api: "test-api".to_string(),
+                provider: "capturing-provider".to_string(),
+                model: "capture-model".to_string(),
+                usage: Usage::default(),
+                stop_reason: StopReason::Stop,
+                error_message: None,
+                timestamp: 0,
+            };
+            Ok(Box::pin(futures::stream::iter(vec![Ok(
+                StreamEvent::Done {
+                    reason: StopReason::Stop,
+                    message: final_message,
+                },
+            )])))
+        }
+    }
+
+    #[test]
+    fn agent_host_actions_complete_ai_streams_configured_provider() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let session = Arc::new(Mutex::new(Session::in_memory()));
+            let calls = Arc::new(StdMutex::new(Vec::new()));
+            let provider = Arc::new(PiAiCaptureProvider {
+                calls: Arc::clone(&calls),
+            });
+            let actions = AgentSessionHostActions {
+                session,
+                injected: Arc::new(StdMutex::new(ExtensionInjectedQueue::default())),
+                is_streaming: Arc::new(AtomicBool::new(false)),
+                is_turn_active: Arc::new(AtomicBool::new(false)),
+                pending_idle_actions: Arc::new(StdMutex::new(VecDeque::new())),
+                ai_completion: Arc::new(StdMutex::new(ExtensionAiCompletionHostState {
+                    provider,
+                    stream_options: StreamOptions::default(),
+                    models: vec![json!({
+                        "id": "capture-model",
+                        "provider": "capturing-provider",
+                        "api": "test-api",
+                    })],
+                })),
+            };
+
+            let result = actions
+                .complete_ai(ExtensionAiCompletionRequest {
+                    model: json!({ "id": "capture-model" }),
+                    context: json!({
+                        "systemPrompt": "answer tersely",
+                        "messages": [
+                            { "role": "user", "content": "ping" }
+                        ]
+                    }),
+                    options: json!({ "maxTokens": 16 }),
+                    simple: false,
+                })
+                .await
+                .expect("complete through provider");
+
+            assert_eq!(result["text"], json!("captured"));
+            assert_eq!(result["provider"], json!("capturing-provider"));
+            assert_eq!(result["api"], json!("test-api"));
+
+            let captured = calls.lock().expect("calls lock");
+            assert_eq!(captured.len(), 1);
+            assert_eq!(captured[0].system_prompt.as_deref(), Some("answer tersely"));
+            assert_eq!(captured[0].messages.len(), 1);
+            assert!(
+                matches!(
+                    &captured[0].messages[0],
+                    Message::User(UserMessage { content: UserContent::Text(text), .. })
+                        if text == "ping"
+                ),
+                "expected user message context, got {:?}",
+                captured[0].messages
+            );
+            drop(captured);
+
+            let models = actions.list_ai_models().await.expect("list models");
+            assert_eq!(models[0]["id"], json!("capture-model"));
         });
     }
 
@@ -6977,6 +7427,7 @@ impl AgentSession {
         let extension_ai_completion = Arc::new(StdMutex::new(ExtensionAiCompletionHostState {
             provider: agent.provider(),
             stream_options: agent.stream_options().clone(),
+            models: Vec::new(),
         }));
 
         Self {
@@ -7016,7 +7467,7 @@ impl AgentSession {
 
     #[must_use]
     pub fn with_model_registry(mut self, registry: ModelRegistry) -> Self {
-        self.model_registry = Some(registry);
+        self.set_model_registry(registry);
         self
     }
 
@@ -7027,6 +7478,7 @@ impl AgentSession {
     }
 
     pub fn set_model_registry(&mut self, registry: ModelRegistry) {
+        self.set_extension_ai_models(pi_ai_model_registry_values(&registry));
         self.model_registry = Some(registry);
     }
 
@@ -7051,6 +7503,16 @@ impl AgentSession {
         };
         state.provider = self.agent.provider();
         state.stream_options = self.agent.stream_options().clone();
+    }
+
+    fn set_extension_ai_models(&self, models: Vec<Value>) {
+        let Ok(mut state) = self.extension_ai_completion.lock() else {
+            tracing::error!(
+                "extension completion host state mutex poisoned; keeping stale model catalog"
+            );
+            return;
+        };
+        state.models = models;
     }
 
     pub fn set_semantic_context_bundle(
@@ -7122,6 +7584,7 @@ impl AgentSession {
             self.apply_session_model_selection(provider_id, model_id)?;
         }
         self.agent.stream_options_mut().thinking_level = Some(next_thinking);
+        self.refresh_extension_completion_host_state();
 
         {
             let cx = crate::agent_cx::AgentCx::for_request();
@@ -7227,6 +7690,7 @@ impl AgentSession {
         };
 
         self.agent.stream_options_mut().thinking_level = Some(effective);
+        self.refresh_extension_completion_host_state();
 
         let thinking_changed = !effective.eq(&current_thinking);
         let persist_needed = if session_thinking.is_some() {

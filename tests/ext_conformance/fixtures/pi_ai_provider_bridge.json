@@ -1,0 +1,27 @@
+{
+  "schema": "pi.ext.scenario_fixture.v1",
+  "extension": {
+    "id": "pi_ai_provider_bridge",
+    "source": {
+      "path": "tests/ext_conformance/artifacts/pi_ai_provider_bridge/pi_ai_provider_bridge.ts"
+    }
+  },
+  "scenarios": [
+    {
+      "id": "scn-pi-ai-provider-bridge-001",
+      "kind": "tool",
+      "summary": "@mariozechner/pi-ai completion, stream, model, and model-list helpers resolve through configured host bridge",
+      "tool_name": "pi_ai_provider_bridge",
+      "expect": {
+        "content_contains": [
+          "complete:bridge-complete-ok",
+          "completeSimple:bridge-simple-ok",
+          "streamSimpleOpenAIResponses:bridge-simple-ok",
+          "getModel:mock-provider/mock-model",
+          "getApiProvider:mock-provider",
+          "getModels:mock-model"
+        ]
+      }
+    }
+  ]
+}

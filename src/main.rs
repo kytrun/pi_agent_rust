@@ -1566,6 +1566,7 @@ async fn run(
         }
         agent_session
             .set_compaction_context_window(context_window_tokens_for_entry(&selection.model_entry));
+        agent_session.refresh_extension_completion_host_state();
     }
 
     {

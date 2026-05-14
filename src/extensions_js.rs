@@ -7761,6 +7761,53 @@ function failClosedUnsupported(name) {
   throw new Error(`@mariozechner/pi-ai.${name} is not available in PiJS without a provider/session host bridge; refusing to return placeholder data`);
 }
 
+function failClosedBridge(name, cause) {
+  const suffix = cause ? `: ${cause}` : "";
+  throw new Error(`@mariozechner/pi-ai.${name} is not available in PiJS without a provider/session host bridge; refusing to return placeholder data${suffix}`);
+}
+
+async function callProviderBridge(name, op, payload = {}) {
+  if (!globalThis.pi || typeof globalThis.pi.events !== "function") {
+    failClosedBridge(name);
+  }
+  try {
+    return await globalThis.pi.events(op, payload);
+  } catch (error) {
+    const message = String((error && error.message) || error || "");
+    failClosedBridge(name, message);
+  }
+}
+
+function completionText(result) {
+  if (typeof result === "string") return result;
+  if (!result || typeof result !== "object") return "";
+  if (typeof result.text === "string") return result.text;
+  const content = Array.isArray(result.content)
+    ? result.content
+    : result.message && Array.isArray(result.message.content)
+      ? result.message.content
+      : [];
+  return content
+    .map((block) => {
+      if (typeof block === "string") return block;
+      if (block && typeof block.text === "string") return block.text;
+      if (block && block.type === "text" && typeof block.content === "string") return block.content;
+      return "";
+    })
+    .join("");
+}
+
+function completeSimpleArgs(model, prompt, opts) {
+  if (prompt === undefined || (prompt && typeof prompt === "object" && !Array.isArray(prompt))) {
+    return {
+      model: undefined,
+      prompt: model,
+      opts: prompt && typeof prompt === "object" && !Array.isArray(prompt) ? prompt : {},
+    };
+  }
+  return { model, prompt, opts: opts || {} };
+}
+
 export function getOAuthApiKey(_provider) {
   failClosedUnsupported("getOAuthApiKey");
 }
@@ -7772,36 +7819,59 @@ export function createAssistantMessageEventStream() {
   };
 }
 
-export function streamSimpleAnthropic() {
-  failClosedUnsupported("streamSimpleAnthropic");
+async function* streamSimple(name, model, context, opts = {}) {
+  const result = await callProviderBridge(name, "completeAi", {
+    model,
+    context,
+    options: opts || {},
+    simple: true,
+  });
+  const text = completionText(result);
+  if (text) yield text;
 }
 
-export function streamSimpleOpenAIResponses() {
-  failClosedUnsupported("streamSimpleOpenAIResponses");
+export function streamSimpleAnthropic(model, context, opts = {}) {
+  return streamSimple("streamSimpleAnthropic", model, context, opts);
 }
 
-export function streamSimpleOpenAICompletions() {
-  failClosedUnsupported("streamSimpleOpenAICompletions");
+export function streamSimpleOpenAIResponses(model, context, opts = {}) {
+  return streamSimple("streamSimpleOpenAIResponses", model, context, opts);
 }
 
-export async function complete(_model, _messages, _opts = {}) {
-  failClosedUnsupported("complete");
+export function streamSimpleOpenAICompletions(model, context, opts = {}) {
+  return streamSimple("streamSimpleOpenAICompletions", model, context, opts);
 }
 
-export async function completeSimple(_model, _prompt, _opts = {}) {
-  failClosedUnsupported("completeSimple");
+export async function complete(model, messages, opts = {}) {
+  return await callProviderBridge("complete", "completeAi", {
+    model,
+    context: messages,
+    options: opts || {},
+    simple: false,
+  });
 }
 
-export function getModel() {
-  failClosedUnsupported("getModel");
+export async function completeSimple(model, prompt, opts = {}) {
+  const args = completeSimpleArgs(model, prompt, opts);
+  return await callProviderBridge("completeSimple", "completeAi", {
+    model: args.model,
+    context: args.prompt,
+    options: args.opts || {},
+    simple: true,
+  });
 }
 
-export function getApiProvider() {
-  failClosedUnsupported("getApiProvider");
+export async function getModel() {
+  return await callProviderBridge("getModel", "getModel", {});
 }
 
-export function getModels() {
-  failClosedUnsupported("getModels");
+export async function getApiProvider() {
+  const model = await callProviderBridge("getApiProvider", "getModel", {});
+  return model && typeof model === "object" ? model.provider : undefined;
+}
+
+export async function getModels() {
+  return await callProviderBridge("getModels", "getModels", {});
 }
 
 export async function loginOpenAICodex(_opts = {}) {
@@ -21381,6 +21451,7 @@ if (typeof globalThis.fetch !== 'function') {
 mod tests {
     use super::*;
     use crate::scheduler::DeterministicClock;
+    use serde_json::json;
 
     #[allow(clippy::future_not_send)]
     async fn get_global_json<C: SchedulerClock + 'static>(
@@ -21460,6 +21531,36 @@ mod tests {
             );
             clock.set(next_deadline);
         }
+    }
+
+    #[allow(clippy::future_not_send)]
+    async fn reject_pi_ai_hostcalls_until_done(
+        runtime: &PiJsRuntime<Arc<DeterministicClock>>,
+        clock: &Arc<DeterministicClock>,
+    ) {
+        for _ in 0..64 {
+            drain_until_idle(runtime, clock).await;
+            let state = get_global_json(runtime, "piAiFailClosed").await;
+            if state.get("done").and_then(serde_json::Value::as_bool) == Some(true) {
+                return;
+            }
+
+            let requests = runtime.drain_hostcall_requests();
+            assert!(
+                !requests.is_empty(),
+                "expected pending Pi AI hostcall while fail-closed checks are incomplete: {state:?}"
+            );
+            for request in requests {
+                runtime.complete_hostcall(
+                    request.call_id,
+                    HostcallOutcome::Error {
+                        code: "denied".to_string(),
+                        message: "No provider/session host bridge configured".to_string(),
+                    },
+                );
+            }
+        }
+        panic!("Pi AI fail-closed hostcalls did not complete");
     }
 
     #[test]
@@ -27534,9 +27635,9 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                         const checks = [
                             ["complete", () => ai.complete("model", [{ role: "user", content: "hi" }])],
                             ["completeSimple", () => ai.completeSimple("model", "hi")],
-                            ["streamSimpleAnthropic", () => ai.streamSimpleAnthropic()],
-                            ["streamSimpleOpenAIResponses", () => ai.streamSimpleOpenAIResponses()],
-                            ["streamSimpleOpenAICompletions", () => ai.streamSimpleOpenAICompletions()],
+                            ["streamSimpleAnthropic", async () => { for await (const _ of ai.streamSimpleAnthropic("model", "hi")) {} }],
+                            ["streamSimpleOpenAIResponses", async () => { for await (const _ of ai.streamSimpleOpenAIResponses("model", "hi")) {} }],
+                            ["streamSimpleOpenAICompletions", async () => { for await (const _ of ai.streamSimpleOpenAICompletions("model", "hi")) {} }],
                             ["getModel", () => ai.getModel()],
                             ["getApiProvider", () => ai.getApiProvider()],
                             ["getModels", () => ai.getModels()],
@@ -27563,6 +27664,7 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                 .await
                 .expect("eval pi-ai fail-closed helpers");
 
+            reject_pi_ai_hostcalls_until_done(&runtime, &clock).await;
             drain_until_idle(&runtime, &clock).await;
 
             let r = get_global_json(&runtime, "piAiFailClosed").await;
@@ -27596,6 +27698,125 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                     "{name} error should be fail-closed, got {message:?}"
                 );
             }
+        });
+    }
+
+    #[test]
+    fn pijs_pi_ai_provider_helpers_route_through_host_events() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r#"
+                    globalThis.piAiBridge = {};
+                    (async () => {
+                        const ai = await import('@mariozechner/pi-ai');
+                        globalThis.piAiBridge.complete = await ai.complete(
+                            { id: "mock-model" },
+                            [{ role: "user", content: "hello" }],
+                            { maxTokens: 12 }
+                        );
+                        globalThis.piAiBridge.simple = await ai.completeSimple("mock-model", "hello", { maxTokens: 4 });
+                        globalThis.piAiBridge.model = await ai.getModel();
+                        globalThis.piAiBridge.provider = await ai.getApiProvider();
+                        globalThis.piAiBridge.models = await ai.getModels();
+                        globalThis.piAiBridge.stream = [];
+                        for await (const chunk of ai.streamSimpleOpenAIResponses("mock-model", "stream")) {
+                            globalThis.piAiBridge.stream.push(chunk);
+                        }
+                        globalThis.piAiBridge.done = true;
+                    })().catch((e) => {
+                        globalThis.piAiBridge.error = String((e && e.message) || e || "");
+                        globalThis.piAiBridge.done = true;
+                    });
+                    "#,
+                )
+                .await
+                .expect("eval pi-ai host bridge helpers");
+
+            for _ in 0..32 {
+                drain_until_idle(&runtime, &clock).await;
+                let state = get_global_json(&runtime, "piAiBridge").await;
+                if state.get("done").and_then(serde_json::Value::as_bool) == Some(true) {
+                    break;
+                }
+
+                let requests = runtime.drain_hostcall_requests();
+                assert!(
+                    !requests.is_empty(),
+                    "expected pending Pi AI bridge hostcall while incomplete: {state:?}"
+                );
+                for request in requests {
+                    let HostcallKind::Events { op } = &request.kind else {
+                        panic!("expected events hostcall, got {:?}", request.kind);
+                    };
+                    match op.as_str() {
+                        "completeAi" => {
+                            let simple = request
+                                .payload
+                                .get("simple")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false);
+                            if simple {
+                                runtime.complete_hostcall(
+                                    request.call_id,
+                                    HostcallOutcome::Success(json!("bridge-simple")),
+                                );
+                            } else {
+                                assert_eq!(
+                                    request.payload["context"][0]["content"],
+                                    json!("hello")
+                                );
+                                assert_eq!(request.payload["options"]["maxTokens"], json!(12));
+                                runtime.complete_hostcall(
+                                    request.call_id,
+                                    HostcallOutcome::Success(json!({
+                                        "text": "bridge-complete",
+                                        "message": {
+                                            "content": [
+                                                { "type": "text", "text": "bridge-complete" }
+                                            ]
+                                        }
+                                    })),
+                                );
+                            }
+                        }
+                        "getModel" => runtime.complete_hostcall(
+                            request.call_id,
+                            HostcallOutcome::Success(json!({
+                                "provider": "mock-provider",
+                                "modelId": "mock-model"
+                            })),
+                        ),
+                        "getModels" => runtime.complete_hostcall(
+                            request.call_id,
+                            HostcallOutcome::Success(json!([
+                                {
+                                    "id": "mock-model",
+                                    "provider": "mock-provider",
+                                    "api": "mock-api"
+                                }
+                            ])),
+                        ),
+                        other => panic!("unexpected Pi AI hostcall op {other}"),
+                    }
+                }
+            }
+
+            drain_until_idle(&runtime, &clock).await;
+            let r = get_global_json(&runtime, "piAiBridge").await;
+            assert_eq!(r["done"], json!(true));
+            assert_eq!(r["error"], serde_json::Value::Null);
+            assert_eq!(r["complete"]["text"], json!("bridge-complete"));
+            assert_eq!(r["simple"], json!("bridge-simple"));
+            assert_eq!(r["model"]["modelId"], json!("mock-model"));
+            assert_eq!(r["provider"], json!("mock-provider"));
+            assert_eq!(r["models"][0]["id"], json!("mock-model"));
+            assert_eq!(r["stream"][0], json!("bridge-simple"));
         });
     }
 

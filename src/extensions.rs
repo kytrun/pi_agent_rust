@@ -13618,6 +13618,12 @@ pub trait ExtensionHostActions: Send + Sync {
             "@mariozechner/pi-ai completion host bridge is not configured".to_string(),
         ))
     }
+
+    async fn list_ai_models(&self) -> Result<Value> {
+        Err(Error::extension(
+            "@mariozechner/pi-ai model registry host bridge is not configured".to_string(),
+        ))
+    }
 }
 
 impl ExtensionMessage {
@@ -24964,6 +24970,7 @@ enum EventsHostcallOp {
     RegisterCommand,
     RegisterProvider,
     GetModel,
+    GetModels,
     SetModel,
     GetThinkingLevel,
     SetThinkingLevel,
@@ -24981,6 +24988,7 @@ fn parse_events_hostcall_op(op: &str) -> Option<EventsHostcallOp> {
         b"appendentry" => Some(EventsHostcallOp::AppendEntry),
         b"registercommand" => Some(EventsHostcallOp::RegisterCommand),
         b"getmodel" => Some(EventsHostcallOp::GetModel),
+        b"getmodels" => Some(EventsHostcallOp::GetModels),
         b"setmodel" => Some(EventsHostcallOp::SetModel),
         b"getthinkinglevel" => Some(EventsHostcallOp::GetThinkingLevel),
         b"setthinkinglevel" => Some(EventsHostcallOp::SetThinkingLevel),
@@ -25321,6 +25329,22 @@ async fn dispatch_hostcall_events_ref(
                 "provider": provider,
                 "modelId": model_id,
             }))
+        }
+        EventsHostcallOp::GetModels => {
+            let Some(actions) = manager.host_actions() else {
+                return HostcallOutcome::Error {
+                    code: "denied".to_string(),
+                    message: "No provider/session host bridge configured".to_string(),
+                };
+            };
+
+            match actions.list_ai_models().await {
+                Ok(value) => HostcallOutcome::Success(value),
+                Err(err) => HostcallOutcome::Error {
+                    code: "provider".to_string(),
+                    message: err.to_string(),
+                },
+            }
         }
         EventsHostcallOp::SetModel => {
             let provider = payload
@@ -36634,6 +36658,8 @@ mod tests {
     struct MockHostActions {
         messages: std::sync::Mutex<Vec<ExtensionSendMessage>>,
         user_messages: std::sync::Mutex<Vec<ExtensionSendUserMessage>>,
+        ai_requests: std::sync::Mutex<Vec<ExtensionAiCompletionRequest>>,
+        ai_models: std::sync::Mutex<Value>,
     }
 
     impl MockHostActions {
@@ -36641,6 +36667,14 @@ mod tests {
             Self {
                 messages: std::sync::Mutex::new(Vec::new()),
                 user_messages: std::sync::Mutex::new(Vec::new()),
+                ai_requests: std::sync::Mutex::new(Vec::new()),
+                ai_models: std::sync::Mutex::new(json!([
+                    {
+                        "id": "mock-model",
+                        "provider": "mock-provider",
+                        "api": "mock-api"
+                    }
+                ])),
             }
         }
     }
@@ -36660,6 +36694,26 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(message);
             Ok(())
+        }
+
+        async fn complete_ai(&self, request: ExtensionAiCompletionRequest) -> Result<Value> {
+            self.ai_requests
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(request);
+            Ok(json!({
+                "text": "mock completion",
+                "provider": "mock-provider",
+                "model": "mock-model"
+            }))
+        }
+
+        async fn list_ai_models(&self) -> Result<Value> {
+            Ok(self
+                .ai_models
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone())
         }
     }
 
@@ -36867,6 +36921,81 @@ mod tests {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .is_empty()
             );
+        });
+    }
+
+    #[test]
+    fn events_complete_ai_dispatches_to_host_actions() {
+        asupersync::test_utils::run_test(|| async {
+            let manager = ExtensionManager::new();
+            let tools = crate::tools::ToolRegistry::new(&["read"], Path::new("."), None);
+            let actions = Arc::new(MockHostActions::new());
+            manager.set_host_actions(actions.clone());
+
+            let outcome = dispatch_hostcall_events(
+                "call-1",
+                &manager,
+                &tools,
+                "completeAi",
+                json!({
+                    "model": { "id": "mock-model" },
+                    "context": [
+                        { "role": "user", "content": "hello" }
+                    ],
+                    "options": { "maxTokens": 8 },
+                    "simple": false
+                }),
+            )
+            .await;
+
+            let HostcallOutcome::Success(value) = outcome else {
+                panic!("expected completeAi success");
+            };
+            assert_eq!(value["text"], json!("mock completion"));
+
+            let requests = actions
+                .ai_requests
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].model["id"], json!("mock-model"));
+            assert_eq!(requests[0].context[0]["content"], json!("hello"));
+            assert!(!requests[0].simple);
+        });
+    }
+
+    #[test]
+    fn events_get_models_dispatches_to_host_actions() {
+        asupersync::test_utils::run_test(|| async {
+            let manager = ExtensionManager::new();
+            let tools = crate::tools::ToolRegistry::new(&["read"], Path::new("."), None);
+            let actions = Arc::new(MockHostActions::new());
+            manager.set_host_actions(actions);
+
+            let outcome =
+                dispatch_hostcall_events("call-1", &manager, &tools, "getModels", json!({})).await;
+
+            let HostcallOutcome::Success(value) = outcome else {
+                panic!("expected getModels success");
+            };
+            assert_eq!(value[0]["id"], json!("mock-model"));
+            assert_eq!(value[0]["provider"], json!("mock-provider"));
+        });
+    }
+
+    #[test]
+    fn events_get_models_without_host_actions_fails_closed() {
+        asupersync::test_utils::run_test(|| async {
+            let manager = ExtensionManager::new();
+            let tools = crate::tools::ToolRegistry::new(&["read"], Path::new("."), None);
+
+            let outcome =
+                dispatch_hostcall_events("call-1", &manager, &tools, "getModels", json!({})).await;
+
+            assert!(matches!(
+                outcome,
+                HostcallOutcome::Error { code, .. } if code == "denied"
+            ));
         });
     }
 

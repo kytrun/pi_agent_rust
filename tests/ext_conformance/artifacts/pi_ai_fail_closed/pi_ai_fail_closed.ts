@@ -17,9 +17,15 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 const unsupportedChecks: Array<[string, () => unknown]> = [
     ["complete", () => complete({})],
     ["completeSimple", () => completeSimple("prompt")],
-    ["streamSimpleAnthropic", () => streamSimpleAnthropic({})],
-    ["streamSimpleOpenAIResponses", () => streamSimpleOpenAIResponses({})],
-    ["streamSimpleOpenAICompletions", () => streamSimpleOpenAICompletions({})],
+    ["streamSimpleAnthropic", () => consumeStream(streamSimpleAnthropic("model", "prompt"))],
+    [
+        "streamSimpleOpenAIResponses",
+        () => consumeStream(streamSimpleOpenAIResponses("model", "prompt")),
+    ],
+    [
+        "streamSimpleOpenAICompletions",
+        () => consumeStream(streamSimpleOpenAICompletions("model", "prompt")),
+    ],
     ["getModel", () => getModel()],
     ["getApiProvider", () => getApiProvider()],
     ["getModels", () => getModels()],
@@ -27,6 +33,12 @@ const unsupportedChecks: Array<[string, () => unknown]> = [
     ["refreshOpenAICodexToken", () => refreshOpenAICodexToken()],
     ["getOAuthApiKey", () => getOAuthApiKey("openai")],
 ];
+
+async function consumeStream(stream: AsyncIterable<unknown>): Promise<void> {
+    for await (const _ of stream) {
+        // The host bridge must fail before yielding placeholder chunks.
+    }
+}
 
 async function expectFailClosed(name: string, call: () => unknown): Promise<string> {
     try {
