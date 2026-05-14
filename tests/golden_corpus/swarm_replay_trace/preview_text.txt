@@ -1,0 +1,13 @@
+Swarm Replay Preview
+schema: pi.swarm.replay_preview.v1
+trace: golden-swarm-replay-normalized
+events: 2 replayed, 2 snapshots
+sources: 11 (missing_sources)
+final_state: 1 beads, 2 agents, 0 active reservations, 0 reservation conflicts
+policies: 2 evaluated, 4 decisions, 2 distinct actions
+top_policy: existing_autopilot rank 1 score 16 confidence medium
+rationale: Score 16 from 2 throughput action(s), 0 validation deferral(s), risk low.
+rationale: Advances replay work through 2 advisory work-start decision(s).
+rationale: Suppresses resource_budget.peak_agent_concurrency,resource_budget.peak_tool_concurrency,resource_budget.peak_rch_fanout,resource_budget.peak_estimated_rss_gib,resource_budget.cpu_pressure,resource_budget.memory_pressure,resource_budget.tmpdir_pressure,resource_budget.target_dir_pressure,resource_budget.extension_lane_pressure because host resource profile missing.
+diagnostics: 0
+guards: read_only=true no_live_mutation=true no_network_required=true runpack_not_source_of_truth=true

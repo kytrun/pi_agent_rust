@@ -320,6 +320,22 @@ fn command_value(command: Option<&Commands>) -> Value {
             "max_bytes": max_bytes,
             "query": query,
         }),
+        Some(Commands::SwarmReplayPreview {
+            trace,
+            policies,
+            format,
+            out_json,
+            out_text,
+            generated_at,
+        }) => json!({
+            "name": "swarm-replay-preview",
+            "trace": trace,
+            "policies": policies,
+            "format": format,
+            "out_json": out_json,
+            "out_text": out_text,
+            "generated_at": generated_at,
+        }),
         Some(Commands::List) => json!({
             "name": "list",
         }),

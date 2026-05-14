@@ -35,6 +35,7 @@
   ],
   "optional_source_ids": [
     "tail_latency",
+    "swarm_replay_preview",
     "flight_recorder",
     "host_preflight",
     "hostcall_swarm_profile",
@@ -75,6 +76,10 @@
     "tail_latency.telemetry_enabled",
     "tail_latency.redaction_summary",
     "tail_latency.metrics",
+    "swarm_replay_preview.schema",
+    "swarm_replay_preview.trace_id",
+    "swarm_replay_preview.recommended_policy_id",
+    "swarm_replay_preview.comparison_rows",
     "autopilot_handoff.schema",
     "autopilot_handoff.input_pack.schema",
     "autopilot_handoff.input_pack.status",
@@ -206,6 +211,14 @@
       "description": "When companion autopilot input-pack and plan artifacts are requested, the runpack projects a diagnostic autopilot handoff summary that cites the autopilot schemas, selected dry-run action, artifact paths, and source provenance without replacing the authoritative source artifacts.",
       "validated_by": [
         "autopilot_handoff_schema",
+        "optional_summary_paths"
+      ]
+    },
+    {
+      "id": "RUNPACK-MUST-011",
+      "description": "When an optional swarm replay preview artifact is supplied, the runpack projects the comparison summary and recommended policy without replacing replay traces, policy reports, or source evidence.",
+      "validated_by": [
+        "optional_source_ids",
         "optional_summary_paths"
       ]
     }

@@ -51,6 +51,12 @@ use pi::providers;
 use pi::resources::{ResourceCliOptions, ResourceLoader};
 use pi::session::Session;
 use pi::session_index::SessionIndex;
+use pi::swarm_replay::{
+    SWARM_REPLAY_POLICY_REPORT_SCHEMA, SWARM_REPLAY_REPORT_SCHEMA, SWARM_REPLAY_TRACE_SCHEMA,
+    SwarmReplayBaselinePolicy, SwarmReplayPolicyAdapter, SwarmReplayPolicyComparison,
+    SwarmReplayTrace, default_swarm_replay_baseline_policies,
+    evaluate_swarm_replay_baseline_policies, replay_swarm_trace,
+};
 use pi::tools::ToolRegistry;
 use pi::tui::PiConsole;
 use serde::{Deserialize, Serialize};
@@ -64,6 +70,8 @@ const USAGE_ERROR_PATTERNS: &[&str] = &[
     "@file arguments are not supported in rpc mode",
     "--api-key requires a model to be specified via --provider/--model or --models",
     "context-preview requires",
+    "swarm-replay-preview requires",
+    "unsupported swarm-replay-preview policy",
     "unknown --only categories",
     "--only must include at least one category",
     "theme file not found",
@@ -308,6 +316,25 @@ fn main_impl() -> Result<()> {
                     *max_items,
                     *max_bytes,
                     query,
+                )?;
+                return Ok(());
+            }
+            cli::Commands::SwarmReplayPreview {
+                trace,
+                policies,
+                format,
+                out_json,
+                out_text,
+                generated_at,
+            } => {
+                handle_swarm_replay_preview_blocking(
+                    &cwd,
+                    trace,
+                    policies,
+                    format,
+                    out_json.as_deref(),
+                    out_text.as_deref(),
+                    generated_at.as_deref(),
                 )?;
                 return Ok(());
             }
@@ -1715,6 +1742,24 @@ async fn handle_subcommand(command: cli::Commands, cwd: &Path) -> Result<()> {
                 &query,
             )?;
         }
+        cli::Commands::SwarmReplayPreview {
+            trace,
+            policies,
+            format,
+            out_json,
+            out_text,
+            generated_at,
+        } => {
+            handle_swarm_replay_preview_blocking(
+                cwd,
+                &trace,
+                &policies,
+                &format,
+                out_json.as_deref(),
+                out_text.as_deref(),
+                generated_at.as_deref(),
+            )?;
+        }
         cli::Commands::Search {
             query,
             tag,
@@ -1754,6 +1799,576 @@ async fn handle_subcommand(command: cli::Commands, cwd: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+const SWARM_REPLAY_PREVIEW_SCHEMA: &str = "pi.swarm.replay_preview.v1";
+
+#[derive(Debug, Serialize)]
+struct SwarmReplayPreviewReport<'a> {
+    schema: &'static str,
+    generated_at_utc: String,
+    command: SwarmReplayPreviewCommand,
+    trace: SwarmReplayPreviewTraceSummary,
+    replay: SwarmReplayPreviewReplaySummary,
+    policies: SwarmReplayPreviewPolicySection<'a>,
+    recommendation: Option<SwarmReplayPreviewPolicySummary<'a>>,
+    output_paths: SwarmReplayPreviewOutputPaths,
+    guards: SwarmReplayPreviewGuards,
+}
+
+#[derive(Debug, Serialize)]
+struct SwarmReplayPreviewCommand {
+    invocation: &'static str,
+    cwd: String,
+    read_only_replay: bool,
+    provider_calls: u8,
+    live_mutations: u8,
+    output_writes: u8,
+}
+
+#[derive(Debug, Serialize)]
+struct SwarmReplayPreviewTraceSummary {
+    path: String,
+    schema: String,
+    trace_id: String,
+    generated_at: String,
+    source_count: u64,
+    event_count: u64,
+    first_event_id: Option<String>,
+    last_event_id: Option<String>,
+    redaction_status: String,
+    uncertainty_state: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SwarmReplayPreviewReplaySummary {
+    schema: &'static str,
+    replayed_event_count: u64,
+    final_logical_clock: u64,
+    snapshot_count: u64,
+    diagnostic_count: u64,
+    diagnostics: Vec<SwarmReplayPreviewDiagnosticSummary>,
+    final_state: SwarmReplayPreviewStateSummary,
+    resource_saturation_points: u64,
+    first_saturation_reasons: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SwarmReplayPreviewDiagnosticSummary {
+    code: String,
+    severity: String,
+    event_id: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SwarmReplayPreviewStateSummary {
+    bead_count: u64,
+    agent_count: u64,
+    active_reservation_count: u64,
+    active_build_slot_count: u64,
+    rch_job_count: u64,
+    validation_gate_count: u64,
+    runpack_recommendation_count: u64,
+    operator_handoff_count: u64,
+    reservation_conflict_count: u64,
+    agent_mail_available: bool,
+    missing_agent_mail_evidence: bool,
+    dirty_worktree: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct SwarmReplayPreviewPolicySection<'a> {
+    schema: &'static str,
+    requested_policy_ids: Vec<String>,
+    evaluated_policy_ids: Vec<String>,
+    decision_count: u64,
+    comparison_count: u64,
+    distinct_action_count: u64,
+    score_spread: Option<i64>,
+    comparisons: Vec<SwarmReplayPreviewPolicySummary<'a>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SwarmReplayPreviewPolicySummary<'a> {
+    policy_id: &'a str,
+    rank: u64,
+    score: i64,
+    confidence: &'a str,
+    confidence_score: u64,
+    throughput_actions: u64,
+    validation_commands_deferred: u64,
+    local_fallback_risk: &'a str,
+    reservation_conflicts_avoided: u64,
+    stale_work_reclaimed: u64,
+    missing_data_claims: Vec<&'a str>,
+    rationale: Vec<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct SwarmReplayPreviewOutputPaths {
+    json: Option<String>,
+    text: Option<String>,
+}
+
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Serialize)]
+struct SwarmReplayPreviewGuards {
+    read_only_replay: bool,
+    no_live_mutation: bool,
+    no_network_required: bool,
+    output_artifacts_only: bool,
+    runpack_not_source_of_truth: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_swarm_replay_preview_blocking(
+    cwd: &Path,
+    trace: &str,
+    policy_names: &[String],
+    format: &str,
+    out_json: Option<&str>,
+    out_text: Option<&str>,
+    generated_at: Option<&str>,
+) -> Result<()> {
+    let trace_arg = non_empty_string(trace)
+        .ok_or_else(|| anyhow::anyhow!("swarm-replay-preview requires --trace"))?;
+    let trace_path = resolve_cli_path(cwd, &trace_arg);
+    let trace_raw = fs::read_to_string(&trace_path)?;
+    let trace = serde_json::from_str::<SwarmReplayTrace>(&trace_raw)?;
+    if trace.schema != SWARM_REPLAY_TRACE_SCHEMA {
+        bail!(
+            "swarm-replay-preview requires trace schema {SWARM_REPLAY_TRACE_SCHEMA}, got {}",
+            trace.schema
+        );
+    }
+    let selected_policies = selected_swarm_replay_policies(policy_names)?;
+    let replay_report = replay_swarm_trace(&trace)?;
+    let policy_report =
+        evaluate_swarm_replay_baseline_policies(&replay_report, &selected_policies)?;
+    let generated_at_utc = swarm_replay_preview_generated_at(generated_at)?;
+    let output_writes = u8::from(out_json.is_some()) + u8::from(out_text.is_some());
+    let output_paths = SwarmReplayPreviewOutputPaths {
+        json: out_json.map(ToString::to_string),
+        text: out_text.map(ToString::to_string),
+    };
+    let report = build_swarm_replay_preview_report(
+        cwd,
+        &trace_arg,
+        generated_at_utc,
+        output_writes,
+        output_paths,
+        &trace,
+        &replay_report,
+        &policy_report,
+    );
+    let json_output = serde_json::to_string_pretty(&report)?;
+    let text_output = render_swarm_replay_preview_text(&report);
+
+    if let Some(path) = out_json {
+        write_swarm_replay_preview_output(
+            &resolve_cli_path(cwd, path),
+            &json_output,
+            "JSON preview",
+        )?;
+    }
+    if let Some(path) = out_text {
+        write_swarm_replay_preview_output(
+            &resolve_cli_path(cwd, path),
+            &text_output,
+            "text preview",
+        )?;
+    }
+    if out_json.is_none() && out_text.is_none() {
+        match format {
+            "json" => println!("{json_output}"),
+            "text" => print!("{text_output}"),
+            other => bail!("unsupported swarm-replay-preview format: {other}"),
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn build_swarm_replay_preview_report<'a>(
+    cwd: &Path,
+    trace_path: &str,
+    generated_at_utc: String,
+    output_writes: u8,
+    output_paths: SwarmReplayPreviewOutputPaths,
+    trace: &SwarmReplayTrace,
+    replay_report: &pi::swarm_replay::SwarmReplayReport,
+    policy_report: &'a pi::swarm_replay::SwarmReplayPolicyReport,
+) -> SwarmReplayPreviewReport<'a> {
+    let comparisons = policy_report
+        .policy_comparisons
+        .iter()
+        .map(summarize_swarm_replay_policy_comparison)
+        .collect::<Vec<_>>();
+    let recommendation = policy_report
+        .policy_comparisons
+        .first()
+        .map(summarize_swarm_replay_policy_comparison);
+    let score_spread = policy_score_spread(&policy_report.policy_comparisons);
+    let distinct_action_count = {
+        let actions = policy_report
+            .decisions
+            .iter()
+            .map(|decision| decision.action.as_str())
+            .collect::<BTreeSet<_>>();
+        u64::try_from(actions.len()).unwrap_or(u64::MAX)
+    };
+    let first_saturation_reasons = replay_report
+        .resource_pressure_timeline
+        .iter()
+        .find(|snapshot| !snapshot.saturation_reasons.is_empty())
+        .map(|snapshot| snapshot.saturation_reasons.clone())
+        .unwrap_or_default();
+
+    SwarmReplayPreviewReport {
+        schema: SWARM_REPLAY_PREVIEW_SCHEMA,
+        generated_at_utc,
+        command: SwarmReplayPreviewCommand {
+            invocation: "pi swarm-replay-preview",
+            cwd: normalize_display_path(cwd),
+            read_only_replay: true,
+            provider_calls: 0,
+            live_mutations: 0,
+            output_writes,
+        },
+        trace: SwarmReplayPreviewTraceSummary {
+            path: trace_path.to_string(),
+            schema: trace.schema.clone(),
+            trace_id: trace.trace_id.clone(),
+            generated_at: trace.generated_at.clone(),
+            source_count: u64::try_from(trace.source_inventory.len()).unwrap_or(u64::MAX),
+            event_count: u64::try_from(trace.events.len()).unwrap_or(u64::MAX),
+            first_event_id: trace.events.first().map(|event| event.event_id.clone()),
+            last_event_id: trace.events.last().map(|event| event.event_id.clone()),
+            redaction_status: swarm_replay_redaction_status(trace),
+            uncertainty_state: swarm_replay_uncertainty_state(trace),
+        },
+        replay: SwarmReplayPreviewReplaySummary {
+            schema: SWARM_REPLAY_REPORT_SCHEMA,
+            replayed_event_count: replay_report.replayed_event_count,
+            final_logical_clock: replay_report.final_logical_clock,
+            snapshot_count: u64::try_from(replay_report.snapshots.len()).unwrap_or(u64::MAX),
+            diagnostic_count: u64::try_from(replay_report.diagnostics.len()).unwrap_or(u64::MAX),
+            diagnostics: replay_report
+                .diagnostics
+                .iter()
+                .take(8)
+                .map(|diagnostic| SwarmReplayPreviewDiagnosticSummary {
+                    code: diagnostic.code.clone(),
+                    severity: diagnostic.severity.clone(),
+                    event_id: diagnostic.event_id.clone(),
+                    message: diagnostic.message.clone(),
+                })
+                .collect(),
+            final_state: SwarmReplayPreviewStateSummary {
+                bead_count: u64::try_from(replay_report.final_state.beads.len())
+                    .unwrap_or(u64::MAX),
+                agent_count: u64::try_from(replay_report.final_state.agents.len())
+                    .unwrap_or(u64::MAX),
+                active_reservation_count: u64::try_from(
+                    replay_report
+                        .final_state
+                        .reservations
+                        .values()
+                        .filter(|reservation| reservation.active)
+                        .count(),
+                )
+                .unwrap_or(u64::MAX),
+                active_build_slot_count: u64::try_from(replay_report.final_state.build_slots.len())
+                    .unwrap_or(u64::MAX),
+                rch_job_count: u64::try_from(replay_report.final_state.rch_jobs.len())
+                    .unwrap_or(u64::MAX),
+                validation_gate_count: u64::try_from(
+                    replay_report.final_state.validation_gates.len(),
+                )
+                .unwrap_or(u64::MAX),
+                runpack_recommendation_count: u64::try_from(
+                    replay_report.final_state.runpack_recommendations.len(),
+                )
+                .unwrap_or(u64::MAX),
+                operator_handoff_count: u64::try_from(
+                    replay_report.final_state.operator_handoffs.len(),
+                )
+                .unwrap_or(u64::MAX),
+                reservation_conflict_count: replay_report
+                    .final_state
+                    .coordination
+                    .reservation_conflict_count,
+                agent_mail_available: replay_report.final_state.coordination.agent_mail_available,
+                missing_agent_mail_evidence: replay_report
+                    .final_state
+                    .coordination
+                    .missing_agent_mail_evidence,
+                dirty_worktree: replay_report
+                    .final_state
+                    .worktree
+                    .as_ref()
+                    .map(|worktree| worktree.dirty),
+            },
+            resource_saturation_points: u64::try_from(
+                replay_report
+                    .resource_pressure_timeline
+                    .iter()
+                    .filter(|snapshot| !snapshot.saturation_reasons.is_empty())
+                    .count(),
+            )
+            .unwrap_or(u64::MAX),
+            first_saturation_reasons,
+        },
+        policies: SwarmReplayPreviewPolicySection {
+            schema: SWARM_REPLAY_POLICY_REPORT_SCHEMA,
+            requested_policy_ids: policy_report.policy_ids.clone(),
+            evaluated_policy_ids: policy_report.policy_ids.clone(),
+            decision_count: policy_report.decision_count,
+            comparison_count: policy_report.comparison_count,
+            distinct_action_count,
+            score_spread,
+            comparisons,
+        },
+        recommendation,
+        output_paths,
+        guards: SwarmReplayPreviewGuards {
+            read_only_replay: true,
+            no_live_mutation: true,
+            no_network_required: true,
+            output_artifacts_only: true,
+            runpack_not_source_of_truth: true,
+        },
+    }
+}
+
+fn swarm_replay_redaction_status(trace: &SwarmReplayTrace) -> String {
+    if trace.redaction_summary.raw_secret_bytes_emitted > 0 {
+        "unsafe_raw_secret_bytes_emitted".to_string()
+    } else if trace.redaction_summary.redacted_count > 0
+        || trace.redaction_summary.sensitive_omitted_count > 0
+    {
+        "redacted".to_string()
+    } else {
+        "clean".to_string()
+    }
+}
+
+fn swarm_replay_uncertainty_state(trace: &SwarmReplayTrace) -> String {
+    if !trace.uncertainty_summary.malformed_sources.is_empty() {
+        "malformed_sources".to_string()
+    } else if !trace.uncertainty_summary.missing_sources.is_empty() {
+        "missing_sources".to_string()
+    } else if !trace.uncertainty_summary.suppressed_claims.is_empty() {
+        "suppressed_claims".to_string()
+    } else if !trace.uncertainty_summary.stale_sources.is_empty() {
+        "stale_sources".to_string()
+    } else if trace
+        .uncertainty_summary
+        .event_count_by_uncertainty
+        .keys()
+        .any(|state| state != "certain")
+    {
+        "uncertain_events".to_string()
+    } else {
+        "certain".to_string()
+    }
+}
+
+fn summarize_swarm_replay_policy_comparison(
+    comparison: &SwarmReplayPolicyComparison,
+) -> SwarmReplayPreviewPolicySummary<'_> {
+    SwarmReplayPreviewPolicySummary {
+        policy_id: comparison.policy_id.as_str(),
+        rank: comparison.rank,
+        score: comparison.score,
+        confidence: comparison.confidence.level.as_str(),
+        confidence_score: comparison.confidence.score,
+        throughput_actions: comparison.metrics.throughput_actions,
+        validation_commands_deferred: comparison.metrics.validation_commands_deferred,
+        local_fallback_risk: comparison.metrics.local_fallback_risk.as_str(),
+        reservation_conflicts_avoided: comparison.metrics.reservation_conflicts_avoided,
+        stale_work_reclaimed: comparison.metrics.stale_work_reclaimed,
+        missing_data_claims: comparison
+            .missing_data
+            .iter()
+            .map(|missing| missing.claim.as_str())
+            .collect(),
+        rationale: comparison
+            .rationale
+            .iter()
+            .take(4)
+            .map(String::as_str)
+            .collect(),
+    }
+}
+
+fn policy_score_spread(comparisons: &[SwarmReplayPolicyComparison]) -> Option<i64> {
+    let min = comparisons
+        .iter()
+        .map(|comparison| comparison.score)
+        .min()?;
+    let max = comparisons
+        .iter()
+        .map(|comparison| comparison.score)
+        .max()?;
+    Some(max.saturating_sub(min))
+}
+
+fn selected_swarm_replay_policies(
+    policy_names: &[String],
+) -> Result<Vec<SwarmReplayBaselinePolicy>> {
+    if policy_names.is_empty() {
+        return Ok(default_swarm_replay_baseline_policies().to_vec());
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut policies = Vec::new();
+    for raw in policy_names {
+        let Some(value) = non_empty_string(raw) else {
+            bail!("swarm-replay-preview requires non-empty --policy values");
+        };
+        let Some(policy) = parse_swarm_replay_policy(&value) else {
+            bail!(
+                "unsupported swarm-replay-preview policy {value}; valid policies: {}",
+                swarm_replay_policy_help()
+            );
+        };
+        if seen.insert(policy) {
+            policies.push(policy);
+        }
+    }
+    Ok(policies)
+}
+
+fn parse_swarm_replay_policy(value: &str) -> Option<SwarmReplayBaselinePolicy> {
+    let normalized = value.trim().replace('-', "_");
+    match normalized.as_str() {
+        "conservative_manual" => Some(SwarmReplayBaselinePolicy::ConservativeManual),
+        "existing_autopilot" => Some(SwarmReplayBaselinePolicy::ExistingAutopilot),
+        "rch_fanout_limited" => Some(SwarmReplayBaselinePolicy::RchFanoutLimited),
+        "stale_bead_reclaiming" => Some(SwarmReplayBaselinePolicy::StaleBeadReclaiming),
+        "build_slot_protective" => Some(SwarmReplayBaselinePolicy::BuildSlotProtective),
+        _ => None,
+    }
+}
+
+fn swarm_replay_policy_help() -> String {
+    default_swarm_replay_baseline_policies()
+        .iter()
+        .map(SwarmReplayPolicyAdapter::policy_id)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn swarm_replay_preview_generated_at(generated_at: Option<&str>) -> Result<String> {
+    let Some(value) = generated_at.and_then(non_empty_string) else {
+        return Ok(chrono::Utc::now().to_rfc3339());
+    };
+    if chrono::DateTime::parse_from_rfc3339(&value).is_err() {
+        bail!("swarm-replay-preview requires --generated-at to be RFC3339: {value}");
+    }
+    Ok(value)
+}
+
+fn resolve_cli_path(cwd: &Path, raw: &str) -> PathBuf {
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
+}
+
+fn write_swarm_replay_preview_output(path: &Path, content: &str, label: &str) -> Result<()> {
+    if path.exists() {
+        bail!("refusing to overwrite existing {label}: {}", path.display());
+    }
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, content)?;
+    Ok(())
+}
+
+fn render_swarm_replay_preview_text(report: &SwarmReplayPreviewReport<'_>) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "Swarm Replay Preview");
+    let _ = writeln!(output, "schema: {}", report.schema);
+    let _ = writeln!(output, "trace: {}", report.trace.trace_id);
+    let _ = writeln!(
+        output,
+        "events: {} replayed, {} snapshots",
+        report.replay.replayed_event_count, report.replay.snapshot_count
+    );
+    let _ = writeln!(
+        output,
+        "sources: {} ({})",
+        report.trace.source_count, report.trace.uncertainty_state
+    );
+    let _ = writeln!(
+        output,
+        "final_state: {} beads, {} agents, {} active reservations, {} reservation conflicts",
+        report.replay.final_state.bead_count,
+        report.replay.final_state.agent_count,
+        report.replay.final_state.active_reservation_count,
+        report.replay.final_state.reservation_conflict_count
+    );
+    let _ = writeln!(
+        output,
+        "policies: {} evaluated, {} decisions, {} distinct actions",
+        report.policies.evaluated_policy_ids.len(),
+        report.policies.decision_count,
+        report.policies.distinct_action_count
+    );
+    if let Some(recommendation) = &report.recommendation {
+        let _ = writeln!(
+            output,
+            "top_policy: {} rank {} score {} confidence {}",
+            recommendation.policy_id,
+            recommendation.rank,
+            recommendation.score,
+            recommendation.confidence
+        );
+        for reason in &recommendation.rationale {
+            let _ = writeln!(output, "rationale: {reason}");
+        }
+    }
+    if report.replay.diagnostic_count > 0 {
+        let _ = writeln!(output, "diagnostics: {}", report.replay.diagnostic_count);
+        for diagnostic in &report.replay.diagnostics {
+            let _ = writeln!(
+                output,
+                "- {} {}: {}",
+                diagnostic.severity, diagnostic.code, diagnostic.message
+            );
+        }
+    } else {
+        let _ = writeln!(output, "diagnostics: 0");
+    }
+    if report.replay.resource_saturation_points > 0 {
+        let _ = writeln!(
+            output,
+            "resource_saturation_points: {}",
+            report.replay.resource_saturation_points
+        );
+        for reason in &report.replay.first_saturation_reasons {
+            let _ = writeln!(output, "saturation: {reason}");
+        }
+    }
+    let _ = writeln!(
+        output,
+        "guards: read_only={} no_live_mutation={} no_network_required={} runpack_not_source_of_truth={}",
+        report.guards.read_only_replay,
+        report.guards.no_live_mutation,
+        report.guards.no_network_required,
+        report.guards.runpack_not_source_of_truth
+    );
+    output
 }
 
 #[derive(Debug, Serialize)]

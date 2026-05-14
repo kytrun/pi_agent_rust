@@ -59,6 +59,7 @@ CONTEXT_INTELLIGENCE_CLOSEOUT_GATE_SCHEMA = "pi.context_intelligence.closeout_ga
 CONTEXT_INTELLIGENCE_CLOSEOUT_GATE_CONTRACT_SCHEMA = (
     "pi.context_intelligence.closeout_gate_contract.v1"
 )
+SWARM_REPLAY_PREVIEW_SCHEMA = "pi.swarm.replay_preview.v1"
 RUNPACK_CONTRACT_PATH = Path("docs/contracts/swarm-operator-runpack-contract.json")
 AUTOPILOT_INPUT_PACK_CONTRACT_PATH = Path(
     "docs/contracts/swarm-autopilot-input-pack-contract.json"
@@ -1006,6 +1007,7 @@ def load_git_status(path: Path | None) -> SourcePayload:
 
 
 def source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
+    swarm_replay_preview_json = getattr(args, "swarm_replay_preview_json", None)
     sources = [
         load_json_source("doctor_swarm", args.doctor_json),
         load_json_source(
@@ -1027,6 +1029,14 @@ def source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
         load_json_source("beads", args.beads_json),
         load_git_status(args.git_status_file),
     ]
+    if swarm_replay_preview_json is not None:
+        sources.append(
+            load_json_source(
+                "swarm_replay_preview",
+                swarm_replay_preview_json,
+                expected_schema=SWARM_REPLAY_PREVIEW_SCHEMA,
+            )
+        )
     if args.tail_latency_json is not None:
         sources.append(
             load_json_source(
@@ -2410,6 +2420,45 @@ def summarize_activity_digest(source: SourcePayload, max_items: int) -> dict[str
         "reasons": bounded(saturation.get("reasons") or [], max_items),
         "evidence_pointers": bounded(saturation.get("evidence_pointers") or [], max_items),
         "recommendations": bounded(recommendations, max_items),
+    }
+
+
+def summarize_swarm_replay_preview(source: SourcePayload, max_items: int) -> dict[str, Any]:
+    payload = source.payload
+    if not isinstance(payload, dict):
+        return {"status": source.status}
+    trace = payload.get("trace") if isinstance(payload.get("trace"), dict) else {}
+    replay = payload.get("replay") if isinstance(payload.get("replay"), dict) else {}
+    policies = payload.get("policies") if isinstance(payload.get("policies"), dict) else {}
+    recommendation = (
+        payload.get("recommendation")
+        if isinstance(payload.get("recommendation"), dict)
+        else {}
+    )
+    comparisons = policies.get("comparisons") if isinstance(policies.get("comparisons"), list) else []
+    return {
+        "status": source.status,
+        "source_path": source.path,
+        "schema": payload.get("schema"),
+        "trace_id": trace.get("trace_id"),
+        "trace_path": trace.get("path"),
+        "event_count": trace.get("event_count"),
+        "replayed_event_count": replay.get("replayed_event_count"),
+        "diagnostic_count": replay.get("diagnostic_count"),
+        "resource_saturation_points": replay.get("resource_saturation_points"),
+        "policy_ids": bounded(policies.get("evaluated_policy_ids") or [], max_items),
+        "decision_count": policies.get("decision_count"),
+        "comparison_count": policies.get("comparison_count"),
+        "distinct_action_count": policies.get("distinct_action_count"),
+        "score_spread": policies.get("score_spread"),
+        "recommended_policy_id": recommendation.get("policy_id"),
+        "recommendation_confidence": recommendation.get("confidence"),
+        "recommendation_score": recommendation.get("score"),
+        "comparison_rows": bounded(comparisons, max_items),
+        "guards": payload.get("guards") if isinstance(payload.get("guards"), dict) else {},
+        "output_paths": payload.get("output_paths")
+        if isinstance(payload.get("output_paths"), dict)
+        else {},
     }
 
 
@@ -4706,6 +4755,11 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
             by_id["tail_latency"],
             args.max_items,
         )
+    if "swarm_replay_preview" in by_id:
+        runpack["swarm_replay_preview"] = summarize_swarm_replay_preview(
+            by_id["swarm_replay_preview"],
+            args.max_items,
+        )
     runpack["bottleneck_attribution"] = build_bottleneck_attribution(
         runpack,
         by_id,
@@ -4801,6 +4855,12 @@ def render_markdown(runpack: dict[str, Any]) -> str:
     lines.append(f"- Agent Mail read state: `{runpack['agent_mail_read_state'].get('status')}`")
     lines.append(f"- Validation outputs: `{runpack['validation_outputs'].get('status')}`")
     lines.append(f"- Activity saturated: `{runpack['activity_digest'].get('saturated')}`")
+    if isinstance(runpack.get("swarm_replay_preview"), dict):
+        preview = runpack["swarm_replay_preview"]
+        lines.append(
+            f"- Replay preview: `{preview.get('recommended_policy_id')}` "
+            f"({preview.get('comparison_count')} policy comparisons)"
+        )
     lines.append(f"- Bottleneck attribution: `{runpack['bottleneck_attribution'].get('status')}`")
     if isinstance(runpack.get("autopilot_handoff"), dict):
         handoff = runpack["autopilot_handoff"]
@@ -5626,6 +5686,7 @@ def autopilot_e2e_args(
         claim_readiness_json=None,
         smoke_summary_json=None,
         activity_digest_json=None,
+        swarm_replay_preview_json=None,
         cargo_admission_json=paths["cargo_admission_json"],
         beads_json=paths["beads_json"],
         beads_ready_json=paths["beads_ready_json"],
@@ -7617,6 +7678,131 @@ def run_self_test() -> int:
             "recommendations": [{"mode": "testing-golden-artifacts"}],
         },
     )
+    replay_preview_path = write_json(
+        workspace / "swarm-replay-preview.json",
+        {
+            "schema": SWARM_REPLAY_PREVIEW_SCHEMA,
+            "generated_at_utc": generated_at,
+            "command": {
+                "invocation": "pi swarm-replay-preview",
+                "cwd": str(workspace),
+                "read_only_replay": True,
+                "provider_calls": 0,
+                "live_mutations": 0,
+                "output_writes": 1,
+            },
+            "trace": {
+                "path": "tests/golden_corpus/swarm_replay_trace/normalized_trace.json",
+                "schema": "pi.swarm.replay_trace.v1",
+                "trace_id": "fixture-preview",
+                "generated_at": generated_at,
+                "source_count": 7,
+                "event_count": 12,
+                "first_event_id": "event-001",
+                "last_event_id": "event-012",
+                "redaction_status": "redacted",
+                "uncertainty_state": "complete",
+            },
+            "replay": {
+                "schema": "pi.swarm.replay_report.v1",
+                "replayed_event_count": 12,
+                "final_logical_clock": 12,
+                "snapshot_count": 12,
+                "diagnostic_count": 1,
+                "diagnostics": [
+                    {
+                        "code": "agent_mail_source_unavailable",
+                        "severity": "degraded",
+                        "event_id": "event-003",
+                        "message": "Agent Mail unavailable in fixture",
+                    }
+                ],
+                "final_state": {
+                    "bead_count": 2,
+                    "agent_count": 3,
+                    "active_reservation_count": 1,
+                    "active_build_slot_count": 1,
+                    "rch_job_count": 1,
+                    "validation_gate_count": 1,
+                    "runpack_recommendation_count": 1,
+                    "operator_handoff_count": 1,
+                    "reservation_conflict_count": 1,
+                    "agent_mail_available": False,
+                    "missing_agent_mail_evidence": True,
+                    "dirty_worktree": True,
+                },
+                "resource_saturation_points": 1,
+                "first_saturation_reasons": ["rch_queue_saturated"],
+            },
+            "policies": {
+                "schema": "pi.swarm.policy_report.v1",
+                "requested_policy_ids": [
+                    "existing_autopilot",
+                    "rch_fanout_limited",
+                ],
+                "evaluated_policy_ids": [
+                    "existing_autopilot",
+                    "rch_fanout_limited",
+                ],
+                "decision_count": 4,
+                "comparison_count": 2,
+                "distinct_action_count": 3,
+                "score_spread": 8,
+                "comparisons": [
+                    {
+                        "policy_id": "rch_fanout_limited",
+                        "rank": 1,
+                        "score": 14,
+                        "confidence": "medium",
+                        "confidence_score": 70,
+                        "throughput_actions": 1,
+                        "validation_commands_deferred": 1,
+                        "local_fallback_risk": "low",
+                        "reservation_conflicts_avoided": 1,
+                        "stale_work_reclaimed": 0,
+                        "missing_data_claims": ["coordination_completeness"],
+                        "rationale": ["Defers validation under RCH pressure."],
+                    },
+                    {
+                        "policy_id": "existing_autopilot",
+                        "rank": 2,
+                        "score": 6,
+                        "confidence": "medium",
+                        "confidence_score": 60,
+                        "throughput_actions": 1,
+                        "validation_commands_deferred": 0,
+                        "local_fallback_risk": "medium",
+                        "reservation_conflicts_avoided": 0,
+                        "stale_work_reclaimed": 0,
+                        "missing_data_claims": ["coordination_completeness"],
+                        "rationale": ["Continues work without deferring validation."],
+                    },
+                ],
+            },
+            "recommendation": {
+                "policy_id": "rch_fanout_limited",
+                "rank": 1,
+                "score": 14,
+                "confidence": "medium",
+                "confidence_score": 70,
+                "throughput_actions": 1,
+                "validation_commands_deferred": 1,
+                "local_fallback_risk": "low",
+                "reservation_conflicts_avoided": 1,
+                "stale_work_reclaimed": 0,
+                "missing_data_claims": ["coordination_completeness"],
+                "rationale": ["Defers validation under RCH pressure."],
+            },
+            "output_paths": {"json": str(workspace / "preview.json"), "text": None},
+            "guards": {
+                "read_only_replay": True,
+                "no_live_mutation": True,
+                "no_network_required": True,
+                "output_artifacts_only": True,
+                "runpack_not_source_of_truth": True,
+            },
+        },
+    )
     cargo_path = write_json(
         workspace / "cargo.json",
         {
@@ -7829,6 +8015,7 @@ def run_self_test() -> int:
         claim_readiness_json=claim_path,
         smoke_summary_json=smoke_path,
         activity_digest_json=activity_path,
+        swarm_replay_preview_json=None,
         cargo_admission_json=cargo_path,
         beads_json=beads_path,
         beads_ready_json=None,
@@ -7981,6 +8168,31 @@ def run_self_test() -> int:
         assert "Git Context" in markdown
         assert_runpack_contract(runpack)
         assert_runpack_golden(runpack, workspace)
+        replay_preview_args = argparse.Namespace(
+            **{
+                **vars(args),
+                "swarm_replay_preview_json": replay_preview_path,
+                "out_json": None,
+                "out_md": None,
+            }
+        )
+        replay_preview_runpack = build_runpack(replay_preview_args)
+        assert replay_preview_runpack["swarm_replay_preview"]["schema"] == (
+            SWARM_REPLAY_PREVIEW_SCHEMA
+        )
+        assert replay_preview_runpack["swarm_replay_preview"]["trace_id"] == "fixture-preview"
+        assert (
+            replay_preview_runpack["swarm_replay_preview"]["recommended_policy_id"]
+            == "rch_fanout_limited"
+        )
+        assert (
+            replay_preview_runpack["swarm_replay_preview"]["comparison_rows"][0]["policy_id"]
+            == "rch_fanout_limited"
+        )
+        assert_runpack_contract(replay_preview_runpack)
+        replay_preview_markdown = render_markdown(replay_preview_runpack)
+        assert "Replay preview" in replay_preview_markdown
+        assert "rch_fanout_limited" in replay_preview_markdown
         autopilot_args = argparse.Namespace(
             **{
                 **vars(args),
@@ -9159,6 +9371,11 @@ def parse_args() -> argparse.Namespace:
         help="summary.json from run_swarm_smoke_harness.py",
     )
     parser.add_argument("--activity-digest-json", type=Path, help="pi.swarm.activity_digest.v1 JSON")
+    parser.add_argument(
+        "--swarm-replay-preview-json",
+        type=Path,
+        help="optional pi.swarm.replay_preview.v1 JSON from `pi swarm-replay-preview`",
+    )
     parser.add_argument(
         "--cargo-admission-json",
         type=Path,

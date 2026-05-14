@@ -34,6 +34,7 @@ const ROOT_SUBCOMMANDS: &[&str] = &[
     "update",
     "update-index",
     "context-preview",
+    "swarm-replay-preview",
     "search",
     "info",
     "list",
@@ -1783,6 +1784,29 @@ pub enum Commands {
         /// Task query text used to score candidate context
         #[arg(trailing_var_arg = true)]
         query: Vec<String>,
+    },
+
+    /// Preview an offline swarm replay trace and policy comparison
+    #[command(name = "swarm-replay-preview")]
+    SwarmReplayPreview {
+        /// Normalized pi.swarm.replay_trace.v1 JSON to replay
+        #[arg(long)]
+        trace: String,
+        /// Baseline policy to compare; repeatable, defaults to all built-in policies
+        #[arg(long = "policy", action = clap::ArgAction::Append)]
+        policies: Vec<String>,
+        /// Output format for stdout when no output path is supplied
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        format: String,
+        /// Write schema-governed preview JSON; refuses to overwrite
+        #[arg(long = "out-json")]
+        out_json: Option<String>,
+        /// Write concise preview text; refuses to overwrite
+        #[arg(long = "out-text")]
+        out_text: Option<String>,
+        /// Override generation timestamp for deterministic fixtures
+        #[arg(long = "generated-at")]
+        generated_at: Option<String>,
     },
 
     /// Show detailed information about an extension
