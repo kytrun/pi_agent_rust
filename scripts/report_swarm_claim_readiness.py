@@ -156,6 +156,23 @@ class HostcallQueueMetricSpec:
     required: bool = True
 
 
+@dataclass(frozen=True)
+class ReadmeSectionSpec:
+    id: str
+    start_marker: str
+    end_marker: str
+
+
+@dataclass(frozen=True)
+class ReadmeLineCheck:
+    id: str
+    section_id: str
+    anchor: str
+    expected: str
+    source_path: str
+    description: str
+
+
 HOSTCALL_QUEUE_SOURCES = (
     HostcallQueueSourceSpec(
         id="perf_stress_triage",
@@ -166,6 +183,19 @@ HOSTCALL_QUEUE_SOURCES = (
         id="extension_reactor_queue_coverage",
         path="docs/evidence/ext-stress-reactor-queue-coverage.json",
         reactor_paths=("captured_report_metrics.reactor", "results.reactor", "reactor"),
+    ),
+)
+
+README_SECTIONS = (
+    ReadmeSectionSpec(
+        id="latest_run_snapshot",
+        start_marker="### Latest run snapshot",
+        end_marker="## Installation",
+    ),
+    ReadmeSectionSpec(
+        id="certification_evidence_refresh",
+        start_marker="Latest certification/evidence refresh",
+        end_marker="### Fast Loop",
     ),
 )
 
@@ -1196,7 +1226,329 @@ def remediation_for(kind: str) -> str:
         "missing_timestamp": "Regenerate with generated_at or generated_at_utc provenance.",
         "stale": "Regenerate the evidence and update claim citations, or soften the claim to historical language.",
         "provenance_mismatch": "Use a single correlated evidence run for the claim or split the claim by run.",
+        "readme_snapshot_mismatch": "Update README.md release-facing snapshot text to match the current evidence artifacts.",
+        "readme_snapshot_missing": "Restore the README.md release-facing snapshot section or remove release-facing snapshot claims.",
     }.get(kind, "Review the artifact before using it for release claims.")
+
+
+def readme_timestamp_text(payload: dict[str, Any], paths: tuple[str, ...] = DEFAULT_TIMESTAMP_PATHS) -> str | None:
+    for path in paths:
+        raw = get_path(payload, path)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+        parsed = parse_iso_datetime(raw)
+        if parsed is not None:
+            return format_datetime(parsed)
+    return None
+
+
+def readme_date_text(value: str | None) -> str | None:
+    if value is None or len(value) < 10:
+        return None
+    return value[:10]
+
+
+def readme_count(payload: dict[str, Any], path: str) -> int | None:
+    return non_negative_count(get_path(payload, path))
+
+
+def readme_json_artifact(repo_root: Path, relative_path: str) -> dict[str, Any]:
+    payload, error = load_json(repo_root / relative_path)
+    if error is not None or payload is None:
+        return {}
+    return payload
+
+
+def readme_gate_counts(payload: dict[str, Any]) -> tuple[int | None, int | None, int | None, int | None]:
+    hard_gates = get_path(payload, "hard_gate_results")
+    if isinstance(hard_gates, list):
+        total = 0
+        passed = 0
+        blocking_total = 0
+        blocking_passed = 0
+        for gate in hard_gates:
+            if not isinstance(gate, dict):
+                continue
+            total += 1
+            is_pass = str(gate.get("status", "")).lower() == "pass"
+            if is_pass:
+                passed += 1
+            if gate.get("blocking") is True:
+                blocking_total += 1
+                if is_pass:
+                    blocking_passed += 1
+        return total, passed, blocking_total, blocking_passed
+
+    summary = get_path(payload, "summary")
+    if isinstance(summary, dict):
+        return (
+            readme_count(summary, "total_gates"),
+            readme_count(summary, "passed"),
+            readme_count(summary, "blocking_total"),
+            readme_count(summary, "blocking_pass"),
+        )
+    return None, None, None, None
+
+
+def add_readme_check(
+    checks: list[ReadmeLineCheck],
+    *,
+    id: str,
+    section_id: str,
+    anchor: str,
+    expected: str | None,
+    source_path: str,
+    description: str,
+) -> None:
+    if expected:
+        checks.append(ReadmeLineCheck(
+            id=id,
+            section_id=section_id,
+            anchor=anchor,
+            expected=expected,
+            source_path=source_path,
+            description=description,
+        ))
+
+
+def build_readme_line_checks(repo_root: Path) -> list[ReadmeLineCheck]:
+    must_pass_path = "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json"
+    evidence_bundle_path = "tests/evidence_bundle/index.json"
+    full_suite_path = "tests/full_suite_gate/full_suite_verdict.json"
+    certification_path = "tests/full_suite_gate/certification_verdict.json"
+    dropin_path = "docs/evidence/dropin-certification-verdict.json"
+
+    must_pass = readme_json_artifact(repo_root, must_pass_path)
+    evidence_bundle = readme_json_artifact(repo_root, evidence_bundle_path)
+    full_suite = readme_json_artifact(repo_root, full_suite_path)
+    certification = readme_json_artifact(repo_root, certification_path)
+    dropin = readme_json_artifact(repo_root, dropin_path)
+
+    checks: list[ReadmeLineCheck] = []
+
+    must_pass_generated = readme_timestamp_text(must_pass)
+    must_pass_date = readme_date_text(must_pass_generated)
+    must_pass_run_id = get_path(must_pass, "run_id")
+    must_pass_passed = readme_count(must_pass, "observed.must_pass_passed")
+    must_pass_total = readme_count(must_pass, "observed.must_pass_total")
+    stretch_passed = readme_count(must_pass, "observed.stretch_passed")
+    stretch_total = readme_count(must_pass, "observed.stretch_total")
+
+    evidence_generated = readme_timestamp_text(evidence_bundle)
+    evidence_run_id = get_path(evidence_bundle, "ci_run_id")
+    evidence_total = readme_count(evidence_bundle, "summary.total_sections")
+    evidence_present = readme_count(evidence_bundle, "summary.present_sections")
+    evidence_missing = readme_count(evidence_bundle, "summary.missing_sections")
+    evidence_invalid = readme_count(evidence_bundle, "summary.invalid_sections")
+
+    certification_generated = readme_timestamp_text(certification)
+    dropin_generated = readme_timestamp_text(dropin)
+    dropin_date = readme_date_text(dropin_generated)
+    dropin_total, dropin_passed, dropin_blocking_total, dropin_blocking_passed = readme_gate_counts(dropin)
+    full_suite_total, full_suite_passed, full_suite_blocking_total, full_suite_blocking_passed = readme_gate_counts(full_suite)
+    dropin_verdict = get_path(dropin, "overall_verdict")
+
+    text_values = {
+        "must_pass_date": must_pass_date,
+        "dropin_date": dropin_date,
+        "must_pass_generated": f"generated `{must_pass_generated}`" if must_pass_generated else None,
+        "must_pass_run_id": f"run `{must_pass_run_id}`"
+        if isinstance(must_pass_run_id, str) and must_pass_run_id
+        else None,
+        "evidence_generated": f"generated `{evidence_generated}`" if evidence_generated else None,
+        "evidence_run_id": f"run `{evidence_run_id}`"
+        if isinstance(evidence_run_id, str) and evidence_run_id
+        else None,
+        "certification_generated": (
+            f"generated `{certification_generated}`" if certification_generated else None
+        ),
+        "dropin_generated": f"generated `{dropin_generated}`" if dropin_generated else None,
+        "dropin_status_counts": (
+            f"**{dropin_passed}/{dropin_total} certification gates PASS, "
+            f"{dropin_blocking_passed}/{dropin_blocking_total} blocking gates PASS**"
+            if None not in (dropin_total, dropin_passed, dropin_blocking_total, dropin_blocking_passed)
+            else None
+        ),
+        "dropin_certification_counts": (
+            f"`{dropin_passed}/{dropin_total}` certification gates passed"
+            if None not in (dropin_total, dropin_passed)
+            else None
+        ),
+        "dropin_verdict": f"`{dropin_verdict}`"
+        if isinstance(dropin_verdict, str) and dropin_verdict
+        else None,
+        "evidence_sections": (
+            f"`{evidence_present}/{evidence_total}` sections present"
+            if None not in (evidence_present, evidence_total)
+            else None
+        ),
+        "evidence_missing": f"`{evidence_missing}` missing"
+        if evidence_missing is not None
+        else None,
+        "evidence_invalid": f"`{evidence_invalid}` invalid"
+        if evidence_invalid is not None
+        else None,
+        "must_pass_counts": (
+            f"`{must_pass_passed}/{must_pass_total}` must-pass extensions passed"
+            if None not in (must_pass_passed, must_pass_total)
+            else None
+        ),
+        "stretch_counts": (
+            f"`{stretch_passed}/{stretch_total}` passed"
+            if None not in (stretch_passed, stretch_total)
+            else None
+        ),
+        "full_suite_counts": (
+            f"`{full_suite_passed}/{full_suite_total}` gates passed, including "
+            f"`{full_suite_blocking_passed}/{full_suite_blocking_total}` blocking gates"
+            if None not in (
+                full_suite_total,
+                full_suite_passed,
+                full_suite_blocking_total,
+                full_suite_blocking_passed,
+            )
+            else None
+        ),
+    }
+
+    check_rows = (
+        ("latest_header_extension_date", "latest_run_snapshot", "### Latest run snapshot", "must_pass_date", must_pass_path),
+        ("latest_extension_generated_at", "latest_run_snapshot", must_pass_path, "must_pass_generated", must_pass_path),
+        ("latest_extension_run_id", "latest_run_snapshot", must_pass_path, "must_pass_run_id", must_pass_path),
+        ("latest_evidence_generated_at", "latest_run_snapshot", evidence_bundle_path, "evidence_generated", evidence_bundle_path),
+        ("latest_evidence_run_id", "latest_run_snapshot", evidence_bundle_path, "evidence_run_id", evidence_bundle_path),
+        ("latest_certification_generated_at", "latest_run_snapshot", certification_path, "certification_generated", certification_path),
+        ("latest_dropin_generated_at", "latest_run_snapshot", dropin_path, "dropin_generated", dropin_path),
+        ("latest_dropin_gate_counts", "latest_run_snapshot", "Strict drop-in status", "dropin_status_counts", dropin_path),
+        ("latest_dropin_verdict", "latest_run_snapshot", "Strict drop-in status", "dropin_verdict", dropin_path),
+        ("latest_evidence_bundle_sections", "latest_run_snapshot", "Unified evidence bundle", "evidence_sections", evidence_bundle_path),
+        ("latest_evidence_bundle_missing", "latest_run_snapshot", "Unified evidence bundle", "evidence_missing", evidence_bundle_path),
+        ("latest_evidence_bundle_invalid", "latest_run_snapshot", "Unified evidence bundle", "evidence_invalid", evidence_bundle_path),
+        ("latest_must_pass_counts", "latest_run_snapshot", "Extension must-pass gate", "must_pass_counts", must_pass_path),
+        ("latest_stretch_counts", "latest_run_snapshot", "Extension must-pass gate", "stretch_counts", must_pass_path),
+        ("refresh_header_extension_date", "certification_evidence_refresh", "Latest certification/evidence refresh", "must_pass_date", must_pass_path),
+        ("refresh_header_dropin_date", "certification_evidence_refresh", "Latest certification/evidence refresh", "dropin_date", dropin_path),
+        ("refresh_evidence_bundle_sections", "certification_evidence_refresh", "Unified evidence bundle", "evidence_sections", evidence_bundle_path),
+        ("refresh_evidence_bundle_missing", "certification_evidence_refresh", "Unified evidence bundle", "evidence_missing", evidence_bundle_path),
+        ("refresh_evidence_bundle_invalid", "certification_evidence_refresh", "Unified evidence bundle", "evidence_invalid", evidence_bundle_path),
+        ("refresh_full_suite_counts", "certification_evidence_refresh", "Full-suite gate", "full_suite_counts", full_suite_path),
+        ("refresh_dropin_gate_counts", "certification_evidence_refresh", "Drop-in certification", "dropin_certification_counts", dropin_path),
+        ("refresh_dropin_verdict", "certification_evidence_refresh", "Drop-in certification", "dropin_verdict", dropin_path),
+        ("refresh_must_pass_counts", "certification_evidence_refresh", "Extension must-pass gate", "must_pass_counts", must_pass_path),
+        ("refresh_stretch_counts", "certification_evidence_refresh", "Extension must-pass gate", "stretch_counts", must_pass_path),
+    )
+    for check_id, section_id, anchor, value_key, source_path in check_rows:
+        add_readme_check(
+            checks,
+            id=check_id,
+            section_id=section_id,
+            anchor=anchor,
+            expected=text_values[value_key],
+            source_path=source_path,
+            description=check_id.replace("_", " "),
+        )
+    return checks
+
+
+def readme_section_bounds(
+    lines: list[str],
+    spec: ReadmeSectionSpec,
+) -> tuple[int, int, int | None]:
+    start_index = None
+    for index, line in enumerate(lines):
+        if spec.start_marker in line:
+            start_index = index
+            break
+    if start_index is None:
+        return 0, 0, None
+
+    end_index = len(lines)
+    for index in range(start_index + 1, len(lines)):
+        if spec.end_marker in lines[index]:
+            end_index = index
+            break
+    return start_index, end_index, start_index + 1
+
+
+def find_readme_anchor(
+    lines: list[str],
+    start_index: int,
+    end_index: int,
+    anchor: str,
+) -> tuple[int | None, str | None]:
+    for index in range(start_index, end_index):
+        if anchor in lines[index]:
+            return index + 1, lines[index].strip()
+    return None, None
+
+
+def check_readme_release_snapshot(repo_root: Path) -> list[dict[str, Any]]:
+    readme_path = repo_root / "README.md"
+    try:
+        lines = readme_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return [{
+            "path": "README.md",
+            "line": None,
+            "category": "docs",
+            "kind": "readme_snapshot_missing",
+            "detail": f"README.md could not be read: {exc}",
+            "remediation": remediation_for("readme_snapshot_missing"),
+        }]
+
+    section_specs = {spec.id: spec for spec in README_SECTIONS}
+    bounds = {
+        section_id: readme_section_bounds(lines, spec)
+        for section_id, spec in section_specs.items()
+    }
+    issues: list[dict[str, Any]] = []
+    for section_id, (_, _, section_line) in bounds.items():
+        if section_line is None:
+            issues.append({
+                "path": "README.md",
+                "line": None,
+                "category": "docs",
+                "kind": "readme_snapshot_missing",
+                "detail": (
+                    f"README.md is missing release snapshot section "
+                    f"{section_specs[section_id].start_marker!r}"
+                ),
+                "remediation": remediation_for("readme_snapshot_missing"),
+            })
+
+    for check in build_readme_line_checks(repo_root):
+        if check.section_id not in bounds:
+            continue
+        start_index, end_index, section_line = bounds[check.section_id]
+        if section_line is None:
+            continue
+        line_number, actual = find_readme_anchor(lines, start_index, end_index, check.anchor)
+        if actual is None:
+            issues.append({
+                "path": "README.md",
+                "line": section_line,
+                "category": "docs",
+                "kind": "readme_snapshot_mismatch",
+                "detail": (
+                    f"{check.section_id}.{check.id} ({check.description}) could not find anchor "
+                    f"{check.anchor!r}; expected {check.expected!r} from {check.source_path}"
+                ),
+                "remediation": remediation_for("readme_snapshot_mismatch"),
+            })
+            continue
+        if check.expected not in actual:
+            issues.append({
+                "path": "README.md",
+                "line": line_number,
+                "category": "docs",
+                "kind": "readme_snapshot_mismatch",
+                "detail": (
+                    f"{check.section_id}.{check.id} ({check.description}) expected {check.expected!r} "
+                    f"from {check.source_path}; actual line is {actual!r}"
+                ),
+                "remediation": remediation_for("readme_snapshot_mismatch"),
+            })
+    return issues
 
 
 def build_report(
@@ -1233,6 +1585,7 @@ def build_report(
         for issue in check.issues
         if issue.blocking
     ]
+    blocking_issues.extend(check_readme_release_snapshot(repo_root))
 
     return {
         "schema": REPORT_SCHEMA,
@@ -1330,7 +1683,10 @@ def print_text_report(report: dict[str, Any]) -> None:
         print("")
         print("release-facing claim blockers:")
         for issue in report["blocking_issues"]:
-            print(f"  {issue['path']}: {issue['kind']}: {issue['detail']}")
+            location = issue["path"]
+            if issue.get("line") is not None:
+                location = f"{location}:{issue['line']}"
+            print(f"  {location}: {issue['kind']}: {issue['detail']}")
             print(f"    remediation: {issue['remediation']}")
 
 
@@ -1375,6 +1731,49 @@ def fixture_payload(
         assign_path(payload, zero_path, 0)
     if spec.id == "dropin_certification_verdict":
         payload["overall_verdict"] = "CERTIFIED"
+        payload["generated_at_utc"] = format_datetime(now)
+        payload["hard_gate_results"] = [
+            {"gate_id": f"blocking_{index}", "status": "pass", "blocking": True}
+            for index in range(14)
+        ] + [
+            {"gate_id": f"advisory_{index}", "status": "pass", "blocking": False}
+            for index in range(6)
+        ]
+    if spec.id in {"full_suite_verdict", "certification_lane"}:
+        payload["summary"] = {
+            "total_gates": 20,
+            "passed": 20,
+            "failed": 0,
+            "warned": 0,
+            "skipped": 0,
+            "blocking_pass": 14,
+            "blocking_total": 14,
+            "all_blocking_pass": True,
+        }
+    if spec.id == "evidence_bundle_index":
+        payload["ci_run_id"] = provenance
+        payload["summary"] = {
+            "total_sections": 29,
+            "present_sections": 29,
+            "missing_sections": 0,
+            "invalid_sections": 0,
+            "verdict": "complete",
+        }
+    if spec.id == "extension_must_pass_gate":
+        payload["run_id"] = provenance
+        payload["observed"] = {
+            "must_pass_total": 123,
+            "must_pass_tested": 123,
+            "must_pass_passed": 123,
+            "must_pass_failed": 0,
+            "must_pass_skipped": 0,
+            "must_pass_pass_rate_pct": 100.0,
+            "stretch_total": 101,
+            "stretch_tested": 101,
+            "stretch_passed": 101,
+            "stretch_failed": 0,
+            "stretch_skipped": 0,
+        }
     if spec.id == "dropin_contract":
         payload.pop("generated_at", None)
         payload["effective_date_utc"] = format_datetime(now)
@@ -1435,6 +1834,40 @@ def make_complete_fixture(
             write_artifact(repo_root, spec.path, None, text=f"# {spec.id}\n", mtime=now)
         else:
             write_artifact(repo_root, spec.path, payload, mtime=now)
+    write_readme_release_snapshot_fixture(repo_root, now, provenance)
+
+
+def write_readme_release_snapshot_fixture(repo_root: Path, now: datetime, provenance: str) -> None:
+    generated_at = format_datetime(now)
+    assert generated_at is not None
+    date = generated_at[:10]
+    text = f"""# Fixture README
+
+### Latest run snapshot (extension gate refresh {date})
+
+From:
+- `tests/ext_conformance/reports/gate/must_pass_gate_verdict.json` (generated `{generated_at}`, run `{provenance}`)
+- `tests/ext_conformance/reports/health_delta/health_delta_report.json` (generated `{generated_at}`)
+- `tests/ext_conformance/reports/journeys/journey_report.json` (generated `{generated_at}`)
+- `tests/evidence_bundle/index.json` (generated `{generated_at}`, run `{provenance}`)
+- `tests/full_suite_gate/certification_verdict.json` (generated `{generated_at}`)
+- `docs/evidence/dropin-certification-verdict.json` (generated `{generated_at}`)
+
+- Strict drop-in status: **20/20 certification gates PASS, 14/14 blocking gates PASS** - `CERTIFIED`
+- Unified evidence bundle: `29/29` sections present, `0` missing, `0` invalid
+- Extension must-pass gate: `123/123` must-pass extensions passed; informational stretch set `101/101` passed
+
+## Installation
+
+Latest certification/evidence refresh (`{date}` extension gate and full-suite reports; `{date}` drop-in certification verdict):
+- Unified evidence bundle: `29/29` sections present, `0` missing, `0` invalid
+- Full-suite gate: `20/20` gates passed, including `14/14` blocking gates
+- Drop-in certification: `20/20` certification gates passed, overall verdict `CERTIFIED`
+- Extension must-pass gate: `123/123` must-pass extensions passed; stretch set `101/101` passed
+
+### Fast Loop
+"""
+    write_artifact(repo_root, "README.md", None, text=text, mtime=now)
 
 
 def write_beads_ledger(repo_root: Path, issues: list[dict[str, Any]]) -> None:
@@ -1577,6 +2010,28 @@ def run_self_test() -> int:
         assert_condition(
             stress_source["metrics"]["bravo_rollbacks_total"]["present"],
             "BRAVO rollback counter should be present",
+        )
+
+        repo_root = fixture_root()
+        make_complete_fixture(repo_root, now)
+        readme_path = repo_root / "README.md"
+        readme_path.write_text(
+            readme_path.read_text(encoding="utf-8").replace("101/101", "100/101", 1),
+            encoding="utf-8",
+        )
+        report = build_report(repo_root, now=now)
+        readme_blockers = [
+            issue
+            for issue in report["blocking_issues"]
+            if issue["kind"] == "readme_snapshot_mismatch"
+        ]
+        assert_condition(
+            readme_blockers,
+            "stale README release snapshot counts should block claim readiness",
+        )
+        assert_condition(
+            readme_blockers[0].get("line") is not None,
+            "README snapshot mismatch should include an exact line number",
         )
 
         repo_root = fixture_root()
