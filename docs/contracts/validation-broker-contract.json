@@ -353,6 +353,28 @@
       "degraded_store_policy": "Lease mutations must refuse to append when the slot store is degraded."
     }
   },
+  "doctor_runpack_projection_contract": {
+    "doctor_schema": "pi.doctor.validation_broker_posture.v1",
+    "runpack_optional_source_id": "validation_broker",
+    "autopilot_optional_source_id": "validation_broker",
+    "required_projection_fields": [
+      "source_status",
+      "current_slots",
+      "degraded_reasons",
+      "duplicate_gate_opportunities",
+      "stale_build_warnings",
+      "recommended_next_actions",
+      "guards"
+    ],
+    "required_guards": [
+      "advisory_only",
+      "no_live_mutation",
+      "not_ci_success",
+      "not_release_claim_evidence",
+      "does_not_replace_rch_doctor_beads_agent_mail"
+    ],
+    "authority_boundary": "Doctor, runpack, and autopilot input-pack projections are advisory handoff summaries. They may surface source status, current slot counts, degraded reasons, duplicate-gate opportunities, stale build warnings, and recommended next actions, but they must not replace RCH, Doctor, Beads, Agent Mail, CI, UBS, cargo_headroom.sh, or release-claim gates."
+  },
   "mutation_policy": {
     "plan_mode_live_mutation_allowed": false,
     "lease_mode_allowed_mutations": [
@@ -496,15 +518,26 @@
         "fault_corpus_contract",
         "decision_contract.required_top_level_keys"
       ]
+    },
+    {
+      "id": "VALIDBROKER-MUST-011",
+      "description": "Doctor, runpack, and dry-run autopilot projections expose broker posture as advisory source status, slot counts, stale warnings, duplicate-gate opportunities, and next actions without replacing operational or release authorities.",
+      "validated_by": [
+        "doctor_runpack_projection_contract",
+        "overlap_boundaries"
+      ]
     }
   ],
   "downstream_dependencies": {
     "unblocked_by_this_contract": [
       "bd-gusp4.2",
       "bd-gusp4.3",
-      "bd-gusp4.6"
+      "bd-gusp4.6",
+      "bd-gusp4.7",
+      "bd-gusp4.8"
     ],
     "fault_corpus_bead": "bd-gusp4.6",
+    "doctor_runpack_projection_bead": "bd-gusp4.7",
     "final_closeout_bead": "bd-gusp4.11"
   }
 }

@@ -37,6 +37,10 @@ BOTTLENECK_ATTRIBUTION_SCHEMA = "pi.swarm.bottleneck_attribution_dashboard.v1"
 FLIGHT_RECORDER_REPORT_SCHEMA = "pi.swarm.flight_recorder.report.v1"
 HOST_PREFLIGHT_SCHEMA = "pi.doctor.swarm_resource_preflight.v1"
 CONTEXT_INTELLIGENCE_SCHEMA = "pi.doctor.context_intelligence_posture.v1"
+VALIDATION_BROKER_DOCTOR_SCHEMA = "pi.doctor.validation_broker_posture.v1"
+VALIDATION_BROKER_CLI_STATUS_SCHEMA = "pi.validation_broker.cli_status.v1"
+VALIDATION_BROKER_CLI_PLAN_SCHEMA = "pi.validation_broker.cli_plan.v1"
+VALIDATION_BROKER_STORE_ENV = "PI_VALIDATION_BROKER_STORE"
 HOSTCALL_SWARM_PROFILE_SCHEMA = "pi.ext.hostcall_admission_swarm_profile.v1"
 SESSION_RECOVERY_SWARM_PROFILE_SCHEMA = "pi.session_store_v2.recovery_swarm_profile.v1"
 RPC_SWARM_E2E_SCHEMA = "pi.rpc.concurrent_swarm_e2e.v1"
@@ -145,6 +149,7 @@ AUTOPILOT_OPTIONAL_SOURCE_IDS = (
     "activity_digest",
     "host_preflight",
     "operator_runpack",
+    "validation_broker",
 )
 AUTOPILOT_SOURCE_COMMAND_IDS: dict[str, tuple[str, ...]] = {
     "doctor_swarm": ("doctor_swarm",),
@@ -165,6 +170,7 @@ AUTOPILOT_SOURCE_COMMAND_IDS: dict[str, tuple[str, ...]] = {
     "activity_digest": (),
     "host_preflight": (),
     "operator_runpack": (),
+    "validation_broker": ("validation_broker_status",),
 }
 AUTOPILOT_FORBIDDEN_ACTIONS = (
     "destructive git reset",
@@ -913,6 +919,17 @@ def load_json_source(
     )
 
 
+def load_validation_broker_source(path: Path) -> SourcePayload:
+    source = load_json_source("validation_broker", path)
+    allowed = {VALIDATION_BROKER_CLI_STATUS_SCHEMA, VALIDATION_BROKER_CLI_PLAN_SCHEMA}
+    if source.schema not in allowed:
+        raise RunpackError(
+            "validation_broker source schema mismatch: expected one of "
+            f"{sorted(allowed)}, got {source.schema}"
+        )
+    return source
+
+
 def load_cargo_admission(path: Path | None) -> SourcePayload:
     if path is None:
         return SourcePayload("cargo_admission", None, "not_provided", None, None)
@@ -1093,6 +1110,9 @@ def source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
                 expected_schema=RCH_ARTIFACT_SYNC_SCHEMA,
             )
         )
+    validation_broker_json = getattr(args, "validation_broker_json", None)
+    if validation_broker_json is not None:
+        sources.append(load_validation_broker_source(validation_broker_json))
     return sources
 
 
@@ -1101,7 +1121,7 @@ def autopilot_source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
     agent_mail_status_json = getattr(args, "agent_mail_status_json", None)
     agent_mail_reservations_json = getattr(args, "agent_mail_reservations_json", None)
     operator_runpack_json = getattr(args, "operator_runpack_json", None)
-    return [
+    sources = [
         load_json_source("doctor_swarm", args.doctor_json),
         load_cargo_admission(args.cargo_admission_json),
         load_json_source("beads", args.beads_json),
@@ -1125,6 +1145,10 @@ def autopilot_source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
             expected_schema=RUNPACK_SCHEMA,
         ),
     ]
+    validation_broker_json = getattr(args, "validation_broker_json", None)
+    if validation_broker_json is not None:
+        sources.append(load_validation_broker_source(validation_broker_json))
+    return sources
 
 
 def first_stdout_line(stdout: str) -> str | None:
@@ -1480,6 +1504,31 @@ def capture_current_sources(args: argparse.Namespace) -> None:
         )
         commands.append(result)
 
+    validation_broker_store = os.environ.get(VALIDATION_BROKER_STORE_ENV, "").strip()
+    if getattr(args, "validation_broker_json", None) is None and pi_path is not None and validation_broker_store:
+        maybe_capture_json_source(
+            args=args,
+            attr="validation_broker_json",
+            source_id="validation_broker",
+            command_id="validation_broker_status",
+            command=[
+                pi_path,
+                "validation-broker",
+                "status",
+                "--store",
+                validation_broker_store,
+                "--format",
+                "json",
+            ],
+            output_path=capture_dir / "validation-broker-status.json",
+            repo_root=repo_root,
+            timeout_seconds=timeout_seconds,
+            commands=commands,
+            generated_source_paths=generated_source_paths,
+        )
+    elif getattr(args, "validation_broker_json", None) is not None:
+        generated_source_paths["validation_broker"] = str(args.validation_broker_json)
+
     default_activity = repo_root / "tests" / "full_suite_gate" / "swarm_activity_digest.json"
     if args.activity_digest_json is None and default_activity.exists():
         args.activity_digest_json = default_activity
@@ -1529,6 +1578,7 @@ def capture_summary_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "beads_ready": getattr(args, "beads_ready_json", None),
         "agent_mail_status": getattr(args, "agent_mail_status_json", None),
         "agent_mail_reservations": getattr(args, "agent_mail_reservations_json", None),
+        "validation_broker": getattr(args, "validation_broker_json", None),
         "git_status": args.git_status_file,
         "operator_runpack": getattr(args, "operator_runpack_json", None),
     }
@@ -1758,6 +1808,164 @@ def summarize_context_intelligence(
     }
 
 
+def summarize_validation_broker_payload(
+    payload: dict[str, Any],
+    max_items: int,
+) -> dict[str, Any]:
+    schema = payload.get("schema")
+    store = payload.get("store") if isinstance(payload.get("store"), dict) else {}
+    guards = payload.get("guards") if isinstance(payload.get("guards"), dict) else {}
+    degraded_reasons = payload.get("degraded_reasons")
+    if not isinstance(degraded_reasons, list):
+        degraded_reasons = []
+    recommended_next_actions = payload.get("recommended_next_actions")
+    if not isinstance(recommended_next_actions, list):
+        next_action = payload.get("next_action")
+        recommended_next_actions = [next_action] if isinstance(next_action, str) else []
+
+    if schema == VALIDATION_BROKER_DOCTOR_SCHEMA:
+        source_status = (
+            payload.get("source_status")
+            if isinstance(payload.get("source_status"), dict)
+            else {}
+        )
+        current_slots = (
+            payload.get("current_slots")
+            if isinstance(payload.get("current_slots"), dict)
+            else {}
+        )
+        duplicate = (
+            payload.get("duplicate_gate_opportunities")
+            if isinstance(payload.get("duplicate_gate_opportunities"), dict)
+            else {}
+        )
+        stale = (
+            payload.get("stale_build_warnings")
+            if isinstance(payload.get("stale_build_warnings"), dict)
+            else {}
+        )
+        return {
+            "schema": schema,
+            "status": source_status.get("validation_slot_store") or store.get("status"),
+            "source_status": source_status.get("validation_slot_store"),
+            "store": {
+                "path": store.get("path"),
+                "configured": store.get("configured"),
+                "exists": store.get("exists"),
+                "status": store.get("status"),
+                "total_records": store.get("total_records"),
+                "total_slots": store.get("total_slots"),
+                "state_counts": store.get("state_counts"),
+            },
+            "current_slots": {
+                "total": current_slots.get("total"),
+                "active": current_slots.get("active"),
+                "reusable": current_slots.get("reusable"),
+                "stale": current_slots.get("stale"),
+                "expired_at_report_time": current_slots.get("expired_at_report_time"),
+                "sample": bounded(current_slots.get("sample") or [], max_items),
+            },
+            "duplicate_gate_opportunities": {
+                "count": duplicate.get("count"),
+                "active_equivalent_groups": bounded(
+                    duplicate.get("active_equivalent_groups") or [],
+                    max_items,
+                ),
+                "reusable_slots": bounded(duplicate.get("reusable_slots") or [], max_items),
+            },
+            "stale_build_warnings": {
+                "count": stale.get("count"),
+                "expired_slots": bounded(stale.get("expired_slots") or [], max_items),
+            },
+            "degraded_reasons": bounded(degraded_reasons, max_items),
+            "recommended_next_actions": bounded(recommended_next_actions, max_items),
+            "guards": guards,
+        }
+
+    decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+    source_statuses = (
+        decision.get("source_statuses")
+        if isinstance(decision.get("source_statuses"), list)
+        else []
+    )
+    rejected_reusable = (
+        decision.get("rejected_reusable_slots")
+        if isinstance(decision.get("rejected_reusable_slots"), list)
+        else []
+    )
+    status = store.get("status")
+    if schema == VALIDATION_BROKER_CLI_PLAN_SCHEMA and decision.get("decision"):
+        status = str(decision.get("decision"))
+    return {
+        "schema": schema,
+        "status": status,
+        "source_status": store.get("status"),
+        "store": {
+            "path": store.get("path"),
+            "status": store.get("status"),
+            "total_records": store.get("total_records"),
+            "total_slots": store.get("total_slots"),
+            "active_slots": store.get("active_slots"),
+            "reusable_slots": store.get("reusable_slots"),
+            "stale_slots": store.get("stale_slots"),
+            "expired_at_report_time_slots": store.get("expired_at_report_time_slots"),
+            "state_counts": store.get("state_counts"),
+        },
+        "current_slots": {
+            "total": store.get("total_slots"),
+            "active": store.get("active_slots"),
+            "reusable": store.get("reusable_slots"),
+            "stale": store.get("stale_slots"),
+            "expired_at_report_time": store.get("expired_at_report_time_slots"),
+            "sample": [],
+        },
+        "duplicate_gate_opportunities": {
+            "count": store.get("reusable_slots"),
+            "active_equivalent_groups": [],
+            "reusable_slots": [],
+            "rejected_reusable_slots": bounded(rejected_reusable, max_items),
+        },
+        "stale_build_warnings": {
+            "count": store.get("stale_slots") or store.get("expired_at_report_time_slots"),
+            "expired_slots": [],
+        },
+        "decision": decision.get("decision"),
+        "next_action": payload.get("next_action"),
+        "source_statuses": bounded(source_statuses, max_items),
+        "degraded_reasons": bounded(store.get("degraded_reasons") or degraded_reasons, max_items),
+        "recommended_next_actions": bounded(recommended_next_actions, max_items),
+        "guards": guards,
+    }
+
+
+def summarize_validation_broker_doctor(
+    finding: dict[str, Any] | None,
+    max_items: int,
+) -> dict[str, Any] | None:
+    if finding is None:
+        return None
+    data = finding.get("data") if isinstance(finding.get("data"), dict) else {}
+    summary = summarize_validation_broker_payload(data, max_items)
+    summary["finding"] = {
+        "severity": finding.get("severity"),
+        "title": finding.get("title"),
+        "detail": finding.get("detail"),
+    }
+    return summary
+
+
+def summarize_validation_broker_source(
+    source: SourcePayload,
+    max_items: int,
+) -> dict[str, Any]:
+    if not isinstance(source.payload, dict):
+        return {"status": source.status}
+    summary = summarize_validation_broker_payload(source.payload, max_items)
+    summary["status"] = source.status if source.status != "ok" else summary.get("status")
+    summary["source_path"] = source.path
+    return summary
+
+
 def summarize_doctor(source: SourcePayload, max_items: int) -> dict[str, Any]:
     payload = source.payload
     if not isinstance(payload, dict):
@@ -1769,6 +1977,7 @@ def summarize_doctor(source: SourcePayload, max_items: int) -> dict[str, Any]:
     agent_mail_findings: list[dict[str, Any]] = []
     build_slot_finding: dict[str, Any] | None = None
     context_intelligence_finding: dict[str, Any] | None = None
+    validation_broker_finding: dict[str, Any] | None = None
     for finding in findings:
         if not isinstance(finding, dict) or finding.get("category") != "swarm":
             continue
@@ -1789,8 +1998,10 @@ def summarize_doctor(source: SourcePayload, max_items: int) -> dict[str, Any]:
             build_slot_finding = item
         if data_schema == CONTEXT_INTELLIGENCE_SCHEMA:
             context_intelligence_finding = item
+        if data_schema == VALIDATION_BROKER_DOCTOR_SCHEMA:
+            validation_broker_finding = item
     severity_counts = Counter(str(item.get("severity") or "unknown") for item in swarm_findings)
-    return {
+    summary = {
         "status": source.status,
         "overall": payload.get("overall"),
         "summary": payload.get("summary"),
@@ -1804,6 +2015,13 @@ def summarize_doctor(source: SourcePayload, max_items: int) -> dict[str, Any]:
             max_items,
         ),
     }
+    validation_broker = summarize_validation_broker_doctor(
+        validation_broker_finding,
+        max_items,
+    )
+    if validation_broker is not None:
+        summary["validation_broker"] = validation_broker
+    return summary
 
 
 def summarize_claim_readiness(source: SourcePayload, max_items: int) -> dict[str, Any]:
@@ -3310,6 +3528,11 @@ def build_autopilot_input_pack(args: argparse.Namespace) -> dict[str, Any]:
         },
         "degraded_reasons": [],
     }
+    if "validation_broker" in by_id:
+        pack["normalized_inputs"]["validation_broker"] = summarize_validation_broker_source(
+            by_id["validation_broker"],
+            args.max_items,
+        )
     status, reasons = derive_autopilot_input_pack_status(pack)
     pack["status"] = status
     pack["degraded_reasons"] = reasons
@@ -4760,6 +4983,11 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
             by_id["swarm_replay_preview"],
             args.max_items,
         )
+    if "validation_broker" in by_id:
+        runpack["validation_broker"] = summarize_validation_broker_source(
+            by_id["validation_broker"],
+            args.max_items,
+        )
     runpack["bottleneck_attribution"] = build_bottleneck_attribution(
         runpack,
         by_id,
@@ -4809,6 +5037,26 @@ def operator_next_actions(runpack: dict[str, Any]) -> list[str]:
     scorecard = runpack.get("swarm_scale_safety_scorecard")
     if isinstance(scorecard, dict) and scorecard.get("overall_status") != "ready":
         actions.append("Review degraded swarm-scale safety scorecard dimensions before release runpack signoff")
+    validation_broker = runpack.get("validation_broker")
+    if not isinstance(validation_broker, dict):
+        validation_broker = runpack.get("doctor_swarm", {}).get("validation_broker")
+    if isinstance(validation_broker, dict):
+        stale = (
+            validation_broker.get("stale_build_warnings")
+            if isinstance(validation_broker.get("stale_build_warnings"), dict)
+            else {}
+        )
+        duplicate = (
+            validation_broker.get("duplicate_gate_opportunities")
+            if isinstance(validation_broker.get("duplicate_gate_opportunities"), dict)
+            else {}
+        )
+        if validation_broker.get("source_status") in {"degraded", "unavailable"}:
+            actions.append("Treat validation-broker posture as degraded advisory evidence before coalescing gates")
+        if stale.get("count"):
+            actions.append("Review validation-broker stale slot warnings before launching heavy validation")
+        if duplicate.get("count"):
+            actions.append("Use validation-broker duplicate-gate opportunities only after provenance matches")
     if not actions:
         actions.append("Runpack sources are ready; proceed with the next unblocked Beads task")
     return actions
@@ -4855,6 +5103,25 @@ def render_markdown(runpack: dict[str, Any]) -> str:
     lines.append(f"- Agent Mail read state: `{runpack['agent_mail_read_state'].get('status')}`")
     lines.append(f"- Validation outputs: `{runpack['validation_outputs'].get('status')}`")
     lines.append(f"- Activity saturated: `{runpack['activity_digest'].get('saturated')}`")
+    validation_broker = runpack.get("validation_broker")
+    if not isinstance(validation_broker, dict):
+        validation_broker = runpack["doctor_swarm"].get("validation_broker")
+    if isinstance(validation_broker, dict):
+        stale = (
+            validation_broker.get("stale_build_warnings")
+            if isinstance(validation_broker.get("stale_build_warnings"), dict)
+            else {}
+        )
+        duplicate = (
+            validation_broker.get("duplicate_gate_opportunities")
+            if isinstance(validation_broker.get("duplicate_gate_opportunities"), dict)
+            else {}
+        )
+        lines.append(
+            "- Validation broker: "
+            f"`{validation_broker.get('source_status')}` "
+            f"(stale `{stale.get('count')}`, duplicate `{duplicate.get('count')}`)"
+        )
     if isinstance(runpack.get("swarm_replay_preview"), dict):
         preview = runpack["swarm_replay_preview"]
         lines.append(
@@ -5139,9 +5406,17 @@ def assert_runpack_contract(runpack: dict[str, Any]) -> None:
     for path in contract.get("required_summary_paths", []):
         get_dotted(runpack, path)
     for path in contract.get("optional_summary_paths", []):
-        top_level_key = path.split(".", maxsplit=1)[0]
-        if top_level_key in runpack:
-            get_dotted(runpack, path)
+        parts = path.split(".")
+        optional_root = (
+            ".".join(parts[:2])
+            if len(parts) > 1 and parts[0] == "doctor_swarm"
+            else parts[0]
+        )
+        try:
+            get_dotted(runpack, optional_root)
+        except KeyError:
+            continue
+        get_dotted(runpack, path)
     assert_autopilot_handoff_summary(runpack)
     scorecard = runpack.get("swarm_scale_safety_scorecard")
     assert isinstance(scorecard, dict)
@@ -8009,6 +8284,41 @@ def run_self_test() -> int:
         "cargo clippy failed\nerror: token=super-secret-value should be redacted\n",
         encoding="utf-8",
     )
+    validation_broker_status_path = write_json(
+        workspace / "validation-broker-status.json",
+        {
+            "schema": VALIDATION_BROKER_CLI_STATUS_SCHEMA,
+            "generated_at_utc": generated_at,
+            "command": {
+                "name": "validation-broker",
+                "action": "status",
+                "cwd": str(workspace),
+                "store": "validation-slots.jsonl",
+                "output_writes": 0,
+            },
+            "store": {
+                "path": str(workspace / "validation-slots.jsonl"),
+                "schema": "pi.validation_broker.slot_store.v1",
+                "status": "available",
+                "total_records": 3,
+                "total_slots": 2,
+                "active_slots": 1,
+                "reusable_slots": 1,
+                "stale_slots": 0,
+                "expired_at_report_time_slots": 0,
+                "state_counts": {"active": 1, "reusable": 1},
+                "degraded_reasons": [],
+            },
+            "output_paths": {"json": None, "text": None},
+            "guards": {
+                "read_only_plan": True,
+                "live_mutations": 0,
+                "refuses_output_overwrite": True,
+                "destructive_actions": 0,
+                "provider_calls": 0,
+            },
+        },
+    )
 
     args = argparse.Namespace(
         doctor_json=doctor_path,
@@ -8030,6 +8340,7 @@ def run_self_test() -> int:
         rpc_swarm_e2e_json=rpc_swarm_path,
         rch_artifact_sync_json=rch_artifact_sync_path,
         validation_outputs=[validation_path],
+        validation_broker_json=None,
         capture_manifest={
             "schema": RUNPACK_CAPTURE_SCHEMA,
             "mode": "current",
@@ -8168,6 +8479,107 @@ def run_self_test() -> int:
         assert "Git Context" in markdown
         assert_runpack_contract(runpack)
         assert_runpack_golden(runpack, workspace)
+        validation_broker_args = argparse.Namespace(
+            **{
+                **vars(args),
+                "validation_broker_json": validation_broker_status_path,
+                "out_json": None,
+                "out_md": None,
+            }
+        )
+        validation_broker_runpack = build_runpack(validation_broker_args)
+        assert validation_broker_runpack["validation_broker"]["schema"] == (
+            VALIDATION_BROKER_CLI_STATUS_SCHEMA
+        )
+        assert validation_broker_runpack["validation_broker"]["current_slots"]["active"] == 1
+        assert validation_broker_runpack["validation_broker"][
+            "duplicate_gate_opportunities"
+        ]["count"] == 1
+        assert any(
+            item.get("id") == "validation_broker" and item.get("status") == "ok"
+            for item in validation_broker_runpack["source_statuses"]
+        )
+        assert_runpack_contract(validation_broker_runpack)
+        assert "Validation broker" in render_markdown(validation_broker_runpack)
+        doctor_validation_payload = json.loads(
+            json_dumps(json.loads(doctor_path.read_text(encoding="utf-8")))
+        )
+        doctor_validation_payload["findings"].append(
+            {
+                "category": "swarm",
+                "severity": "warn",
+                "title": "Validation broker has stale slot warnings",
+                "detail": "store=validation-slots.jsonl slots=1",
+                "remediation": "Recover stale validation slots through owner-visible workflow",
+                "data": {
+                    "schema": VALIDATION_BROKER_DOCTOR_SCHEMA,
+                    "mode": "advisory_projection",
+                    "mutation_performed": False,
+                    "source_status": {
+                        "validation_slot_store": "available",
+                        "source_of_truth": "validation_broker_slot_store",
+                        "doctor_authority": "environment_diagnostics_only",
+                    },
+                    "store": {
+                        "path": str(workspace / "validation-slots.jsonl"),
+                        "configured": True,
+                        "exists": True,
+                        "schema": "pi.validation_broker.slot_store.v1",
+                        "status": "available",
+                        "total_records": 1,
+                        "total_slots": 1,
+                        "state_counts": {"stale": 1},
+                    },
+                    "current_slots": {
+                        "total": 1,
+                        "active": 0,
+                        "reusable": 0,
+                        "stale": 1,
+                        "expired_at_report_time": 1,
+                        "sample": [{"slot_id": "slot-stale", "state": "stale"}],
+                    },
+                    "duplicate_gate_opportunities": {
+                        "count": 0,
+                        "active_equivalent_groups": [],
+                        "reusable_slots": [],
+                    },
+                    "stale_build_warnings": {
+                        "count": 1,
+                        "expired_slots": [{"slot_id": "slot-stale", "state": "stale"}],
+                    },
+                    "degraded_reasons": [],
+                    "recommended_next_actions": [
+                        "Recover stale validation slots through owner-visible broker workflow"
+                    ],
+                    "guards": {
+                        "advisory_only": True,
+                        "no_live_mutation": True,
+                        "not_ci_success": True,
+                        "not_release_claim_evidence": True,
+                        "does_not_replace_rch_doctor_beads_agent_mail": True,
+                    },
+                },
+                "fixability": "not_fixable",
+            }
+        )
+        doctor_validation_path = write_json(
+            workspace / "doctor-validation-broker.json",
+            doctor_validation_payload,
+        )
+        doctor_validation_runpack = build_runpack(
+            argparse.Namespace(
+                **{
+                    **vars(args),
+                    "doctor_json": doctor_validation_path,
+                    "out_json": None,
+                    "out_md": None,
+                }
+            )
+        )
+        assert doctor_validation_runpack["doctor_swarm"]["validation_broker"][
+            "stale_build_warnings"
+        ]["count"] == 1
+        assert_runpack_contract(doctor_validation_runpack)
         replay_preview_args = argparse.Namespace(
             **{
                 **vars(args),
@@ -8218,6 +8630,24 @@ def run_self_test() -> int:
         assert input_pack["redaction_summary"]["redacted_count"] >= 1
         assert autopilot_args.out_autopilot_input_pack_json.exists()
         assert_autopilot_input_pack_contract(input_pack)
+        validation_broker_autopilot_args = argparse.Namespace(
+            **{
+                **vars(autopilot_args),
+                "validation_broker_json": validation_broker_status_path,
+                "out_autopilot_input_pack_json": None,
+            }
+        )
+        validation_broker_input_pack = build_autopilot_input_pack(
+            validation_broker_autopilot_args
+        )
+        assert validation_broker_input_pack["normalized_inputs"]["validation_broker"][
+            "schema"
+        ] == VALIDATION_BROKER_CLI_STATUS_SCHEMA
+        assert any(
+            item.get("id") == "validation_broker" and item.get("status") == "ok"
+            for item in validation_broker_input_pack["source_statuses"]
+        )
+        assert_autopilot_input_pack_contract(validation_broker_input_pack)
         plan = build_autopilot_plan(input_pack, max_items=args.max_items)
         assert plan["schema"] == AUTOPILOT_PLAN_SCHEMA
         assert plan["status"] == "degraded"
@@ -9448,6 +9878,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=[],
         help="captured validation log/output to summarize in the handoff bundle",
+    )
+    parser.add_argument(
+        "--validation-broker-json",
+        type=Path,
+        help="optional validation-broker status or plan JSON to summarize as advisory posture",
     )
     parser.add_argument(
         "--operator-runpack-json",

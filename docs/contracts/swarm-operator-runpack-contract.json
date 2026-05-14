@@ -41,7 +41,8 @@
     "hostcall_swarm_profile",
     "session_recovery_swarm_profile",
     "rpc_swarm_e2e",
-    "rch_artifact_sync"
+    "rch_artifact_sync",
+    "validation_broker"
   ],
   "required_summary_paths": [
     "doctor_swarm.agent_mail_build_slots",
@@ -72,6 +73,16 @@
     "doctor_swarm.context_intelligence.bundle",
     "doctor_swarm.context_intelligence.cache",
     "doctor_swarm.context_intelligence.redaction_summary",
+    "doctor_swarm.validation_broker",
+    "doctor_swarm.validation_broker.current_slots",
+    "doctor_swarm.validation_broker.duplicate_gate_opportunities",
+    "doctor_swarm.validation_broker.stale_build_warnings",
+    "validation_broker.schema",
+    "validation_broker.source_status",
+    "validation_broker.current_slots",
+    "validation_broker.duplicate_gate_opportunities",
+    "validation_broker.stale_build_warnings",
+    "validation_broker.guards",
     "tail_latency.schema",
     "tail_latency.telemetry_enabled",
     "tail_latency.redaction_summary",
@@ -217,6 +228,14 @@
     {
       "id": "RUNPACK-MUST-011",
       "description": "When an optional swarm replay preview artifact is supplied, the runpack projects the comparison summary and recommended policy without replacing replay traces, policy reports, or source evidence.",
+      "validated_by": [
+        "optional_source_ids",
+        "optional_summary_paths"
+      ]
+    },
+    {
+      "id": "RUNPACK-MUST-012",
+      "description": "When validation-broker posture is supplied directly or through Doctor, the runpack projects source status, slot counts, stale warnings, duplicate-gate opportunities, and advisory guards without treating them as CI, RCH, Beads, Agent Mail, or release-claim authority.",
       "validated_by": [
         "optional_source_ids",
         "optional_summary_paths"

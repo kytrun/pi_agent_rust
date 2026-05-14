@@ -556,6 +556,71 @@ fn validation_broker_contract_declares_cli_surface() -> TestResult {
 }
 
 #[test]
+fn validation_broker_contract_declares_doctor_runpack_projection() -> TestResult {
+    let contract = load_contract()?;
+
+    require(
+        pointer_str(
+            &contract,
+            "/doctor_runpack_projection_contract/doctor_schema",
+        )? == "pi.doctor.validation_broker_posture.v1",
+        "Doctor projection schema mismatch",
+    )?;
+    require(
+        pointer_str(
+            &contract,
+            "/doctor_runpack_projection_contract/runpack_optional_source_id",
+        )? == "validation_broker",
+        "runpack projection source id mismatch",
+    )?;
+    require(
+        pointer_str(
+            &contract,
+            "/doctor_runpack_projection_contract/autopilot_optional_source_id",
+        )? == "validation_broker",
+        "autopilot projection source id mismatch",
+    )?;
+    require_set(
+        &contract,
+        "/doctor_runpack_projection_contract/required_projection_fields",
+        &[
+            "source_status",
+            "current_slots",
+            "degraded_reasons",
+            "duplicate_gate_opportunities",
+            "stale_build_warnings",
+            "recommended_next_actions",
+            "guards",
+        ],
+        "projection field",
+    )?;
+    require_set(
+        &contract,
+        "/doctor_runpack_projection_contract/required_guards",
+        &[
+            "advisory_only",
+            "no_live_mutation",
+            "not_ci_success",
+            "not_release_claim_evidence",
+            "does_not_replace_rch_doctor_beads_agent_mail",
+        ],
+        "projection guard",
+    )?;
+    let boundary = pointer_str(
+        &contract,
+        "/doctor_runpack_projection_contract/authority_boundary",
+    )?;
+    require(
+        boundary.contains("must not replace RCH"),
+        "projection boundary must keep RCH authoritative",
+    )?;
+    require(
+        boundary.contains("release-claim gates"),
+        "projection boundary must block release-claim promotion",
+    )
+}
+
+#[test]
 fn validation_broker_contract_preserves_redaction_and_no_claims() -> TestResult {
     let contract = load_contract()?;
 
@@ -600,6 +665,13 @@ fn validation_broker_contract_links_downstream_beads_and_requirements() -> TestR
     require(
         pointer_str(&contract, "/downstream_dependencies/fault_corpus_bead")? == "bd-gusp4.6",
         "fault corpus bead mismatch",
+    )?;
+    require(
+        pointer_str(
+            &contract,
+            "/downstream_dependencies/doctor_runpack_projection_bead",
+        )? == "bd-gusp4.7",
+        "Doctor/runpack projection bead mismatch",
     )?;
     require(
         pointer_str(&contract, "/downstream_dependencies/final_closeout_bead")? == "bd-gusp4.11",

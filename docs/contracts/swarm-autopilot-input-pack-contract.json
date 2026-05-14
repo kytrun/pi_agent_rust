@@ -30,7 +30,8 @@
     "beads_ready",
     "activity_digest",
     "host_preflight",
-    "operator_runpack"
+    "operator_runpack",
+    "validation_broker"
   ],
   "required_summary_paths": [
     "normalized_inputs.doctor_swarm.status",
@@ -142,6 +143,14 @@
       "validated_by": [
         "normalized_inputs.budget_drift",
         "optional_source_ids"
+      ]
+    },
+    {
+      "id": "AUTOPILOT-INPUT-MUST-009",
+      "description": "Optional validation-broker posture may enrich dry-run planner inputs with advisory slot, stale-warning, and duplicate-gate hints, but it cannot replace required source statuses or authorize mutations.",
+      "validated_by": [
+        "optional_source_ids",
+        "normalized_inputs.validation_broker"
       ]
     }
   ]

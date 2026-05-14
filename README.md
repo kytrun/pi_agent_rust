@@ -1915,6 +1915,12 @@ RPC swarm E2E evidence, and RCH artifact-sync preflight. The dashboard is
 operator evidence only; release-facing speed, drop-in, or performance claims
 still require the claim-integrity gates below to pass.
 
+If validation-broker status or plan JSON is supplied with
+`--validation-broker-json`, the runpack projects source status, slot counts,
+stale slot warnings, duplicate-gate opportunities, and recommended next actions
+as advisory handoff data. This projection does not replace RCH, Doctor, Beads,
+Agent Mail, CI, UBS, `cargo_headroom.sh`, or release-claim gates.
+
 The same runpack command can emit a dry-run swarm autopilot input pack and plan
 beside the handoff bundle. When those companion artifacts are requested, the
 runpack JSON/Markdown includes an `autopilot_handoff` summary
@@ -2351,6 +2357,12 @@ Before launching swarms or heavyweight all-target gates, run
 `recommended_budgets` object gives conservative agent, tool, extension hostcall,
 RCH fanout, queue-depth, and RSS budgets derived from the effective cgroup CPU,
 cpuset, NUMA, and memory limits.
+
+When `PI_VALIDATION_BROKER_STORE` points at a validation-broker slot JSONL
+store, Doctor also emits `pi.doctor.validation_broker_posture.v1` with advisory
+slot posture for runpacks and operator handoff. Missing broker configuration is
+reported as optional and non-blocking; stale or degraded broker stores remain
+visible instead of being promoted to green validation evidence.
 
 ### Cargo Feature Defaults
 

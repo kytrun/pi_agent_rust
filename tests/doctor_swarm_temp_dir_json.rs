@@ -1,4 +1,8 @@
+use pi::validation_broker::{
+    ValidationSlotArtifact, ValidationSlotLease, ValidationSlotRequest, ValidationSlotStore,
+};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::fmt;
@@ -13,6 +17,7 @@ const SWARM_TEMP_DIR_SCHEMA: &str = "pi.doctor.swarm_temp_dir.v1";
 const SWARM_RESOURCE_PREFLIGHT_SCHEMA: &str = "pi.doctor.swarm_resource_preflight.v1";
 const SWARM_MAIL_DEGRADED_SCHEMA: &str = "pi.doctor.agent_mail_degraded_mode.v1";
 const SWARM_CONTEXT_INTELLIGENCE_SCHEMA: &str = "pi.doctor.context_intelligence_posture.v1";
+const SWARM_VALIDATION_BROKER_SCHEMA: &str = "pi.doctor.validation_broker_posture.v1";
 const SWARM_TEMP_EXPECTED_ROOT: &str = "/data/tmp/pi_agent_rust_cargo";
 const SWARM_TEMP_WARN_AVAILABLE_KB: u64 = 10 * 1024 * 1024;
 
@@ -89,6 +94,7 @@ fn run_doctor_json(env_overrides: &[(&str, Option<&str>)]) -> TestResult<Value> 
         .env_remove("GROQ_API_KEY")
         .env_remove("KIMI_API_KEY")
         .env_remove("AZURE_OPENAI_API_KEY")
+        .env_remove("PI_VALIDATION_BROKER_STORE")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -133,6 +139,7 @@ fn run_doctor_text(env_overrides: &[(&str, Option<&str>)]) -> TestResult<String>
         .env_remove("GROQ_API_KEY")
         .env_remove("KIMI_API_KEY")
         .env_remove("AZURE_OPENAI_API_KEY")
+        .env_remove("PI_VALIDATION_BROKER_STORE")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -247,6 +254,64 @@ fn create_expected_root_test_dir(name: &str) -> TestResult<(PathBuf, bool)> {
         Err(err) if err.kind() == ErrorKind::PermissionDenied => Ok((dir, false)),
         Err(err) => Err(err.into()),
     }
+}
+
+fn validation_broker_request(slot_id: &str) -> ValidationSlotRequest {
+    let mut environment = BTreeMap::new();
+    environment.insert(
+        "CARGO_TARGET_DIR".to_string(),
+        "/data/tmp/pi_agent_rust_cargo/codex/target".to_string(),
+    );
+    environment.insert(
+        "TMPDIR".to_string(),
+        "/data/tmp/pi_agent_rust_cargo/codex/tmp".to_string(),
+    );
+
+    ValidationSlotRequest {
+        slot_id: slot_id.to_string(),
+        owner_agent: "Codex".to_string(),
+        bead_id: "bd-gusp4.7".to_string(),
+        command: vec![
+            "rch".to_string(),
+            "exec".to_string(),
+            "--".to_string(),
+            "cargo".to_string(),
+            "check".to_string(),
+            "--all-targets".to_string(),
+        ],
+        command_class: "cargo_check".to_string(),
+        cwd: "/data/projects/pi_agent_rust".to_string(),
+        git_head: "cf653c29b5836afabf979bb44325d4712de7088d".to_string(),
+        feature_flags: vec!["default".to_string()],
+        target_dir: "/data/tmp/pi_agent_rust_cargo/codex/target".to_string(),
+        tmpdir: "/data/tmp/pi_agent_rust_cargo/codex/tmp".to_string(),
+        runner: "rch_required".to_string(),
+        rust_toolchain: Some("nightly".to_string()),
+        rch_job_id: Some("rch-job-doctor".to_string()),
+        environment,
+        expected_artifacts: vec![ValidationSlotArtifact {
+            path: "target/debug/deps/pi.d".to_string(),
+            sha256: None,
+            schema: Some("cargo_metadata".to_string()),
+        }],
+        artifact_schema: Some("cargo_check_result.v1".to_string()),
+        artifact_hash: Some("artifact-hash-doctor".to_string()),
+    }
+}
+
+fn create_stale_validation_broker_store() -> TestResult<PathBuf> {
+    let root = create_swarm_temp_test_dir(Path::new("/tmp"), "validation-broker-store")?;
+    let store_path = root.join("slots.jsonl");
+    let store = ValidationSlotStore::new(&store_path);
+    let mut lease = ValidationSlotLease::acquire(
+        validation_broker_request("slot-stale"),
+        "2024-05-14T07:00:00Z",
+        "2024-05-14T07:30:00Z",
+    )?;
+    store.append_lease("acquire", "2024-05-14T07:00:00Z", &lease)?;
+    lease.mark_stale("2024-05-14T08:00:00Z", "owner missed validation handoff")?;
+    store.append_lease("mark_stale", "2024-05-14T08:00:00Z", &lease)?;
+    Ok(store_path)
 }
 
 #[cfg(unix)]
@@ -444,6 +509,155 @@ fn doctor_swarm_context_intelligence_text_reports_posture() -> TestResult {
     require(
         stdout.contains("bundle"),
         format!("text output should include bundle detail:\n{stdout}"),
+    )
+}
+
+#[test]
+fn doctor_swarm_validation_broker_json_reports_advisory_posture() -> TestResult {
+    let report = run_doctor_json(&[("CARGO_TARGET_DIR", None), ("TMPDIR", None)])?;
+    let finding = finding_by_schema(&report, SWARM_VALIDATION_BROKER_SCHEMA)?;
+    require_eq(field_str(finding, "severity")?, "info", "severity")?;
+    require(
+        field_str(finding, "title")?.contains("Validation broker posture"),
+        format!("title should name validation broker posture: {finding}"),
+    )?;
+
+    let data = field(finding, "data")?;
+    require_eq(
+        field_str(data, "mode")?,
+        "advisory_projection",
+        "validation broker mode",
+    )?;
+    require_eq(
+        &field_bool(data, "mutation_performed")?,
+        &false,
+        "validation broker mutation flag",
+    )?;
+    require_eq(
+        field_str(field(data, "source_status")?, "validation_slot_store")?,
+        "not_configured",
+        "slot-store source status",
+    )?;
+    require_eq(
+        &field_bool(field(data, "guards")?, "advisory_only")?,
+        &true,
+        "advisory guard",
+    )?;
+    require_eq(
+        &field_bool(field(data, "guards")?, "not_ci_success")?,
+        &true,
+        "not CI success guard",
+    )?;
+    require(
+        field(data, "current_slots")?.is_object(),
+        format!("current_slots should be present: {data}"),
+    )?;
+    require(
+        field(data, "recommended_next_actions")?.is_array(),
+        format!("recommended_next_actions should be present: {data}"),
+    )
+}
+
+#[test]
+fn doctor_swarm_validation_broker_json_reports_missing_configured_store() -> TestResult {
+    let missing_path =
+        create_swarm_temp_test_dir(Path::new("/tmp"), "missing-validation-broker-store")?
+            .join("missing-slots.jsonl");
+    let missing_store = missing_path.display().to_string();
+    let report = run_doctor_json(&[
+        ("CARGO_TARGET_DIR", None),
+        ("TMPDIR", None),
+        ("PI_VALIDATION_BROKER_STORE", Some(missing_store.as_str())),
+    ])?;
+    let finding = finding_by_schema(&report, SWARM_VALIDATION_BROKER_SCHEMA)?;
+    require_eq(field_str(finding, "severity")?, "warn", "severity")?;
+    require(
+        field_str(finding, "title")?.contains("unavailable"),
+        format!("title should report unavailable store: {finding}"),
+    )?;
+
+    let data = field(finding, "data")?;
+    require_eq(
+        field_str(field(data, "source_status")?, "validation_slot_store")?,
+        "unavailable",
+        "slot-store source status",
+    )?;
+    let store = field(data, "store")?;
+    require_eq(&field_bool(store, "configured")?, &true, "store configured")?;
+    require_eq(&field_bool(store, "exists")?, &false, "store exists")?;
+    require_eq(field_str(store, "status")?, "unavailable", "store status")?;
+    let degraded_reasons = field(data, "degraded_reasons")?
+        .as_array()
+        .ok_or_else(|| TestError(format!("degraded_reasons is not an array: {data}")))?;
+    require(
+        degraded_reasons
+            .iter()
+            .any(|reason| reason.as_str() == Some("validation_broker_store_missing")),
+        format!("missing store should be listed as a degraded reason: {data}"),
+    )?;
+    let actions = field(data, "recommended_next_actions")?
+        .as_array()
+        .ok_or_else(|| TestError(format!("recommended_next_actions is not an array: {data}")))?;
+    require(
+        actions.iter().any(|action| {
+            action
+                .as_str()
+                .is_some_and(|raw| raw.contains("Create the validation-broker store"))
+        }),
+        format!("missing store should recommend creating the broker store: {data}"),
+    )
+}
+
+#[test]
+fn doctor_swarm_validation_broker_json_reports_stale_slot_posture() -> TestResult {
+    let store_path = create_stale_validation_broker_store()?;
+    let store_path = store_path.display().to_string();
+    let report = run_doctor_json(&[
+        ("CARGO_TARGET_DIR", None),
+        ("TMPDIR", None),
+        ("PI_VALIDATION_BROKER_STORE", Some(store_path.as_str())),
+    ])?;
+    let finding = finding_by_schema(&report, SWARM_VALIDATION_BROKER_SCHEMA)?;
+    require_eq(field_str(finding, "severity")?, "warn", "severity")?;
+    require(
+        field_str(finding, "title")?.contains("stale slot warnings"),
+        format!("title should report stale slots: {finding}"),
+    )?;
+
+    let data = field(finding, "data")?;
+    require_eq(
+        field_str(field(data, "source_status")?, "validation_slot_store")?,
+        "available",
+        "slot-store source status",
+    )?;
+    let store = field(data, "store")?;
+    require_eq(&field_bool(store, "configured")?, &true, "store configured")?;
+    require_eq(&field_bool(store, "exists")?, &true, "store exists")?;
+    require_eq(field_str(store, "status")?, "available", "store status")?;
+    require_eq(&field_u64(store, "total_records")?, &2, "total records")?;
+    require_eq(&field_u64(store, "total_slots")?, &1, "total slots")?;
+    let current_slots = field(data, "current_slots")?;
+    require_eq(&field_u64(current_slots, "stale")?, &1, "stale slots")?;
+    require_eq(
+        &field_u64(current_slots, "expired_at_report_time")?,
+        &1,
+        "expired slots",
+    )?;
+    require_eq(
+        &field_u64(field(data, "stale_build_warnings")?, "count")?,
+        &1,
+        "stale warning count should not double-count stale expired slots",
+    )?;
+    let actions = field(data, "recommended_next_actions")?
+        .as_array()
+        .ok_or_else(|| TestError(format!("recommended_next_actions is not an array: {data}")))?;
+    require(
+        actions.iter().any(|action| {
+            action
+                .as_str()
+                .is_some_and(|raw| raw.contains("Recover stale validation slots"))
+        }),
+        format!("stale slots should recommend owner-visible recovery: {data}"),
     )
 }
 

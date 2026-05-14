@@ -21,6 +21,7 @@ use crate::semantic_workspace_graph::{
 };
 use crate::session::SessionHeader;
 use crate::session_index::walk_sessions;
+use crate::validation_broker::{ValidationSlotLease, ValidationSlotState, ValidationSlotStore};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -47,6 +48,7 @@ const SWARM_DOCTOR_STALLED_REAPER_SCHEMA: &str = "pi.doctor.stalled_bead_reaper.
 const SWARM_DOCTOR_NEXT_ACTION_SCHEMA: &str = "pi.doctor.communication_purgatory_next_action.v1";
 const SWARM_DOCTOR_OPERATIONS_DASHBOARD_SCHEMA: &str = "pi.doctor.swarm_operations_dashboard.v1";
 const SWARM_DOCTOR_CONTEXT_INTELLIGENCE_SCHEMA: &str = "pi.doctor.context_intelligence_posture.v1";
+const SWARM_DOCTOR_VALIDATION_BROKER_SCHEMA: &str = "pi.doctor.validation_broker_posture.v1";
 const SWARM_DOCTOR_RCH_AFFINITY_SCHEMA: &str = "pi.doctor.rch_warm_target_affinity.v1";
 const SWARM_RCH_AFFINITY_PLAN_ARTIFACT_SCHEMA: &str = "pi.swarm.rch_affinity_plan.v1";
 const SWARM_DOCTOR_RESERVATION_HEATMAP_SCHEMA: &str =
@@ -56,6 +58,7 @@ const SWARM_DOCTOR_RESERVATION_RECOMMENDATIONS_SCHEMA: &str =
     "pi.doctor.swarm_reservation_recommendations.v1";
 const SWARM_CARGO_SCRATCH_ROOT: &str = "/data/tmp/pi_agent_rust_cargo";
 const SWARM_RCH_AFFINITY_JOBS_ENV: &str = "PI_DOCTOR_RCH_AFFINITY_JOBS_JSON";
+const SWARM_VALIDATION_BROKER_STORE_ENV: &str = "PI_VALIDATION_BROKER_STORE";
 const SWARM_BUILD_SLOT_SOON_EXPIRING_MINUTES: i64 = 30;
 const SWARM_ACTIVE_AGENT_WINDOW_HOURS: i64 = 24;
 const SWARM_DASHBOARD_AGENT_LIMIT: usize = 12;
@@ -1129,6 +1132,7 @@ fn check_swarm(cwd: &Path, findings: &mut Vec<Finding>) {
     check_swarm_rch_affinity(cwd, findings);
     check_swarm_temp_dirs(findings);
     check_swarm_context_intelligence(cwd, findings);
+    check_swarm_validation_broker(cwd, findings);
     check_swarm_operations_dashboard(cwd, findings);
 }
 
@@ -4807,6 +4811,289 @@ fn increment_count(counts: &mut BTreeMap<String, usize>, key: String) {
 
 fn count_map_value(counts: &BTreeMap<String, usize>, key: &str) -> usize {
     counts.get(key).copied().unwrap_or(0)
+}
+
+#[allow(clippy::too_many_lines)]
+fn check_swarm_validation_broker(cwd: &Path, findings: &mut Vec<Finding>) {
+    let cat = CheckCategory::Swarm;
+    let Some(store_raw) = first_non_empty_env(&[SWARM_VALIDATION_BROKER_STORE_ENV]) else {
+        findings.push(
+            Finding::info(cat, "Validation broker posture not configured")
+                .with_detail(
+                    "No validation broker slot store is configured for Doctor projection",
+                )
+                .with_remediation(format!(
+                    "Set {SWARM_VALIDATION_BROKER_STORE_ENV} when using validation-broker advisory handoff"
+                ))
+                .with_data(validation_broker_not_configured_json()),
+        );
+        return;
+    };
+
+    let store_path = resolve_validation_broker_store_path(cwd, &store_raw);
+    let store_exists = store_path.exists();
+    let snapshot = ValidationSlotStore::new(&store_path).load_snapshot();
+    let now_utc = Utc::now().to_rfc3339();
+    let mut state_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut active_slots = 0usize;
+    let mut reusable_slots = Vec::new();
+    let mut stale_slots = 0usize;
+    let mut stale_warning_slot_ids = BTreeSet::new();
+    let mut expired_slots = Vec::new();
+    let mut current_slots = Vec::new();
+    let mut active_by_fingerprint: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for lease in snapshot.latest_by_slot_id.values() {
+        let state = validation_slot_state_label(&lease.state);
+        *state_counts.entry(state.to_string()).or_default() += 1;
+        if matches!(
+            lease.state,
+            ValidationSlotState::Requested | ValidationSlotState::Active
+        ) {
+            active_slots += 1;
+            active_by_fingerprint
+                .entry(lease.command_fingerprint.clone())
+                .or_default()
+                .push(lease.slot_id.clone());
+        }
+        if lease.state == ValidationSlotState::Reusable {
+            reusable_slots.push(validation_broker_slot_json(lease));
+        }
+        if lease.state == ValidationSlotState::Stale {
+            stale_slots += 1;
+            stale_warning_slot_ids.insert(lease.slot_id.clone());
+        }
+        if lease.is_stale_at(&now_utc).unwrap_or(false) {
+            stale_warning_slot_ids.insert(lease.slot_id.clone());
+            expired_slots.push(validation_broker_slot_json(lease));
+        }
+        if current_slots.len() < SWARM_DETAIL_LIMIT {
+            current_slots.push(validation_broker_slot_json(lease));
+        }
+    }
+
+    let duplicate_groups = active_by_fingerprint
+        .into_iter()
+        .filter(|(_, slot_ids)| slot_ids.len() > 1)
+        .map(|(command_fingerprint, slot_ids)| {
+            serde_json::json!({
+                "command_fingerprint": command_fingerprint,
+                "slot_ids": slot_ids,
+            })
+        })
+        .collect::<Vec<_>>();
+    let total_records = snapshot.leases.len();
+    let total_slots = snapshot.latest_by_slot_id.len();
+    let snapshot_degraded = snapshot.is_degraded();
+    let store_schema = snapshot.schema;
+    let mut degraded_reasons = snapshot.degraded_reasons;
+    if !store_exists {
+        degraded_reasons.push("validation_broker_store_missing".to_string());
+    }
+    let source_status = if !store_exists {
+        "unavailable"
+    } else if snapshot_degraded {
+        "degraded"
+    } else {
+        "available"
+    };
+    let source_degraded = source_status != "available";
+    let reusable_slot_count = reusable_slots.len();
+    let duplicate_opportunity_count = duplicate_groups.len() + reusable_slot_count;
+    let stale_warning_count = stale_warning_slot_ids.len();
+    let recommended_actions = validation_broker_recommended_actions(
+        source_degraded,
+        store_exists,
+        stale_warning_count,
+        duplicate_opportunity_count,
+    );
+    let data = serde_json::json!({
+        "schema": SWARM_DOCTOR_VALIDATION_BROKER_SCHEMA,
+        "mode": "advisory_projection",
+        "mutation_performed": false,
+        "source_status": {
+            "validation_slot_store": source_status,
+            "source_of_truth": "validation_broker_slot_store",
+            "doctor_authority": "environment_diagnostics_only"
+        },
+        "store": {
+            "path": store_path.display().to_string(),
+            "configured": true,
+            "exists": store_exists,
+            "schema": store_schema,
+            "status": source_status,
+            "total_records": total_records,
+            "total_slots": total_slots,
+            "state_counts": state_counts,
+        },
+        "current_slots": {
+            "total": total_slots,
+            "active": active_slots,
+            "reusable": reusable_slot_count,
+            "stale": stale_slots,
+            "expired_at_report_time": expired_slots.len(),
+            "sample": current_slots,
+        },
+        "duplicate_gate_opportunities": {
+            "count": duplicate_opportunity_count,
+            "active_equivalent_groups": duplicate_groups.into_iter().take(SWARM_DETAIL_LIMIT).collect::<Vec<_>>(),
+            "reusable_slots": reusable_slots.into_iter().take(SWARM_DETAIL_LIMIT).collect::<Vec<_>>(),
+        },
+        "stale_build_warnings": {
+            "count": stale_warning_count,
+            "expired_slots": expired_slots.into_iter().take(SWARM_DETAIL_LIMIT).collect::<Vec<_>>(),
+        },
+        "degraded_reasons": degraded_reasons,
+        "recommended_next_actions": recommended_actions,
+        "guards": {
+            "advisory_only": true,
+            "no_live_mutation": true,
+            "not_ci_success": true,
+            "not_release_claim_evidence": true,
+            "does_not_replace_rch_doctor_beads_agent_mail": true
+        }
+    });
+    let title = if !store_exists {
+        "Validation broker store unavailable"
+    } else if snapshot_degraded {
+        "Validation broker posture degraded"
+    } else if stale_warning_count > 0 {
+        "Validation broker has stale slot warnings"
+    } else {
+        "Validation broker posture clear"
+    };
+    let mut finding = if source_degraded || stale_warning_count > 0 {
+        Finding::warn(cat, title)
+    } else {
+        Finding::pass(cat, title)
+    };
+    finding = finding
+        .with_detail(format!(
+            "store={} exists={} slots={} active={} reusable={} stale_warnings={} duplicate_opportunities={}",
+            store_path.display(),
+            store_exists,
+            total_slots,
+            active_slots,
+            reusable_slot_count,
+            stale_warning_count,
+            duplicate_opportunity_count
+        ))
+        .with_data(data);
+    if !recommended_actions.is_empty() {
+        finding = finding.with_remediation(recommended_actions.join("; "));
+    }
+    findings.push(finding);
+}
+
+fn validation_broker_not_configured_json() -> serde_json::Value {
+    serde_json::json!({
+        "schema": SWARM_DOCTOR_VALIDATION_BROKER_SCHEMA,
+        "mode": "advisory_projection",
+        "mutation_performed": false,
+        "source_status": {
+            "validation_slot_store": "not_configured",
+            "source_of_truth": "validation_broker_slot_store",
+            "doctor_authority": "environment_diagnostics_only"
+        },
+        "store": {
+            "configured": false,
+            "exists": false,
+            "status": "not_configured",
+            "total_records": 0,
+            "total_slots": 0,
+            "state_counts": {}
+        },
+        "current_slots": {
+            "total": 0,
+            "active": 0,
+            "reusable": 0,
+            "stale": 0,
+            "expired_at_report_time": 0,
+            "sample": []
+        },
+        "duplicate_gate_opportunities": {
+            "count": 0,
+            "active_equivalent_groups": [],
+            "reusable_slots": []
+        },
+        "stale_build_warnings": {
+            "count": 0,
+            "expired_slots": []
+        },
+        "degraded_reasons": ["validation_broker_store_not_configured"],
+        "recommended_next_actions": [
+            "Set PI_VALIDATION_BROKER_STORE only when broker-guided validation handoff is in use"
+        ],
+        "guards": {
+            "advisory_only": true,
+            "no_live_mutation": true,
+            "not_ci_success": true,
+            "not_release_claim_evidence": true,
+            "does_not_replace_rch_doctor_beads_agent_mail": true
+        }
+    })
+}
+
+fn resolve_validation_broker_store_path(cwd: &Path, raw: &str) -> PathBuf {
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
+}
+
+const fn validation_slot_state_label(state: &ValidationSlotState) -> &'static str {
+    match state {
+        ValidationSlotState::Requested => "requested",
+        ValidationSlotState::Active => "active",
+        ValidationSlotState::Reusable => "reusable",
+        ValidationSlotState::Stale => "stale",
+        ValidationSlotState::Failed => "failed",
+        ValidationSlotState::Released => "released",
+        ValidationSlotState::Expired => "expired",
+        ValidationSlotState::Degraded => "degraded",
+    }
+}
+
+fn validation_broker_slot_json(lease: &ValidationSlotLease) -> serde_json::Value {
+    serde_json::json!({
+        "slot_id": &lease.slot_id,
+        "state": validation_slot_state_label(&lease.state),
+        "owner_agent": &lease.owner_agent,
+        "bead_id": &lease.bead_id,
+        "command_class": &lease.command_class,
+        "runner": &lease.runner,
+        "rch_job_id": &lease.rch_job_id,
+        "heartbeat_at_utc": &lease.heartbeat_at_utc,
+        "expires_at_utc": &lease.expires_at_utc,
+        "command_fingerprint": &lease.command_fingerprint,
+    })
+}
+
+fn validation_broker_recommended_actions(
+    degraded: bool,
+    store_exists: bool,
+    stale_warning_count: usize,
+    duplicate_opportunity_count: usize,
+) -> Vec<String> {
+    let mut actions = Vec::new();
+    if !store_exists {
+        actions.push("Create the validation-broker store by acquiring a slot before relying on lease posture");
+    }
+    if degraded {
+        actions.push("Inspect the validation-broker store and avoid coalescing gates until malformed records are resolved");
+    }
+    if stale_warning_count > 0 {
+        actions.push("Recover stale validation slots through owner-visible broker acquire/renew/release workflow");
+    }
+    if duplicate_opportunity_count > 0 {
+        actions.push("Consider coalescing equivalent validation gates only after matching provenance and required no-claim markers");
+    }
+    if actions.is_empty() {
+        actions.push("No validation-broker action required");
+    }
+    actions.into_iter().map(str::to_string).collect()
 }
 
 fn enum_json_label<T>(value: T) -> String
