@@ -1,0 +1,551 @@
+{
+  "schema": "pi.swarm.replay_closeout_gate.v1",
+  "generated_at": "2026-05-14T07:03:38Z",
+  "status": "pass",
+  "purpose": "prompt_to_artifact_swarm_replay_closeout_gate_not_source_of_truth",
+  "parent_epic": {
+    "id": "bd-in57w",
+    "title": "[IDEA-WIZARD] Swarm replay lab and policy simulator",
+    "status_before_closeout": "open"
+  },
+  "final_gate_bead": {
+    "id": "bd-in57w.12",
+    "title": "[IDEA-WIZARD] Final swarm replay lab closeout gate",
+    "status_before_closeout": "in_progress"
+  },
+  "required_checks": [
+    "child_beads_closed",
+    "trace_contract",
+    "ingestor_normalizer",
+    "replay_engine",
+    "policy_adapters",
+    "policy_metrics",
+    "fault_corpus",
+    "large_host_budgets",
+    "preview_runpack_integration",
+    "no_mock_e2e",
+    "performance_evidence",
+    "operator_docs",
+    "readme_freshness",
+    "pushed_commits",
+    "quality_gates"
+  ],
+  "child_artifact_map": [
+    {
+      "bead_id": "bd-in57w.1",
+      "status": "closed",
+      "title": "Define swarm replay trace contract and source inventory",
+      "close_reason": "Defined replay trace contract, source inventory, fail-closed fixtures, and executable contract tests",
+      "commit": "e57ed88bae4b49147ffe0bf73bb3f5072397c1f5",
+      "code_paths": [
+        "docs/contracts/swarm-replay-trace-contract.json"
+      ],
+      "test_paths": [
+        "tests/swarm_replay_trace_contract.rs",
+        "tests/fixtures/swarm_replay_trace/source_inventory_scenarios.json"
+      ],
+      "docs_or_evidence_paths": [
+        "docs/contracts/swarm-replay-trace-contract.json",
+        "tests/fixtures/swarm_replay_trace/source_inventory_scenarios.json"
+      ],
+      "validation_commands": [
+        "rch exec -- cargo test --test swarm_replay_trace_contract -- --nocapture"
+      ]
+    },
+    {
+      "bead_id": "bd-in57w.2",
+      "status": "closed",
+      "title": "Build replay artifact ingestor and normalizer",
+      "close_reason": "Implemented read-only replay artifact ingestor and normalizer with fail-closed fixtures and golden trace",
+      "commit": "43cd3b36214a64a177b8a9491634e15621f0c4db",
+      "code_paths": [
+        "src/swarm_replay.rs"
+      ],
+      "test_paths": [
+        "tests/swarm_replay_ingestor.rs"
+      ],
+      "docs_or_evidence_paths": [
+        "tests/golden_corpus/swarm_replay_trace/normalized_trace.json",
+        "tests/fixtures/swarm_replay_trace/agent_mail_unavailable_trace.json"
+      ],
+      "validation_commands": [
+        "rch exec -- cargo test --test swarm_replay_ingestor -- --nocapture"
+      ]
+    },
+    {
+      "bead_id": "bd-in57w.3",
+      "status": "closed",
+      "title": "Implement deterministic swarm replay engine",
+      "close_reason": "Implemented deterministic pure replay engine with snapshots and invariant diagnostics",
+      "commit": "a69e9bbace9932b738ac2d804d45c8c13c6f9833",
+      "code_paths": [
+        "src/swarm_replay.rs"
+      ],
+      "test_paths": [
+        "tests/swarm_replay_ingestor.rs"
+      ],
+      "docs_or_evidence_paths": [
+        "tests/golden_corpus/swarm_replay_trace/normalized_trace.json"
+      ],
+      "validation_commands": [
+        "rch exec -- cargo test --test swarm_replay_ingestor -- --nocapture"
+      ]
+    },
+    {
+      "bead_id": "bd-in57w.4",
+      "status": "closed",
+      "title": "Add swarm policy adapter interface and baseline strategies",
+      "close_reason": "Implemented advisory replay policy adapters and deterministic baseline strategies with validation coverage",
+      "commit": "0e6b024656ec30310e7ffb32e4a11787ec46f253",
+      "code_paths": [
+        "src/swarm_replay.rs"
+      ],
+      "test_paths": [
+        "tests/swarm_replay_ingestor.rs"
+      ],
+      "docs_or_evidence_paths": [
+        "tests/golden_corpus/swarm_replay_trace/normalized_trace.json"
+      ],
+      "validation_commands": [
+        "rch exec -- cargo test --test swarm_replay_ingestor -- --nocapture"
+      ]
+    },
+    {
+      "bead_id": "bd-in57w.5",
+      "status": "closed",
+      "title": "Build policy what-if metrics and comparison report",
+      "close_reason": "Implemented policy comparison metrics report with golden and fail-closed timestamp coverage",
+      "commit": "f467a8cdef6a0a9fc3a9ce30f7df5a8289bedc10",
+      "code_paths": [
+        "src/swarm_replay.rs"
+      ],
+      "test_paths": [
+        "tests/swarm_replay_ingestor.rs"
+      ],
+      "docs_or_evidence_paths": [
+        "tests/golden_corpus/swarm_replay_trace/policy_comparison_metrics.json"
+      ],
+      "validation_commands": [
+        "rch exec -- cargo test --test swarm_replay_ingestor policy_comparison -- --nocapture"
+      ]
+    },
+    {
+      "bead_id": "bd-in57w.6",
+      "status": "closed",
+      "title": "Add fault-injection replay corpus for coordination failures",
+      "close_reason": "Added redacted fault-injection replay corpus with JSONL event logs, artifact manifests, and policy/diagnostic regression coverage",
+      "commit": "06a7927639f9bef9f82088d50d699f3207e62b07",
+      "code_paths": [
+        "tests/golden_corpus/swarm_replay_trace/fault_injection_corpus.json"
+      ],
+      "test_paths": [
+        "tests/swarm_replay_ingestor.rs"
+      ],
+      "docs_or_evidence_paths": [
+        "tests/golden_corpus/swarm_replay_trace/fault_agent_mail_unavailable.events.jsonl",
+        "tests/golden_corpus/swarm_replay_trace/fault_rch_scratch_saturated.events.jsonl",
+        "tests/golden_corpus/swarm_replay_trace/fault_reservation_dirty_stale.events.jsonl"
+      ],
+      "validation_commands": [
+        "rch exec -- cargo test --test swarm_replay_ingestor fault -- --nocapture"
+      ]
+    },
+    {
+      "bead_id": "bd-in57w.7",
+      "status": "closed",
+      "title": "Model large-host resource budgets in replay",
+      "close_reason": "Implemented replay resource budget modeling with host profiles, pressure timelines, policy saturation metrics, and fail-closed missing facts coverage",
+      "commit": "4cfec9bbe950577650e4629a8710c065e15384a1",
+      "code_paths": [
+        "src/swarm_replay.rs"
+      ],
+      "test_paths": [
+        "tests/swarm_replay_ingestor.rs"
+      ],
+      "docs_or_evidence_paths": [
+        "docs/swarm-replay-operator-workflow.md",
+        "tests/golden_corpus/swarm_replay_trace/normalized_trace.json"
+      ],
+      "validation_commands": [
+        "rch exec -- cargo test --test swarm_replay_ingestor resource -- --nocapture"
+      ]
+    },
+    {
+      "bead_id": "bd-in57w.8",
+      "status": "closed",
+      "title": "Expose replay preview CLI and runpack integration",
+      "close_reason": "Completed replay preview CLI and runpack integration",
+      "commit": "9bb480e68fc45a9bd212120324d70c72f7085dc0",
+      "code_paths": [
+        "src/cli.rs",
+        "src/main.rs",
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "test_paths": [
+        "tests/swarm_replay_preview_cli.rs",
+        "tests/conformance/fixture_runner.rs"
+      ],
+      "docs_or_evidence_paths": [
+        "docs/schema/swarm_replay_preview.json",
+        "tests/golden_corpus/swarm_replay_trace/preview_text.txt",
+        "tests/golden_corpus/swarm_operator_runpack/complete_runpack_projection.json"
+      ],
+      "validation_commands": [
+        "rch exec -- cargo test --test swarm_replay_preview_cli -- --nocapture",
+        "python3 scripts/build_swarm_operator_runpack.py --self-test"
+      ]
+    },
+    {
+      "bead_id": "bd-in57w.9",
+      "status": "closed",
+      "title": "Add no-mock swarm replay E2E harness",
+      "close_reason": "Completed no-mock swarm replay E2E harness with JSONL event logs, manifest evidence, comparison report checks, runpack integration, and missing/malformed source cases.",
+      "commit": "3a9ce3f5e8ea8b772c8c70d47773ba5d39e80ee9",
+      "code_paths": [
+        "tests/swarm_replay_ingestor.rs"
+      ],
+      "test_paths": [
+        "tests/swarm_replay_ingestor.rs"
+      ],
+      "docs_or_evidence_paths": [
+        "tests/golden_corpus/swarm_replay_trace/normalized_trace.json",
+        "docs/contracts/swarm-operator-runpack-contract.json"
+      ],
+      "validation_commands": [
+        "rch exec -- cargo test --test swarm_replay_ingestor no_mock_e2e -- --nocapture"
+      ]
+    },
+    {
+      "bead_id": "bd-in57w.10",
+      "status": "closed",
+      "title": "Add replay performance budgets and large-trace evidence",
+      "close_reason": "Added CI-friendly replay performance budget evidence, large-trace coverage, and fail-closed missing observation checks",
+      "commit": "d5e39278df78d662f5dedec30a4c973deca2ac58",
+      "code_paths": [
+        "src/swarm_replay.rs"
+      ],
+      "test_paths": [
+        "tests/swarm_replay_ingestor.rs"
+      ],
+      "docs_or_evidence_paths": [
+        "tests/golden_corpus/swarm_replay_trace/normalized_trace.json"
+      ],
+      "validation_commands": [
+        "rch exec -- cargo test --test swarm_replay_ingestor performance -- --nocapture"
+      ]
+    },
+    {
+      "bead_id": "bd-in57w.11",
+      "status": "closed",
+      "title": "Document swarm replay operator workflow and privacy posture",
+      "close_reason": "Documented swarm replay operator workflow, privacy posture, degraded-data handling, policy interpretation, RCH/Agent Mail failure modes, and linked runbook/README guidance.",
+      "commit": "0b547a13607144ba40adac4cadd4fa0e0174dae9",
+      "code_paths": [
+        "docs/swarm-replay-operator-workflow.md",
+        "docs/swarm-operations-runbook.md",
+        "README.md"
+      ],
+      "test_paths": [
+        "scripts/check_docs_purpose_headers.py",
+        "scripts/check_readme_evidence_freshness.py"
+      ],
+      "docs_or_evidence_paths": [
+        "docs/swarm-replay-operator-workflow.md",
+        "docs/swarm-operations-runbook.md",
+        "README.md"
+      ],
+      "validation_commands": [
+        "python3 scripts/check_docs_purpose_headers.py",
+        "python3 scripts/check_readme_evidence_freshness.py",
+        "cargo fmt --check",
+        "./scripts/reconcile_beads_ledger.sh"
+      ]
+    }
+  ],
+  "quality_gate_results": [
+    {
+      "id": "json_contracts",
+      "status": "pass",
+      "command": "python3 -m json.tool docs/contracts/swarm-replay-closeout-gate-contract.json >/dev/null && python3 -m json.tool docs/evidence/swarm-replay-closeout-gate.json >/dev/null && python3 -m json.tool docs/contracts/swarm-replay-trace-contract.json >/dev/null && python3 -m json.tool docs/schema/swarm_replay_preview.json >/dev/null"
+    },
+    {
+      "id": "docs_purpose_headers",
+      "status": "pass",
+      "command": "python3 scripts/check_docs_purpose_headers.py"
+    },
+    {
+      "id": "readme_evidence_freshness",
+      "status": "pass",
+      "command": "python3 scripts/check_readme_evidence_freshness.py"
+    },
+    {
+      "id": "swarm_replay_trace_contract_rch",
+      "status": "pass",
+      "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/target TMPDIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/tmp rch exec -- cargo test --test swarm_replay_trace_contract -- --nocapture"
+    },
+    {
+      "id": "swarm_replay_ingestor_rch",
+      "status": "pass",
+      "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/target TMPDIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/tmp rch exec -- cargo test --test swarm_replay_ingestor -- --nocapture"
+    },
+    {
+      "id": "swarm_replay_preview_cli_rch",
+      "status": "pass",
+      "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/target TMPDIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/tmp rch exec -- cargo test --test swarm_replay_preview_cli -- --nocapture"
+    },
+    {
+      "id": "swarm_replay_closeout_gate_contract_rch",
+      "status": "pass",
+      "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/target TMPDIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/tmp rch exec -- cargo test --test swarm_replay_closeout_gate_contract -- --nocapture"
+    },
+    {
+      "id": "cargo_fmt",
+      "status": "pass",
+      "command": "cargo fmt --check"
+    },
+    {
+      "id": "cargo_check_all_targets_rch",
+      "status": "pass",
+      "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/target TMPDIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/tmp rch exec -- cargo check --all-targets"
+    },
+    {
+      "id": "cargo_clippy_all_targets_rch",
+      "status": "pass",
+      "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/target TMPDIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_in57w_12/tmp rch exec -- cargo clippy --all-targets -- -D warnings"
+    },
+    {
+      "id": "staged_ubs",
+      "status": "pass",
+      "command": "ubs --staged --only=rust ."
+    },
+    {
+      "id": "beads_ledger_reconcile",
+      "status": "pass",
+      "command": "./scripts/reconcile_beads_ledger.sh"
+    }
+  ],
+  "checklist": [
+    {
+      "id": "child_beads_closed",
+      "status": "pass",
+      "requirement": "All bd-in57w implementation and docs child beads are closed before this final gate.",
+      "evidence": [
+        {
+          "closed_child_count": 11,
+          "child_beads": [
+            "bd-in57w.1",
+            "bd-in57w.2",
+            "bd-in57w.3",
+            "bd-in57w.4",
+            "bd-in57w.5",
+            "bd-in57w.6",
+            "bd-in57w.7",
+            "bd-in57w.8",
+            "bd-in57w.9",
+            "bd-in57w.10",
+            "bd-in57w.11"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "trace_contract",
+      "status": "pass",
+      "requirement": "Replay trace contract, source inventory, and fail-closed source-status rules exist and are tested.",
+      "evidence": [
+        {
+          "path": "docs/contracts/swarm-replay-trace-contract.json"
+        },
+        {
+          "path": "tests/swarm_replay_trace_contract.rs"
+        }
+      ]
+    },
+    {
+      "id": "ingestor_normalizer",
+      "status": "pass",
+      "requirement": "The ingestor normalizes real artifact shapes and preserves missing/malformed uncertainty.",
+      "evidence": [
+        {
+          "path": "src/swarm_replay.rs"
+        },
+        {
+          "path": "tests/fixtures/swarm_replay_trace/agent_mail_unavailable_trace.json"
+        }
+      ]
+    },
+    {
+      "id": "replay_engine",
+      "status": "pass",
+      "requirement": "The replay engine reconstructs deterministic state snapshots and invariant diagnostics without live mutation.",
+      "evidence": [
+        {
+          "path": "src/swarm_replay.rs"
+        },
+        {
+          "path": "tests/golden_corpus/swarm_replay_trace/normalized_trace.json"
+        }
+      ]
+    },
+    {
+      "id": "policy_adapters",
+      "status": "pass",
+      "requirement": "Built-in advisory policies cover conservative manual, existing autopilot, RCH-limited, stale-bead reclaiming, and build-slot protective behavior.",
+      "evidence": [
+        {
+          "path": "src/swarm_replay.rs"
+        }
+      ]
+    },
+    {
+      "id": "policy_metrics",
+      "status": "pass",
+      "requirement": "Policy comparison metrics rank advisory policies and suppress claims when timestamps or resource facts are missing.",
+      "evidence": [
+        {
+          "path": "tests/golden_corpus/swarm_replay_trace/policy_comparison_metrics.json"
+        }
+      ]
+    },
+    {
+      "id": "fault_corpus",
+      "status": "pass",
+      "requirement": "Fault corpus covers Agent Mail unavailable, saturated RCH scratch, dirty worktree, reservation conflicts, and stale ownership.",
+      "evidence": [
+        {
+          "path": "tests/golden_corpus/swarm_replay_trace/fault_injection_corpus.json"
+        },
+        {
+          "path": "tests/golden_corpus/swarm_replay_trace/fault_agent_mail_unavailable.events.jsonl"
+        },
+        {
+          "path": "tests/golden_corpus/swarm_replay_trace/fault_rch_scratch_saturated.events.jsonl"
+        },
+        {
+          "path": "tests/golden_corpus/swarm_replay_trace/fault_reservation_dirty_stale.events.jsonl"
+        }
+      ]
+    },
+    {
+      "id": "large_host_budgets",
+      "status": "pass",
+      "requirement": "Replay models host profile, resource pressure, saturation reasons, and large-host operator guidance.",
+      "evidence": [
+        {
+          "path": "src/swarm_replay.rs"
+        },
+        {
+          "path": "docs/swarm-replay-operator-workflow.md"
+        }
+      ]
+    },
+    {
+      "id": "preview_runpack_integration",
+      "status": "pass",
+      "requirement": "CLI preview emits pi.swarm.replay_preview.v1 and runpack projection consumes it without replacing source evidence.",
+      "evidence": [
+        {
+          "path": "src/main.rs"
+        },
+        {
+          "path": "src/cli.rs"
+        },
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/schema/swarm_replay_preview.json"
+        }
+      ]
+    },
+    {
+      "id": "no_mock_e2e",
+      "status": "pass",
+      "requirement": "No-mock E2E harness emits auditable JSONL events, manifests, replay summaries, and comparison reports over real artifact shapes.",
+      "evidence": [
+        {
+          "path": "tests/swarm_replay_ingestor.rs",
+          "test_filter": "no_mock_e2e"
+        }
+      ]
+    },
+    {
+      "id": "performance_evidence",
+      "status": "pass",
+      "requirement": "Replay performance budgets and large-trace evidence exist with fail-closed missing observation behavior.",
+      "evidence": [
+        {
+          "path": "src/swarm_replay.rs"
+        },
+        {
+          "path": "tests/swarm_replay_ingestor.rs"
+        }
+      ]
+    },
+    {
+      "id": "operator_docs",
+      "status": "pass",
+      "requirement": "Operator docs cover configuration, preview workflow, failure modes, privacy posture, examples, troubleshooting, and source-of-truth boundaries.",
+      "evidence": [
+        {
+          "path": "docs/swarm-replay-operator-workflow.md"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ]
+    },
+    {
+      "id": "readme_freshness",
+      "status": "pass",
+      "requirement": "README links the shipped replay workflow without adding stale or uncited performance claims.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "contains": "docs/swarm-replay-operator-workflow.md"
+        }
+      ]
+    },
+    {
+      "id": "pushed_commits",
+      "status": "pass",
+      "requirement": "Replay child commits through the docs gate are already pushed to origin/main and origin/master before final closeout work begins.",
+      "evidence": [
+        {
+        "head_before_closeout_commit": "cf653c29b5836afabf979bb44325d4712de7088d",
+        "origin_main_before_closeout_commit": "cf653c29b5836afabf979bb44325d4712de7088d",
+        "origin_master_before_closeout_commit": "cf653c29b5836afabf979bb44325d4712de7088d",
+          "child_commits": [
+            "e57ed88bae4b49147ffe0bf73bb3f5072397c1f5",
+            "43cd3b36214a64a177b8a9491634e15621f0c4db",
+            "a69e9bbace9932b738ac2d804d45c8c13c6f9833",
+            "0e6b024656ec30310e7ffb32e4a11787ec46f253",
+            "f467a8cdef6a0a9fc3a9ce30f7df5a8289bedc10",
+            "06a7927639f9bef9f82088d50d699f3207e62b07",
+            "4cfec9bbe950577650e4629a8710c065e15384a1",
+            "9bb480e68fc45a9bd212120324d70c72f7085dc0",
+            "3a9ce3f5e8ea8b772c8c70d47773ba5d39e80ee9",
+            "d5e39278df78d662f5dedec30a4c973deca2ac58",
+            "0b547a13607144ba40adac4cadd4fa0e0174dae9"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quality_gates",
+      "status": "pass",
+      "requirement": "Required focused replay tests, docs checks, all-target check/clippy, staged UBS, and Beads ledger reconciliation are recorded.",
+      "evidence": [
+        {
+          "heavy_cargo_uses_rch": true,
+          "quality_gate_count": 12
+        }
+      ]
+    }
+  ],
+  "missing_checks": [],
+  "follow_up_required": false,
+  "follow_up_beads": [],
+  "decision": "close_final_gate_and_parent_epic",
+  "epic_can_close_after_this_commit": true
+}
