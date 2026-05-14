@@ -1,0 +1,60 @@
+{
+  "schema": "pi.validation_broker.stress_profile_corpus.v1",
+  "generated_at_utc": "2026-05-14T08:30:00Z",
+  "budgets": {
+    "max_plan_latency_ms": 20,
+    "max_status_latency_ms": 10,
+    "max_stale_scan_ms": 16,
+    "max_slot_store_bytes": 4194304,
+    "max_memory_growth_bytes": 8388608,
+    "min_request_throughput_per_minute": 240
+  },
+  "profiles": [
+    {
+      "profile_id": "synthetic_64c_256gb_nominal",
+      "source_kind": "synthetic",
+      "cpu_count": 64,
+      "memory_bytes": 274877906944,
+      "active_agents": 16,
+      "requested_validations_per_minute": 24,
+      "total_slots": 32,
+      "active_slots": 8,
+      "reusable_slots": 6,
+      "stale_slots": 1,
+      "slot_store_records": 2400,
+      "slot_store_bytes": 860000
+    },
+    {
+      "profile_id": "synthetic_64c_256gb_saturated",
+      "source_kind": "synthetic",
+      "cpu_count": 64,
+      "memory_bytes": 274877906944,
+      "active_agents": 96,
+      "requested_validations_per_minute": 160,
+      "total_slots": 32,
+      "active_slots": 32,
+      "reusable_slots": 3,
+      "stale_slots": 14,
+      "slot_store_records": 20000,
+      "slot_store_bytes": 8750000
+    },
+    {
+      "profile_id": "synthetic_64c_256gb_missing_store_bytes",
+      "source_kind": "synthetic",
+      "cpu_count": 64,
+      "memory_bytes": 274877906944,
+      "active_agents": 16,
+      "requested_validations_per_minute": 24,
+      "total_slots": 32,
+      "active_slots": 8,
+      "reusable_slots": 6,
+      "stale_slots": 1,
+      "slot_store_records": 2400,
+      "slot_store_bytes": null
+    }
+  ],
+  "caveats": [
+    "synthetic_large_host_profile_not_release_performance_evidence",
+    "does_not_replace_rch_doctor_cargo_headroom_ci_or_required_repo_gates"
+  ]
+}

@@ -8,6 +8,9 @@
   "cli_status_schema": "pi.validation_broker.cli_status.v1",
   "cli_plan_schema": "pi.validation_broker.cli_plan.v1",
   "cli_lease_mutation_schema": "pi.validation_broker.cli_lease_mutation.v1",
+  "stress_profile_corpus_schema": "pi.validation_broker.stress_profile_corpus.v1",
+  "stress_budget_report_schema": "pi.validation_broker.stress_budget_report.v1",
+  "stress_evidence_schema": "pi.validation_broker.stress_evidence.v1",
   "contract_version": "1.0.0",
   "bead_id": "bd-gusp4.1",
   "parent_bead_id": "bd-gusp4",
@@ -313,6 +316,70 @@
     ],
     "artifact_manifest_policy": "Every fault scenario must point at durable corpus and event-log artifacts and name expected decisions, reasons, actions, source statuses, policy fields, reusable slots, coalesced artifacts, and rejected reusable slot mismatch reasons when those fields are material to the fault."
   },
+  "stress_budget_contract": {
+    "profile_corpus_path": "tests/golden_corpus/validation_broker/stress_profiles.json",
+    "profile_corpus_schema": "pi.validation_broker.stress_profile_corpus.v1",
+    "report_path": "docs/evidence/validation-broker-stress-budgets.json",
+    "report_schema": "pi.validation_broker.stress_budget_report.v1",
+    "entry_schema": "pi.validation_broker.stress_evidence.v1",
+    "bead_id": "bd-gusp4.9",
+    "required_profiles": [
+      "synthetic_64c_256gb_nominal",
+      "synthetic_64c_256gb_saturated",
+      "synthetic_64c_256gb_missing_store_bytes"
+    ],
+    "required_budget_fields": [
+      "max_plan_latency_ms",
+      "max_status_latency_ms",
+      "max_stale_scan_ms",
+      "max_slot_store_bytes",
+      "max_memory_growth_bytes",
+      "min_request_throughput_per_minute"
+    ],
+    "required_measurement_fields": [
+      "plan_latency_ms",
+      "status_latency_ms",
+      "stale_scan_ms",
+      "request_throughput_per_minute",
+      "slot_store_bytes",
+      "memory_growth_bytes",
+      "duplicate_gate_opportunities"
+    ],
+    "required_cache_fields": [
+      "cache_key",
+      "cache_status",
+      "ttl_seconds",
+      "input_fingerprint"
+    ],
+    "required_scenario_guards": [
+      "synthetic_data",
+      "no_live_rch_mutation",
+      "provider_calls",
+      "live_mutations",
+      "release_claim_allowed"
+    ],
+    "required_verdicts": [
+      "pass",
+      "fail",
+      "blocked"
+    ],
+    "required_guards": [
+      "synthetic_only",
+      "not_release_performance_evidence",
+      "not_ci_success",
+      "does_not_replace_rch_doctor_cargo_headroom_ci_ubs_beads_agent_mail",
+      "missing_data_blocks_measurements"
+    ],
+    "required_no_claims": [
+      "not_ci_success",
+      "not_release_performance_evidence",
+      "not_dropin_certification_evidence",
+      "not_permission_to_skip_required_gates",
+      "not_permission_to_modify_other_agents_files"
+    ],
+    "missing_data_policy": "Synthetic stress evidence with missing profile inputs must emit verdict=blocked, list missing_data, leave measurement fields null, and must not become pass or release performance evidence.",
+    "claim_policy": "Stress-budget evidence is an engineering signal for validation-broker sizing and backpressure only. It is not release-facing performance evidence and cannot replace RCH, Doctor, cargo_headroom.sh, CI, UBS, Beads, Agent Mail, or required repo gates."
+  },
   "cli_surface_contract": {
     "subcommand": "validation-broker",
     "actions": [
@@ -526,6 +593,14 @@
         "doctor_runpack_projection_contract",
         "overlap_boundaries"
       ]
+    },
+    {
+      "id": "VALIDBROKER-MUST-012",
+      "description": "Large-host validation-broker stress budgets cover nominal, saturated, and missing-data profiles with deterministic schema-governed evidence, cache/provenance fields, and explicit non-release-claim caveats.",
+      "validated_by": [
+        "stress_budget_contract",
+        "stress_budget_contract.report_path"
+      ]
     }
   ],
   "downstream_dependencies": {
@@ -534,10 +609,12 @@
       "bd-gusp4.3",
       "bd-gusp4.6",
       "bd-gusp4.7",
-      "bd-gusp4.8"
+      "bd-gusp4.8",
+      "bd-gusp4.9"
     ],
     "fault_corpus_bead": "bd-gusp4.6",
     "doctor_runpack_projection_bead": "bd-gusp4.7",
+    "stress_budget_bead": "bd-gusp4.9",
     "final_closeout_bead": "bd-gusp4.11"
   }
 }

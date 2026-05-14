@@ -10,12 +10,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use pi::validation_broker::{
     VALIDATION_BROKER_DECISION_SCHEMA, VALIDATION_BROKER_INPUT_SCHEMA,
     VALIDATION_BROKER_SLOT_RECORD_SCHEMA, VALIDATION_BROKER_SLOT_SCHEMA,
-    VALIDATION_BROKER_SLOT_STORE_SCHEMA, ValidationAdmissionDecision, ValidationAdmissionPolicy,
-    ValidationAdmissionRequestContext, ValidationBrokerInputParts, ValidationBrokerInputSnapshot,
-    ValidationRejectedReusableSlot, ValidationSlotArtifact, ValidationSlotLease,
-    ValidationSlotRequest, ValidationSlotState, ValidationSlotStore, ValidationSlotStoreSnapshot,
-    ValidationSlotStoreStatus, ValidationSourceProvenance, ValidationSourceState,
-    decide_validation_admission, normalize_available_source, normalize_beads_json,
+    VALIDATION_BROKER_SLOT_STORE_SCHEMA, VALIDATION_BROKER_STRESS_EVIDENCE_SCHEMA,
+    ValidationAdmissionDecision, ValidationAdmissionPolicy, ValidationAdmissionRequestContext,
+    ValidationBrokerInputParts, ValidationBrokerInputSnapshot, ValidationBrokerStressBudgets,
+    ValidationBrokerStressProfile, ValidationBrokerStressVerdict, ValidationRejectedReusableSlot,
+    ValidationSlotArtifact, ValidationSlotLease, ValidationSlotRequest, ValidationSlotState,
+    ValidationSlotStore, ValidationSlotStoreSnapshot, ValidationSlotStoreStatus,
+    ValidationSourceProvenance, ValidationSourceState, decide_validation_admission,
+    evaluate_validation_broker_stress_budget, normalize_available_source, normalize_beads_json,
     normalize_doctor_json, normalize_git_status_text, normalize_headroom_json,
     normalize_rch_queue_text, normalize_unavailable_source,
 };
@@ -329,9 +331,23 @@ struct FaultRejectedReusableSlot {
     reasons: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct StressProfileCorpus {
+    schema: String,
+    generated_at_utc: String,
+    budgets: ValidationBrokerStressBudgets,
+    profiles: Vec<ValidationBrokerStressProfile>,
+    caveats: Vec<String>,
+}
+
 fn fault_corpus_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden_corpus/validation_broker/fault_corpus.json")
+}
+
+fn stress_profile_corpus_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden_corpus/validation_broker/stress_profiles.json")
 }
 
 fn repo_fixture_path(path: &str) -> PathBuf {
@@ -342,6 +358,24 @@ fn load_fault_corpus() -> Result<FaultCorpus, String> {
     let raw = std::fs::read_to_string(fault_corpus_path())
         .map_err(|err| format!("read fault corpus: {err}"))?;
     serde_json::from_str(&raw).map_err(|err| format!("parse fault corpus: {err}"))
+}
+
+fn load_stress_profile_corpus() -> Result<StressProfileCorpus, String> {
+    let raw = std::fs::read_to_string(stress_profile_corpus_path())
+        .map_err(|err| format!("read stress profile corpus: {err}"))?;
+    serde_json::from_str(&raw).map_err(|err| format!("parse stress profile corpus: {err}"))
+}
+
+fn stress_profile_by_id(
+    corpus: &StressProfileCorpus,
+    profile_id: &str,
+) -> Result<ValidationBrokerStressProfile, String> {
+    corpus
+        .profiles
+        .iter()
+        .find(|profile| profile.profile_id == profile_id)
+        .cloned()
+        .ok_or_else(|| format!("missing stress profile {profile_id}"))
 }
 
 fn fault_request(request: &FaultRequest) -> ValidationSlotRequest {
@@ -1274,6 +1308,119 @@ fn rch_saturation_and_local_fallback_are_explicit_inputs() -> TestResult {
 }
 
 #[test]
+fn validation_broker_large_host_stress_budget_evidence_is_fail_closed() -> TestResult {
+    let corpus = load_stress_profile_corpus()?;
+    require(
+        corpus.schema == "pi.validation_broker.stress_profile_corpus.v1",
+        "stress profile corpus schema",
+    )?;
+    require(
+        corpus.caveats.iter().any(|caveat| {
+            caveat == "synthetic_large_host_profile_not_release_performance_evidence"
+        }),
+        "stress corpus carries synthetic evidence caveat",
+    )?;
+    require(
+        corpus.generated_at_utc == STALE_AT,
+        "stress corpus timestamp matches deterministic test clock",
+    )?;
+    let budgets = corpus.budgets.clone();
+    let nominal = evaluate_validation_broker_stress_budget(
+        stress_profile_by_id(&corpus, "synthetic_64c_256gb_nominal")?,
+        budgets.clone(),
+        provenance("validation_broker_stress")?,
+        STALE_AT,
+    )
+    .map_err(to_string)?;
+
+    require(
+        nominal.schema == VALIDATION_BROKER_STRESS_EVIDENCE_SCHEMA,
+        "stress evidence schema",
+    )?;
+    require(
+        nominal.verdict == ValidationBrokerStressVerdict::Pass,
+        "nominal large-host profile stays within budgets",
+    )?;
+    require(nominal.missing_data.is_empty(), "nominal data complete")?;
+    require(
+        nominal.measurements.plan_latency_ms == Some(8),
+        "nominal plan latency estimate is deterministic",
+    )?;
+    require(
+        nominal.measurements.request_throughput_per_minute == Some(1_440),
+        "nominal throughput estimate is deterministic",
+    )?;
+    require(
+        nominal
+            .no_claims
+            .iter()
+            .any(|claim| claim == "not_release_performance_evidence"),
+        "stress evidence remains non-release evidence",
+    )?;
+    require(
+        !nominal.cache.input_fingerprint.is_empty(),
+        "stress evidence carries cache/provenance fingerprint",
+    )?;
+    require(
+        nominal.guards.no_live_rch_mutation
+            && nominal.guards.provider_calls == 0
+            && nominal.guards.live_mutations == 0
+            && !nominal.guards.release_claim_allowed,
+        "stress evidence carries no-live-mutation and no-release-claim guards",
+    )?;
+
+    let saturated = evaluate_validation_broker_stress_budget(
+        stress_profile_by_id(&corpus, "synthetic_64c_256gb_saturated")?,
+        budgets.clone(),
+        provenance("validation_broker_stress")?,
+        STALE_AT,
+    )
+    .map_err(to_string)?;
+    require(
+        saturated.verdict == ValidationBrokerStressVerdict::Fail,
+        "saturated large-host profile violates budgets",
+    )?;
+    for expected_failure in [
+        "plan_latency_ms_exceeded",
+        "stale_scan_ms_exceeded",
+        "slot_store_bytes_exceeded",
+        "memory_growth_bytes_exceeded",
+        "request_throughput_per_minute_below_minimum",
+    ] {
+        require(
+            saturated
+                .budget_failures
+                .iter()
+                .any(|failure| failure == expected_failure),
+            format!("saturated profile records {expected_failure}"),
+        )?;
+    }
+
+    let missing_evidence = evaluate_validation_broker_stress_budget(
+        stress_profile_by_id(&corpus, "synthetic_64c_256gb_missing_store_bytes")?,
+        budgets,
+        provenance("validation_broker_stress")?,
+        STALE_AT,
+    )
+    .map_err(to_string)?;
+    require(
+        missing_evidence.verdict == ValidationBrokerStressVerdict::Blocked,
+        "missing stress inputs block the evidence",
+    )?;
+    require(
+        missing_evidence
+            .missing_data
+            .iter()
+            .any(|field| field == "slot_store_bytes"),
+        "missing data names the absent field",
+    )?;
+    require(
+        missing_evidence.measurements.plan_latency_ms.is_none(),
+        "blocked evidence does not invent measurements",
+    )
+}
+
+#[test]
 fn beads_normalizer_detects_stale_in_progress_work() -> TestResult {
     let beads = normalize_beads_json(
         provenance("beads")?,
@@ -1604,11 +1751,11 @@ fn admission_refuses_required_reuse_when_no_valid_artifact_exists() -> TestResul
     )
 }
 
-fn require(condition: bool, message: &str) -> TestResult {
+fn require(condition: bool, message: impl Into<String>) -> TestResult {
     if condition {
         Ok(())
     } else {
-        Err(message.to_string())
+        Err(message.into())
     }
 }
 

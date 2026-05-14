@@ -34,6 +34,10 @@ pub const VALIDATION_BROKER_CLI_STATUS_SCHEMA: &str = "pi.validation_broker.cli_
 pub const VALIDATION_BROKER_CLI_PLAN_SCHEMA: &str = "pi.validation_broker.cli_plan.v1";
 pub const VALIDATION_BROKER_CLI_LEASE_MUTATION_SCHEMA: &str =
     "pi.validation_broker.cli_lease_mutation.v1";
+pub const VALIDATION_BROKER_STRESS_BUDGET_REPORT_SCHEMA: &str =
+    "pi.validation_broker.stress_budget_report.v1";
+pub const VALIDATION_BROKER_STRESS_EVIDENCE_SCHEMA: &str =
+    "pi.validation_broker.stress_evidence.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1042,6 +1046,189 @@ impl ValidationAdmissionPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationBrokerStressBudgets {
+    pub max_plan_latency_ms: u64,
+    pub max_status_latency_ms: u64,
+    pub max_stale_scan_ms: u64,
+    pub max_slot_store_bytes: u64,
+    pub max_memory_growth_bytes: u64,
+    pub min_request_throughput_per_minute: u64,
+}
+
+impl ValidationBrokerStressBudgets {
+    fn validate(&self) -> Result<()> {
+        for (name, value) in [
+            ("max_plan_latency_ms", self.max_plan_latency_ms),
+            ("max_status_latency_ms", self.max_status_latency_ms),
+            ("max_stale_scan_ms", self.max_stale_scan_ms),
+            ("max_slot_store_bytes", self.max_slot_store_bytes),
+            ("max_memory_growth_bytes", self.max_memory_growth_bytes),
+            (
+                "min_request_throughput_per_minute",
+                self.min_request_throughput_per_minute,
+            ),
+        ] {
+            if value == 0 {
+                return Err(Error::validation(format!("{name} must be positive")));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for ValidationBrokerStressBudgets {
+    fn default() -> Self {
+        Self {
+            max_plan_latency_ms: 20,
+            max_status_latency_ms: 10,
+            max_stale_scan_ms: 16,
+            max_slot_store_bytes: 4 * 1024 * 1024,
+            max_memory_growth_bytes: 8 * 1024 * 1024,
+            min_request_throughput_per_minute: 240,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationBrokerStressProfile {
+    pub profile_id: String,
+    pub source_kind: String,
+    pub cpu_count: Option<u64>,
+    pub memory_bytes: Option<u64>,
+    pub active_agents: Option<u64>,
+    pub requested_validations_per_minute: Option<u64>,
+    pub total_slots: Option<u64>,
+    pub active_slots: Option<u64>,
+    pub reusable_slots: Option<u64>,
+    pub stale_slots: Option<u64>,
+    pub slot_store_records: Option<u64>,
+    pub slot_store_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationBrokerStressMeasurements {
+    pub plan_latency_ms: Option<u64>,
+    pub status_latency_ms: Option<u64>,
+    pub stale_scan_ms: Option<u64>,
+    pub request_throughput_per_minute: Option<u64>,
+    pub slot_store_bytes: Option<u64>,
+    pub memory_growth_bytes: Option<u64>,
+    pub duplicate_gate_opportunities: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationBrokerStressVerdict {
+    Pass,
+    Fail,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationBrokerStressCacheProvenance {
+    pub cache_key: String,
+    pub cache_status: String,
+    pub ttl_seconds: u64,
+    pub input_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationBrokerStressGuards {
+    pub synthetic_data: bool,
+    pub no_live_rch_mutation: bool,
+    pub provider_calls: u8,
+    pub live_mutations: u8,
+    pub release_claim_allowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationBrokerStressEvidence {
+    pub schema: String,
+    pub generated_at_utc: String,
+    pub profile: ValidationBrokerStressProfile,
+    pub budgets: ValidationBrokerStressBudgets,
+    pub measurements: ValidationBrokerStressMeasurements,
+    pub verdict: ValidationBrokerStressVerdict,
+    pub budget_failures: Vec<String>,
+    pub missing_data: Vec<String>,
+    pub caveats: Vec<String>,
+    pub provenance: ValidationSourceProvenance,
+    pub cache: ValidationBrokerStressCacheProvenance,
+    pub guards: ValidationBrokerStressGuards,
+    pub suppressed_claims: Vec<String>,
+    pub no_claims: Vec<String>,
+}
+
+pub fn evaluate_validation_broker_stress_budget(
+    profile: ValidationBrokerStressProfile,
+    budgets: ValidationBrokerStressBudgets,
+    provenance: ValidationSourceProvenance,
+    generated_at_utc: &str,
+) -> Result<ValidationBrokerStressEvidence> {
+    require_non_empty(&profile.profile_id, "stress profile_id")?;
+    require_non_empty(&profile.source_kind, "stress source_kind")?;
+    budgets.validate()?;
+    provenance.validate()?;
+    parse_utc(generated_at_utc)?;
+
+    let input_fingerprint = validation_stress_input_fingerprint(&profile, &budgets, &provenance)?;
+    let mut caveats = vec![
+        "synthetic_large_host_profile_not_release_performance_evidence".to_string(),
+        "does_not_replace_rch_doctor_cargo_headroom_ci_or_required_repo_gates".to_string(),
+    ];
+    if profile.source_kind != "synthetic" {
+        caveats.push("profile_source_is_not_synthetic_fixture".to_string());
+    }
+    let synthetic_data = profile.source_kind == "synthetic";
+
+    let missing_data = validation_stress_missing_data(&profile);
+    let (measurements, budget_failures, verdict) = if missing_data.is_empty() {
+        let measurements = validation_stress_measurements(&profile)?;
+        let budget_failures = validation_stress_budget_failures(&measurements, &budgets);
+        let verdict = if budget_failures.is_empty() {
+            ValidationBrokerStressVerdict::Pass
+        } else {
+            ValidationBrokerStressVerdict::Fail
+        };
+        (measurements, budget_failures, verdict)
+    } else {
+        (
+            blocked_validation_stress_measurements(),
+            Vec::new(),
+            ValidationBrokerStressVerdict::Blocked,
+        )
+    };
+
+    Ok(ValidationBrokerStressEvidence {
+        schema: VALIDATION_BROKER_STRESS_EVIDENCE_SCHEMA.to_string(),
+        generated_at_utc: generated_at_utc.to_string(),
+        profile,
+        budgets,
+        measurements,
+        verdict,
+        budget_failures,
+        missing_data,
+        caveats,
+        provenance,
+        cache: ValidationBrokerStressCacheProvenance {
+            cache_key: format!("validation-broker-stress:{input_fingerprint}"),
+            cache_status: "cold_synthetic_fixture".to_string(),
+            ttl_seconds: 86_400,
+            input_fingerprint,
+        },
+        guards: ValidationBrokerStressGuards {
+            synthetic_data,
+            no_live_rch_mutation: true,
+            provider_calls: 0,
+            live_mutations: 0,
+            release_claim_allowed: false,
+        },
+        suppressed_claims: default_suppressed_claims(),
+        no_claims: default_no_claims(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidationAdmissionRequestContext {
     pub request_id: String,
     pub request: ValidationSlotRequest,
@@ -1683,6 +1870,213 @@ fn snapshot(
         latest_by_slot_id,
         degraded_reasons,
     }
+}
+
+fn validation_stress_missing_data(profile: &ValidationBrokerStressProfile) -> Vec<String> {
+    let mut missing = Vec::new();
+    for (name, present) in [
+        ("cpu_count", profile.cpu_count.is_some()),
+        ("memory_bytes", profile.memory_bytes.is_some()),
+        ("active_agents", profile.active_agents.is_some()),
+        (
+            "requested_validations_per_minute",
+            profile.requested_validations_per_minute.is_some(),
+        ),
+        ("total_slots", profile.total_slots.is_some()),
+        ("active_slots", profile.active_slots.is_some()),
+        ("reusable_slots", profile.reusable_slots.is_some()),
+        ("stale_slots", profile.stale_slots.is_some()),
+        ("slot_store_records", profile.slot_store_records.is_some()),
+        ("slot_store_bytes", profile.slot_store_bytes.is_some()),
+    ] {
+        if !present {
+            missing.push(name.to_string());
+        }
+    }
+    missing
+}
+
+fn validation_stress_measurements(
+    profile: &ValidationBrokerStressProfile,
+) -> Result<ValidationBrokerStressMeasurements> {
+    let cpu_count = required_stress_u64(profile.cpu_count, "cpu_count")?;
+    let memory_bytes = required_stress_u64(profile.memory_bytes, "memory_bytes")?;
+    let active_agents = required_stress_u64(profile.active_agents, "active_agents")?;
+    let requested_validations = required_stress_u64(
+        profile.requested_validations_per_minute,
+        "requested_validations_per_minute",
+    )?;
+    let total_slots = required_stress_u64(profile.total_slots, "total_slots")?;
+    let active_slots = required_stress_u64(profile.active_slots, "active_slots")?;
+    let reusable_slots = required_stress_u64(profile.reusable_slots, "reusable_slots")?;
+    let stale_slots = required_stress_u64(profile.stale_slots, "stale_slots")?;
+    let slot_store_records = required_stress_u64(profile.slot_store_records, "slot_store_records")?;
+    let slot_store_bytes = required_stress_u64(profile.slot_store_bytes, "slot_store_bytes")?;
+
+    if active_slots > total_slots {
+        return Err(Error::validation(
+            "active_slots must not exceed total_slots in stress profile",
+        ));
+    }
+    if cpu_count == 0 {
+        return Err(Error::validation(
+            "cpu_count must be positive in stress profile",
+        ));
+    }
+    if memory_bytes == 0 {
+        return Err(Error::validation(
+            "memory_bytes must be positive in stress profile",
+        ));
+    }
+    if active_agents == 0 {
+        return Err(Error::validation(
+            "active_agents must be positive in stress profile",
+        ));
+    }
+    if requested_validations == 0 {
+        return Err(Error::validation(
+            "requested_validations_per_minute must be positive in stress profile",
+        ));
+    }
+    if total_slots == 0 {
+        return Err(Error::validation(
+            "total_slots must be positive in stress profile",
+        ));
+    }
+    if slot_store_records
+        < active_slots
+            .saturating_add(reusable_slots)
+            .saturating_add(stale_slots)
+    {
+        return Err(Error::validation(
+            "slot_store_records must cover active, reusable, and stale slots in stress profile",
+        ));
+    }
+
+    let free_slots = total_slots.saturating_sub(active_slots);
+    let plan_latency_ms = 4
+        + div_ceil(active_agents, 16)
+        + div_ceil(slot_store_records, 2_000)
+        + div_ceil(requested_validations, 120);
+    let status_latency_ms =
+        3 + div_ceil(slot_store_records, 4_000) + div_ceil(active_slots + stale_slots, 512);
+    let stale_scan_ms = 2 + div_ceil(slot_store_records, 1_000) + div_ceil(stale_slots, 256);
+    let request_throughput_per_minute = free_slots.saturating_mul(60);
+    let memory_growth_bytes = slot_store_bytes
+        .saturating_add(slot_store_records.saturating_mul(96))
+        .saturating_add(active_agents.saturating_mul(1_024));
+
+    Ok(ValidationBrokerStressMeasurements {
+        plan_latency_ms: Some(plan_latency_ms),
+        status_latency_ms: Some(status_latency_ms),
+        stale_scan_ms: Some(stale_scan_ms),
+        request_throughput_per_minute: Some(request_throughput_per_minute),
+        slot_store_bytes: Some(slot_store_bytes),
+        memory_growth_bytes: Some(memory_growth_bytes),
+        duplicate_gate_opportunities: Some(reusable_slots),
+    })
+}
+
+fn required_stress_u64(value: Option<u64>, name: &str) -> Result<u64> {
+    value.ok_or_else(|| Error::validation(format!("stress profile missing {name}")))
+}
+
+fn validation_stress_budget_failures(
+    measurements: &ValidationBrokerStressMeasurements,
+    budgets: &ValidationBrokerStressBudgets,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    push_stress_max_failure(
+        &mut failures,
+        "plan_latency_ms",
+        measurements.plan_latency_ms,
+        budgets.max_plan_latency_ms,
+    );
+    push_stress_max_failure(
+        &mut failures,
+        "status_latency_ms",
+        measurements.status_latency_ms,
+        budgets.max_status_latency_ms,
+    );
+    push_stress_max_failure(
+        &mut failures,
+        "stale_scan_ms",
+        measurements.stale_scan_ms,
+        budgets.max_stale_scan_ms,
+    );
+    push_stress_max_failure(
+        &mut failures,
+        "slot_store_bytes",
+        measurements.slot_store_bytes,
+        budgets.max_slot_store_bytes,
+    );
+    push_stress_max_failure(
+        &mut failures,
+        "memory_growth_bytes",
+        measurements.memory_growth_bytes,
+        budgets.max_memory_growth_bytes,
+    );
+    push_stress_min_failure(
+        &mut failures,
+        "request_throughput_per_minute",
+        measurements.request_throughput_per_minute,
+        budgets.min_request_throughput_per_minute,
+    );
+    failures
+}
+
+fn push_stress_max_failure(
+    failures: &mut Vec<String>,
+    metric: &str,
+    actual: Option<u64>,
+    maximum: u64,
+) {
+    match actual {
+        Some(value) if value > maximum => failures.push(format!("{metric}_exceeded")),
+        None => failures.push(format!("{metric}_missing")),
+        Some(_) => {}
+    }
+}
+
+fn push_stress_min_failure(
+    failures: &mut Vec<String>,
+    metric: &str,
+    actual: Option<u64>,
+    minimum: u64,
+) {
+    match actual {
+        Some(value) if value < minimum => failures.push(format!("{metric}_below_minimum")),
+        None => failures.push(format!("{metric}_missing")),
+        Some(_) => {}
+    }
+}
+
+const fn blocked_validation_stress_measurements() -> ValidationBrokerStressMeasurements {
+    ValidationBrokerStressMeasurements {
+        plan_latency_ms: None,
+        status_latency_ms: None,
+        stale_scan_ms: None,
+        request_throughput_per_minute: None,
+        slot_store_bytes: None,
+        memory_growth_bytes: None,
+        duplicate_gate_opportunities: None,
+    }
+}
+
+fn validation_stress_input_fingerprint(
+    profile: &ValidationBrokerStressProfile,
+    budgets: &ValidationBrokerStressBudgets,
+    provenance: &ValidationSourceProvenance,
+) -> Result<String> {
+    fingerprint_json(&json!({
+        "profile": profile,
+        "budgets": budgets,
+        "provenance": provenance,
+    }))
+}
+
+const fn div_ceil(value: u64, divisor: u64) -> u64 {
+    value.div_ceil(divisor)
 }
 
 fn validate_request(request: &ValidationSlotRequest) -> Result<()> {

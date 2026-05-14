@@ -1,0 +1,288 @@
+{
+  "schema": "pi.validation_broker.stress_budget_report.v1",
+  "entry_schema": "pi.validation_broker.stress_evidence.v1",
+  "bead_id": "bd-gusp4.9",
+  "parent_bead_id": "bd-gusp4",
+  "generated_at_utc": "2026-05-14T17:05:00Z",
+  "summary": "Synthetic large-host validation-broker stress budgets for engineering decisions only. This artifact is not release performance evidence and cannot replace RCH, Doctor, cargo_headroom, CI, UBS, Beads, Agent Mail, or required repo gates.",
+  "budget_profile": "large_host_validation_broker",
+  "budgets": {
+    "max_plan_latency_ms": 20,
+    "max_status_latency_ms": 10,
+    "max_stale_scan_ms": 16,
+    "max_slot_store_bytes": 4194304,
+    "max_memory_growth_bytes": 8388608,
+    "min_request_throughput_per_minute": 240
+  },
+  "required_profiles": [
+    "synthetic_64c_256gb_nominal",
+    "synthetic_64c_256gb_saturated",
+    "synthetic_64c_256gb_missing_store_bytes"
+  ],
+  "guards": [
+    "synthetic_only",
+    "not_release_performance_evidence",
+    "not_ci_success",
+    "does_not_replace_rch_doctor_cargo_headroom_ci_ubs_beads_agent_mail",
+    "missing_data_blocks_measurements"
+  ],
+  "scenarios": [
+    {
+      "schema": "pi.validation_broker.stress_evidence.v1",
+      "generated_at_utc": "2026-05-14T17:05:00Z",
+      "profile": {
+        "profile_id": "synthetic_64c_256gb_nominal",
+        "source_kind": "synthetic",
+        "cpu_count": 64,
+        "memory_bytes": 274877906944,
+        "active_agents": 16,
+        "requested_validations_per_minute": 24,
+        "total_slots": 32,
+        "active_slots": 8,
+        "reusable_slots": 6,
+        "stale_slots": 1,
+        "slot_store_records": 2400,
+        "slot_store_bytes": 860000
+      },
+      "budgets": {
+        "max_plan_latency_ms": 20,
+        "max_status_latency_ms": 10,
+        "max_stale_scan_ms": 16,
+        "max_slot_store_bytes": 4194304,
+        "max_memory_growth_bytes": 8388608,
+        "min_request_throughput_per_minute": 240
+      },
+      "measurements": {
+        "plan_latency_ms": 8,
+        "status_latency_ms": 5,
+        "stale_scan_ms": 6,
+        "request_throughput_per_minute": 1440,
+        "slot_store_bytes": 860000,
+        "memory_growth_bytes": 1106784,
+        "duplicate_gate_opportunities": 6
+      },
+      "verdict": "pass",
+      "budget_failures": [],
+      "missing_data": [],
+      "caveats": [
+        "synthetic_large_host_profile_not_release_performance_evidence",
+        "does_not_replace_rch_doctor_cargo_headroom_ci_or_required_repo_gates"
+      ],
+      "provenance": {
+        "schema": "pi.validation_broker.source_provenance.v1",
+        "source": "validation_broker_stress",
+        "command": [
+          "cargo",
+          "test",
+          "--test",
+          "validation_broker_store",
+          "validation_broker_large_host_stress_budget_evidence_is_fail_closed"
+        ],
+        "cwd": "/data/projects/pi_agent_rust",
+        "captured_at_utc": "2026-05-14T17:05:00Z",
+        "artifact_path": "docs/evidence/validation-broker-stress-budgets.json"
+      },
+      "cache": {
+        "cache_key": "validation-broker-stress:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cache_status": "cold_synthetic_fixture",
+        "ttl_seconds": 86400,
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "guards": {
+        "synthetic_data": true,
+        "no_live_rch_mutation": true,
+        "provider_calls": 0,
+        "live_mutations": 0,
+        "release_claim_allowed": false
+      },
+      "suppressed_claims": [
+        "not_ci_success",
+        "not_release_performance_evidence",
+        "not_dropin_certification_evidence",
+        "not_permission_to_skip_required_gates",
+        "not_permission_to_modify_other_agents_files"
+      ],
+      "no_claims": [
+        "not_ci_success",
+        "not_release_performance_evidence",
+        "not_dropin_certification_evidence",
+        "not_permission_to_skip_required_gates",
+        "not_permission_to_modify_other_agents_files"
+      ]
+    },
+    {
+      "schema": "pi.validation_broker.stress_evidence.v1",
+      "generated_at_utc": "2026-05-14T17:05:00Z",
+      "profile": {
+        "profile_id": "synthetic_64c_256gb_saturated",
+        "source_kind": "synthetic",
+        "cpu_count": 64,
+        "memory_bytes": 274877906944,
+        "active_agents": 96,
+        "requested_validations_per_minute": 160,
+        "total_slots": 32,
+        "active_slots": 32,
+        "reusable_slots": 3,
+        "stale_slots": 14,
+        "slot_store_records": 20000,
+        "slot_store_bytes": 8750000
+      },
+      "budgets": {
+        "max_plan_latency_ms": 20,
+        "max_status_latency_ms": 10,
+        "max_stale_scan_ms": 16,
+        "max_slot_store_bytes": 4194304,
+        "max_memory_growth_bytes": 8388608,
+        "min_request_throughput_per_minute": 240
+      },
+      "measurements": {
+        "plan_latency_ms": 22,
+        "status_latency_ms": 9,
+        "stale_scan_ms": 23,
+        "request_throughput_per_minute": 0,
+        "slot_store_bytes": 8750000,
+        "memory_growth_bytes": 10768304,
+        "duplicate_gate_opportunities": 3
+      },
+      "verdict": "fail",
+      "budget_failures": [
+        "plan_latency_ms_exceeded",
+        "stale_scan_ms_exceeded",
+        "slot_store_bytes_exceeded",
+        "memory_growth_bytes_exceeded",
+        "request_throughput_per_minute_below_minimum"
+      ],
+      "missing_data": [],
+      "caveats": [
+        "synthetic_large_host_profile_not_release_performance_evidence",
+        "does_not_replace_rch_doctor_cargo_headroom_ci_or_required_repo_gates"
+      ],
+      "provenance": {
+        "schema": "pi.validation_broker.source_provenance.v1",
+        "source": "validation_broker_stress",
+        "command": [
+          "cargo",
+          "test",
+          "--test",
+          "validation_broker_store",
+          "validation_broker_large_host_stress_budget_evidence_is_fail_closed"
+        ],
+        "cwd": "/data/projects/pi_agent_rust",
+        "captured_at_utc": "2026-05-14T17:05:00Z",
+        "artifact_path": "docs/evidence/validation-broker-stress-budgets.json"
+      },
+      "cache": {
+        "cache_key": "validation-broker-stress:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "cache_status": "cold_synthetic_fixture",
+        "ttl_seconds": 86400,
+        "input_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "guards": {
+        "synthetic_data": true,
+        "no_live_rch_mutation": true,
+        "provider_calls": 0,
+        "live_mutations": 0,
+        "release_claim_allowed": false
+      },
+      "suppressed_claims": [
+        "not_ci_success",
+        "not_release_performance_evidence",
+        "not_dropin_certification_evidence",
+        "not_permission_to_skip_required_gates",
+        "not_permission_to_modify_other_agents_files"
+      ],
+      "no_claims": [
+        "not_ci_success",
+        "not_release_performance_evidence",
+        "not_dropin_certification_evidence",
+        "not_permission_to_skip_required_gates",
+        "not_permission_to_modify_other_agents_files"
+      ]
+    },
+    {
+      "schema": "pi.validation_broker.stress_evidence.v1",
+      "generated_at_utc": "2026-05-14T17:05:00Z",
+      "profile": {
+        "profile_id": "synthetic_64c_256gb_missing_store_bytes",
+        "source_kind": "synthetic",
+        "cpu_count": 64,
+        "memory_bytes": 274877906944,
+        "active_agents": 16,
+        "requested_validations_per_minute": 24,
+        "total_slots": 32,
+        "active_slots": 8,
+        "reusable_slots": 6,
+        "stale_slots": 1,
+        "slot_store_records": 2400,
+        "slot_store_bytes": null
+      },
+      "budgets": {
+        "max_plan_latency_ms": 20,
+        "max_status_latency_ms": 10,
+        "max_stale_scan_ms": 16,
+        "max_slot_store_bytes": 4194304,
+        "max_memory_growth_bytes": 8388608,
+        "min_request_throughput_per_minute": 240
+      },
+      "measurements": {
+        "plan_latency_ms": null,
+        "status_latency_ms": null,
+        "stale_scan_ms": null,
+        "request_throughput_per_minute": null,
+        "slot_store_bytes": null,
+        "memory_growth_bytes": null,
+        "duplicate_gate_opportunities": null
+      },
+      "verdict": "blocked",
+      "budget_failures": [],
+      "missing_data": [
+        "slot_store_bytes"
+      ],
+      "caveats": [
+        "synthetic_large_host_profile_not_release_performance_evidence",
+        "does_not_replace_rch_doctor_cargo_headroom_ci_or_required_repo_gates"
+      ],
+      "provenance": {
+        "schema": "pi.validation_broker.source_provenance.v1",
+        "source": "validation_broker_stress",
+        "command": [
+          "cargo",
+          "test",
+          "--test",
+          "validation_broker_store",
+          "validation_broker_large_host_stress_budget_evidence_is_fail_closed"
+        ],
+        "cwd": "/data/projects/pi_agent_rust",
+        "captured_at_utc": "2026-05-14T17:05:00Z",
+        "artifact_path": "docs/evidence/validation-broker-stress-budgets.json"
+      },
+      "cache": {
+        "cache_key": "validation-broker-stress:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "cache_status": "cold_synthetic_fixture",
+        "ttl_seconds": 86400,
+        "input_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "guards": {
+        "synthetic_data": true,
+        "no_live_rch_mutation": true,
+        "provider_calls": 0,
+        "live_mutations": 0,
+        "release_claim_allowed": false
+      },
+      "suppressed_claims": [
+        "not_ci_success",
+        "not_release_performance_evidence",
+        "not_dropin_certification_evidence",
+        "not_permission_to_skip_required_gates",
+        "not_permission_to_modify_other_agents_files"
+      ],
+      "no_claims": [
+        "not_ci_success",
+        "not_release_performance_evidence",
+        "not_dropin_certification_evidence",
+        "not_permission_to_skip_required_gates",
+        "not_permission_to_modify_other_agents_files"
+      ]
+    }
+  ]
+}

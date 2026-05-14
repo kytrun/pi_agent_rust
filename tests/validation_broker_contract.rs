@@ -12,6 +12,9 @@ const EXPECTED_SLOT_SCHEMA: &str = "pi.validation_broker.slot.v1";
 const EXPECTED_DECISION_SCHEMA: &str = "pi.validation_broker.decision.v1";
 const EXPECTED_FAULT_CORPUS_SCHEMA: &str = "pi.validation_broker.fault_corpus.v1";
 const EXPECTED_FAULT_EVENT_SCHEMA: &str = "pi.validation_broker.fault_event.v1";
+const EXPECTED_STRESS_PROFILE_CORPUS_SCHEMA: &str = "pi.validation_broker.stress_profile_corpus.v1";
+const EXPECTED_STRESS_BUDGET_REPORT_SCHEMA: &str = "pi.validation_broker.stress_budget_report.v1";
+const EXPECTED_STRESS_EVIDENCE_SCHEMA: &str = "pi.validation_broker.stress_evidence.v1";
 const EXPECTED_BEAD_ID: &str = "bd-gusp4.1";
 const EXPECTED_PARENT_BEAD_ID: &str = "bd-gusp4";
 
@@ -460,6 +463,263 @@ fn validation_broker_contract_declares_fault_corpus() -> TestResult {
         event_count >= scenarios.len(),
         "fault event log must cover every corpus scenario",
     )
+}
+
+#[test]
+fn validation_broker_contract_declares_large_host_stress_budgets() -> TestResult {
+    let contract = load_contract()?;
+
+    require(
+        pointer_str(&contract, "/stress_budget_report_schema")?
+            == EXPECTED_STRESS_BUDGET_REPORT_SCHEMA,
+        "stress budget report schema mismatch",
+    )?;
+    require(
+        pointer_str(&contract, "/stress_evidence_schema")? == EXPECTED_STRESS_EVIDENCE_SCHEMA,
+        "stress evidence schema mismatch",
+    )?;
+    require(
+        pointer_str(&contract, "/stress_profile_corpus_schema")?
+            == EXPECTED_STRESS_PROFILE_CORPUS_SCHEMA,
+        "stress profile corpus schema mismatch",
+    )?;
+    require(
+        pointer_str(&contract, "/stress_budget_contract/report_schema")?
+            == EXPECTED_STRESS_BUDGET_REPORT_SCHEMA,
+        "stress budget contract report schema mismatch",
+    )?;
+    require(
+        pointer_str(&contract, "/stress_budget_contract/entry_schema")?
+            == EXPECTED_STRESS_EVIDENCE_SCHEMA,
+        "stress budget contract entry schema mismatch",
+    )?;
+    require_set(
+        &contract,
+        "/stress_budget_contract/required_profiles",
+        &[
+            "synthetic_64c_256gb_nominal",
+            "synthetic_64c_256gb_saturated",
+            "synthetic_64c_256gb_missing_store_bytes",
+        ],
+        "stress profile",
+    )?;
+    require_set(
+        &contract,
+        "/stress_budget_contract/required_verdicts",
+        &["pass", "fail", "blocked"],
+        "stress verdict",
+    )?;
+    require_set(
+        &contract,
+        "/stress_budget_contract/required_guards",
+        &[
+            "synthetic_only",
+            "not_release_performance_evidence",
+            "missing_data_blocks_measurements",
+        ],
+        "stress guard",
+    )?;
+    require_set(
+        &contract,
+        "/stress_budget_contract/required_cache_fields",
+        &[
+            "cache_key",
+            "cache_status",
+            "ttl_seconds",
+            "input_fingerprint",
+        ],
+        "stress cache field",
+    )?;
+    require_set(
+        &contract,
+        "/stress_budget_contract/required_scenario_guards",
+        &[
+            "synthetic_data",
+            "no_live_rch_mutation",
+            "provider_calls",
+            "live_mutations",
+            "release_claim_allowed",
+        ],
+        "stress scenario guard",
+    )?;
+
+    let corpus_path = pointer_str(&contract, "/stress_budget_contract/profile_corpus_path")?;
+    let corpus_abs = repo_root().join(corpus_path);
+    require(corpus_abs.exists(), "stress profile corpus exists")?;
+    let corpus_raw = std::fs::read_to_string(&corpus_abs)
+        .map_err(|err| format!("failed to read {}: {err}", corpus_abs.display()))?;
+    let corpus: Value = serde_json::from_str(&corpus_raw)
+        .map_err(|err| format!("failed to parse {}: {err}", corpus_abs.display()))?;
+    require(
+        pointer_str(&corpus, "/schema")? == EXPECTED_STRESS_PROFILE_CORPUS_SCHEMA,
+        "stress profile corpus schema mismatch",
+    )?;
+    require_stress_budget_fields(
+        &corpus,
+        &contract,
+        "/stress_budget_contract/required_budget_fields",
+        "/budgets",
+    )?;
+
+    let report_path = pointer_str(&contract, "/stress_budget_contract/report_path")?;
+    let report_abs = repo_root().join(report_path);
+    require(
+        report_abs.exists(),
+        "stress budget evidence artifact exists",
+    )?;
+    let report_raw = std::fs::read_to_string(&report_abs)
+        .map_err(|err| format!("failed to read {}: {err}", report_abs.display()))?;
+    let report: Value = serde_json::from_str(&report_raw)
+        .map_err(|err| format!("failed to parse {}: {err}", report_abs.display()))?;
+
+    require(
+        pointer_str(&report, "/schema")? == EXPECTED_STRESS_BUDGET_REPORT_SCHEMA,
+        "stress report artifact schema mismatch",
+    )?;
+    require(
+        pointer_str(&report, "/entry_schema")? == EXPECTED_STRESS_EVIDENCE_SCHEMA,
+        "stress report entry schema mismatch",
+    )?;
+    require_set(
+        &report,
+        "/guards",
+        &[
+            "synthetic_only",
+            "not_release_performance_evidence",
+            "missing_data_blocks_measurements",
+        ],
+        "stress report guard",
+    )?;
+
+    let scenarios = pointer_array(&report, "/scenarios")?;
+    require(scenarios.len() >= 3, "stress report scenario count")?;
+    let mut observed_profiles = HashSet::new();
+    let mut observed_verdicts = HashSet::new();
+    for scenario in scenarios {
+        require(
+            scenario.get("schema").and_then(Value::as_str) == Some(EXPECTED_STRESS_EVIDENCE_SCHEMA),
+            "stress scenario entry schema",
+        )?;
+        let profile_id = scenario
+            .pointer("/profile/profile_id")
+            .and_then(Value::as_str)
+            .ok_or("stress scenario missing profile_id")?;
+        observed_profiles.insert(profile_id);
+        let verdict = scenario
+            .get("verdict")
+            .and_then(Value::as_str)
+            .ok_or("stress scenario missing verdict")?;
+        observed_verdicts.insert(verdict);
+        require_stress_budget_fields(
+            scenario,
+            &contract,
+            "/stress_budget_contract/required_budget_fields",
+            "/budgets",
+        )?;
+        require_stress_budget_fields(
+            scenario,
+            &contract,
+            "/stress_budget_contract/required_measurement_fields",
+            "/measurements",
+        )?;
+        require(
+            scenario
+                .pointer("/cache/input_fingerprint")
+                .and_then(Value::as_str)
+                .is_some(),
+            "stress scenario cache fingerprint",
+        )?;
+        require_stress_budget_fields(
+            scenario,
+            &contract,
+            "/stress_budget_contract/required_cache_fields",
+            "/cache",
+        )?;
+        require_stress_budget_fields(
+            scenario,
+            &contract,
+            "/stress_budget_contract/required_scenario_guards",
+            "/guards",
+        )?;
+        require(
+            scenario
+                .pointer("/guards/no_live_rch_mutation")
+                .and_then(Value::as_bool)
+                == Some(true)
+                && scenario
+                    .pointer("/guards/provider_calls")
+                    .and_then(Value::as_u64)
+                    == Some(0)
+                && scenario
+                    .pointer("/guards/live_mutations")
+                    .and_then(Value::as_u64)
+                    == Some(0)
+                && scenario
+                    .pointer("/guards/release_claim_allowed")
+                    .and_then(Value::as_bool)
+                    == Some(false),
+            "stress scenario guards block live mutation and release claims",
+        )?;
+        require(
+            scenario
+                .pointer("/provenance/artifact_path")
+                .and_then(Value::as_str)
+                == Some(report_path),
+            "stress scenario provenance points at report artifact",
+        )?;
+        require_set(
+            scenario,
+            "/no_claims",
+            &[
+                "not_ci_success",
+                "not_release_performance_evidence",
+                "not_permission_to_skip_required_gates",
+            ],
+            "stress no-claim",
+        )?;
+        if verdict == "blocked" {
+            require(
+                !pointer_array(scenario, "/missing_data")?.is_empty(),
+                "blocked stress scenario names missing data",
+            )?;
+            require(
+                scenario
+                    .pointer("/measurements/plan_latency_ms")
+                    .is_some_and(Value::is_null),
+                "blocked stress scenario does not invent plan latency",
+            )?;
+        }
+    }
+
+    for required_profile in string_set(&contract, "/stress_budget_contract/required_profiles")? {
+        if !observed_profiles.contains(required_profile) {
+            return Err(format!("stress report missing profile {required_profile}"));
+        }
+    }
+    for required_verdict in string_set(&contract, "/stress_budget_contract/required_verdicts")? {
+        if !observed_verdicts.contains(required_verdict) {
+            return Err(format!("stress report missing verdict {required_verdict}"));
+        }
+    }
+
+    Ok(())
+}
+
+fn require_stress_budget_fields(
+    scenario: &Value,
+    contract: &Value,
+    contract_path: &str,
+    scenario_path: &str,
+) -> TestResult {
+    for field in string_set(contract, contract_path)? {
+        require(
+            scenario
+                .pointer(&format!("{scenario_path}/{field}"))
+                .is_some(),
+            format!("stress scenario missing {scenario_path}/{field}"),
+        )?;
+    }
+    Ok(())
 }
 
 fn missing_fault_message(required_fault: &str) -> String {
