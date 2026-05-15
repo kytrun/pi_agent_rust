@@ -104,6 +104,37 @@ python3 scripts/check_ubs_staged_delta.py
 
 If `timeout 60s ubs --staged --only=rust .` times out or is dominated by whole-file baseline noise, run `python3 scripts/check_ubs_staged_delta.py`. The delta gate is acceptable only when it reports no warning or critical finding on staged changed lines. Keep the raw timeout or baseline-noise summary in the handoff.
 
+## Remote Validation Proof Ledger
+
+Remote validation proof is governed by
+`docs/contracts/remote-validation-proof-ledger-contract.json` with ledger schema
+`pi.remote_validation.proof_ledger.v1`. The ledger is operator evidence only;
+it is not release performance evidence, benchmark support, strict drop-in
+certification evidence, or a replacement for RCH, `cargo_headroom.sh`, CI, UBS,
+Beads, Agent Mail, or claim-integrity gates.
+
+Each proof entry must identify the command, command class, runner requirement,
+resolved runner, RCH worker/job, remote/local fallback state, start/end
+timestamps, exit status, `CARGO_TARGET_DIR`, `TMPDIR`, remote target/tmp paths,
+artifact retrieval status, warnings, and the final evidence classification.
+
+Interpretation rules:
+
+- `clean_remote_proof=true` requires an RCH remote run, successful command exit,
+  no local fallback, and clean or non-applicable artifact retrieval.
+- `local_fallback=observed` is never remote proof.
+- `local_fallback=refused` is a correct fail-closed blocker for RCH-required
+  gates, not a pass.
+- Queue backoff must be recorded as a blocked proof entry rather than converted
+  into a skipped green gate.
+- Artifact retrieval warnings must stay visible in handoff. A remote command can
+  exit 0 while artifact retrieval is degraded; that is not clean remote proof.
+
+Golden examples live in
+`tests/golden_corpus/remote_validation_proof_ledger/examples.json` and cover a
+clean remote pass, local-fallback refusal, queue backoff, and artifact retrieval
+warning.
+
 ## Monitor An Active Swarm
 
 Use this status loop while work is in progress:
