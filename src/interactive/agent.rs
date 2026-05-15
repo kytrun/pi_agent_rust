@@ -101,6 +101,7 @@ struct UiStreamDeltaBatcher {
 }
 
 impl UiStreamDeltaBatcher {
+    #[cfg(test)]
     fn new(sender: mpsc::Sender<PiMsg>) -> Self {
         Self::new_with_frame_p99(sender, Arc::new(AtomicU64::new(0)))
     }
@@ -3006,9 +3007,6 @@ mod stream_delta_batcher_tests {
             super::super::tree::PendingTreeNavigation {
                 session_id,
                 old_leaf_id: current_leaf_id,
-                selected_entry_id: target_leaf_id
-                    .clone()
-                    .expect("target leaf id for pending navigation"),
                 new_leaf_id: target_leaf_id,
                 editor_text: None,
                 entries_to_summarize: Vec::new(),

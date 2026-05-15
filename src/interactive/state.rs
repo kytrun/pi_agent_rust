@@ -228,19 +228,6 @@ pub(super) struct SessionPickerOverlay {
 }
 
 impl SessionPickerOverlay {
-    pub(super) fn new(sessions: Vec<SessionMeta>) -> Self {
-        Self {
-            all_sessions: sessions.clone(),
-            sessions,
-            query: String::new(),
-            selected: 0,
-            max_visible: 10,
-            confirm_delete: false,
-            status_message: None,
-            sessions_root: None,
-        }
-    }
-
     pub(super) fn new_with_root(
         sessions: Vec<SessionMeta>,
         sessions_root: Option<PathBuf>,
@@ -1013,24 +1000,6 @@ impl ToolProgress {
                 self.timeout_ms = Some(v);
             }
         }
-    }
-
-    /// Format a compact status string like `"Running bash · 3s · 42 lines"`.
-    pub(super) fn format_display(&self, tool_name: &str) -> String {
-        let secs = self.elapsed_ms / 1000;
-        let mut parts = vec![format!("Running {tool_name}"), format!("{secs}s")];
-        if self.line_count > 0 {
-            parts.push(format!("{} lines", format_count(self.line_count)));
-        } else if self.byte_count > 0 {
-            parts.push(format!("{} bytes", format_count(self.byte_count)));
-        }
-        if let Some(timeout_ms) = self.timeout_ms {
-            let timeout_s = timeout_ms / 1000;
-            if timeout_s > 0 {
-                parts.push(format!("timeout {timeout_s}s"));
-            }
-        }
-        parts.join(" \u{2022} ")
     }
 }
 

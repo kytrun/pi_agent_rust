@@ -484,6 +484,7 @@ impl MemoryMonitor {
     }
 
     /// Whether Critical-level rendering degradation should be forced.
+    #[cfg(test)]
     pub(super) const fn should_force_degraded(&self) -> bool {
         matches!(self.level, MemoryLevel::Critical)
     }
@@ -829,6 +830,7 @@ impl MessageRenderCache {
 
     /// Look up the cached rendered string for message at `index`.
     /// Returns `Some(&str)` on cache hit, `None` on miss.
+    #[cfg(test)]
     pub(super) fn get(&self, index: usize, key: &MessageCacheKey) -> Option<String> {
         let entries = self.entries.borrow();
         let gens = self.entry_generations.borrow();
@@ -965,8 +967,10 @@ pub struct RenderBuffers {
     /// The buffer is put back (capacity preserved) after use.
     conversation: RefCell<String>,
     /// Reusable buffer for `render_header()`.
+    #[cfg(test)]
     header: RefCell<String>,
     /// Reusable buffer for `render_footer()`.
+    #[cfg(test)]
     footer: RefCell<String>,
     /// Capacity of the previous frame's final view output.
     /// Used to pre-allocate the next frame's output String via
@@ -979,13 +983,16 @@ pub struct RenderBuffers {
 const INITIAL_VIEW_CAPACITY: usize = 80 * 24 * 4;
 
 /// Initial capacity for header/footer buffers (small: ~512 bytes typical).
+#[cfg(test)]
 const INITIAL_CHROME_CAPACITY: usize = 512;
 
 impl RenderBuffers {
     pub(super) fn new() -> Self {
         Self {
             conversation: RefCell::new(String::with_capacity(INITIAL_VIEW_CAPACITY)),
+            #[cfg(test)]
             header: RefCell::new(String::with_capacity(INITIAL_CHROME_CAPACITY)),
+            #[cfg(test)]
             footer: RefCell::new(String::with_capacity(INITIAL_CHROME_CAPACITY)),
             view_capacity_hint: std::cell::Cell::new(INITIAL_VIEW_CAPACITY),
         }
@@ -1007,6 +1014,7 @@ impl RenderBuffers {
 
     /// Borrow the header buffer mutably, clearing it for reuse.
     /// The caller writes into the returned `RefMut` via `push_str` / `write!`.
+    #[cfg(test)]
     pub(super) fn header_buf(&self) -> std::cell::RefMut<'_, String> {
         let mut buf = self.header.borrow_mut();
         buf.clear();
@@ -1014,6 +1022,7 @@ impl RenderBuffers {
     }
 
     /// Borrow the footer buffer mutably, clearing it for reuse.
+    #[cfg(test)]
     pub(super) fn footer_buf(&self) -> std::cell::RefMut<'_, String> {
         let mut buf = self.footer.borrow_mut();
         buf.clear();

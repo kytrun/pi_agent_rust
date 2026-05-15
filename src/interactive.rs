@@ -1104,10 +1104,6 @@ impl PiApp {
         self.autocomplete.open_with(response);
     }
 
-    fn trigger_autocomplete(&mut self) {
-        self.maybe_trigger_autocomplete();
-    }
-
     /// Compute the conversation viewport height based on the current UI chrome.
     ///
     /// This delegates to [`view_effective_conversation_height`] so viewport
@@ -1788,13 +1784,6 @@ pub async fn run_interactive(
 
 pub(crate) async fn enqueue_pi_event(event_tx: &mpsc::Sender<PiMsg>, cx: &Cx, msg: PiMsg) -> bool {
     event_tx.send(cx, msg).await.is_ok()
-}
-
-pub(crate) async fn enqueue_pi_event_current(event_tx: &mpsc::Sender<PiMsg>, msg: PiMsg) -> bool {
-    // UI events should always reach the user, even if the emitting background task
-    // has been cancelled. Use a fresh request context to bypass task cancellation.
-    let cx = Cx::for_request();
-    enqueue_pi_event(event_tx, &cx, msg).await
 }
 
 pub(crate) async fn enqueue_ui_shutdown(event_tx: &mpsc::Sender<PiMsg>, cx: &Cx) {

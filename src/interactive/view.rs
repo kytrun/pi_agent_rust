@@ -658,6 +658,7 @@ impl PiApp {
         );
     }
 
+    #[cfg(test)]
     pub(super) fn render_header(&self) -> String {
         let mut buf = String::new();
         self.render_header_into(&mut buf);
@@ -814,6 +815,7 @@ impl PiApp {
         let _ = write!(output, "\n  {}\n", self.styles.muted.render(&footer));
     }
 
+    #[cfg(test)]
     pub(super) fn render_footer(&self) -> String {
         let mut buf = String::new();
         self.render_footer_into(&mut buf);

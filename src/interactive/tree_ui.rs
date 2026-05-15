@@ -72,7 +72,6 @@ impl PiApp {
                         let pending = PendingTreeNavigation {
                             session_id,
                             old_leaf_id,
-                            selected_entry_id: selected.id,
                             new_leaf_id,
                             editor_text,
                             entries_to_summarize,
@@ -230,7 +229,6 @@ impl PiApp {
         let pending = PendingTreeNavigation {
             session_id,
             old_leaf_id,
-            selected_entry_id: leaf_id.to_string(),
             new_leaf_id: Some(leaf_id.to_string()),
             editor_text: None,
             entries_to_summarize: Vec::new(),

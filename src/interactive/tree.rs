@@ -46,7 +46,6 @@ pub(super) struct TreeSelectorState {
 pub(super) struct PendingTreeNavigation {
     pub(super) session_id: String,
     pub(super) old_leaf_id: Option<String>,
-    pub(super) selected_entry_id: String,
     pub(super) new_leaf_id: Option<String>,
     pub(super) editor_text: Option<String>,
     pub(super) entries_to_summarize: Vec<SessionEntry>,
