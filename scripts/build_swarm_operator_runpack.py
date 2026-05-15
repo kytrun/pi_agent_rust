@@ -6607,12 +6607,17 @@ def assert_autopilot_plan_contract(plan: dict[str, Any]) -> None:
 def canonicalize_for_golden(value: Any, workspace: Path) -> Any:
     workspace_text = str(workspace)
     if isinstance(value, dict):
-        return {
-            key: "[SHA256]"
-            if key == "sha256" and isinstance(item, str)
-            else canonicalize_for_golden(item, workspace)
-            for key, item in value.items()
-        }
+        path_value = value.get("path")
+        workspace_scoped_path = isinstance(path_value, str) and workspace_text in path_value
+        canonicalized = {}
+        for key, item in value.items():
+            if key == "sha256" and isinstance(item, str):
+                canonicalized[key] = "[SHA256]"
+            elif key == "size_bytes" and workspace_scoped_path:
+                canonicalized[key] = "[SIZE_BYTES]"
+            else:
+                canonicalized[key] = canonicalize_for_golden(item, workspace)
+        return canonicalized
     if isinstance(value, list):
         return [canonicalize_for_golden(item, workspace) for item in value]
     if isinstance(value, str):
@@ -8721,6 +8726,7 @@ def build_context_intelligence_closeout_gate_summary(
     quality_gate_results: list[dict[str, Any]],
     issue_export_path: Path | None = None,
     git_refs: dict[str, str | None] | None = None,
+    commit_check_override: bool | None = None,
 ) -> dict[str, Any]:
     root = repo_root()
     script_path = root / "scripts/build_swarm_operator_runpack.py"
@@ -8775,25 +8781,38 @@ def build_context_intelligence_closeout_gate_summary(
             for path in row.get(key, [])
         }
     )
+    artifact_paths_exist = paths_exist(root, artifact_paths)
+    commits_present = (
+        commit_check_override
+        if commit_check_override is not None
+        else commits_exist(root, commits)
+    )
     checklist.append(
         gate_check(
             "child_beads_closed",
             "All context-intelligence implementation child Beads are closed and mapped to artifacts.",
-            not missing_children and paths_exist(root, artifact_paths) and commits_exist(root, commits),
+            not missing_children and artifact_paths_exist and commits_present,
             [
                 {
                     "path": ".beads/issues.jsonl",
                     "child_statuses": child_states,
                     "close_reasons": child_close_reasons,
                     "artifact_path_count": len(artifact_paths),
+                    "artifact_paths_exist": artifact_paths_exist,
                     "commits": commits,
+                    "commits_present": commits_present,
+                    "commit_check_source": (
+                        "self_test_fixture_override"
+                        if commit_check_override is not None
+                        else "git_cat_file"
+                    ),
                 }
             ],
             issue=(
                 f"children not closed: {', '.join(missing_children)}"
                 if missing_children
                 else "one or more mapped artifact paths or commits are missing"
-                if not paths_exist(root, artifact_paths) or not commits_exist(root, commits)
+                if not artifact_paths_exist or not commits_present
                 else None
             ),
         )
@@ -11791,6 +11810,7 @@ def run_self_test() -> int:
                 "origin_main": "contextfinalgatefixture",
                 "origin_master": "contextfinalgatefixture",
             },
+            commit_check_override=True,
         )
         assert context_final_gate["schema"] == CONTEXT_INTELLIGENCE_CLOSEOUT_GATE_SCHEMA
         assert context_final_gate["status"] == "pass"

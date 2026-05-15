@@ -1102,7 +1102,7 @@
         "id": "events_jsonl",
         "path": "[WORKSPACE]/events.jsonl",
         "sha256": "[SHA256]",
-        "size_bytes": 128
+        "size_bytes": "[SIZE_BYTES]"
       }
     ],
     "artifact_paths": {
@@ -1125,7 +1125,7 @@
       "path": "[WORKSPACE]/doctor.json",
       "schema": null,
       "sha256": "[SHA256]",
-      "size_bytes": 5137,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1134,7 +1134,7 @@
       "path": "[WORKSPACE]/claim.json",
       "schema": "pi.swarm.claim_readiness_report.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 373,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1143,7 +1143,7 @@
       "path": "[WORKSPACE]/smoke.json",
       "schema": "pi.swarm.smoke_harness.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 636,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1152,7 +1152,7 @@
       "path": "[WORKSPACE]/activity.json",
       "schema": "pi.swarm.activity_digest.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 368,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1161,7 +1161,7 @@
       "path": "[WORKSPACE]/cargo.json",
       "schema": "pi.cargo_headroom.admission.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 806,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1170,7 +1170,7 @@
       "path": "[WORKSPACE]/beads.json",
       "schema": null,
       "sha256": "[SHA256]",
-      "size_bytes": 340,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1179,7 +1179,7 @@
       "path": "[WORKSPACE]/git-status.json",
       "schema": "pi.swarm.git_context.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 465,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1188,7 +1188,7 @@
       "path": "[WORKSPACE]/tail-latency.json",
       "schema": "pi.operator_tail_latency.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 735,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1197,7 +1197,7 @@
       "path": "[WORKSPACE]/flight-recorder-report.json",
       "schema": "pi.swarm.flight_recorder.report.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 434,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1206,7 +1206,7 @@
       "path": "[WORKSPACE]/host-preflight.json",
       "schema": "pi.doctor.swarm_resource_preflight.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 1245,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1215,7 +1215,7 @@
       "path": "[WORKSPACE]/hostcall-profile.json",
       "schema": "pi.ext.hostcall_admission_swarm_profile.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 343,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1224,7 +1224,7 @@
       "path": "[WORKSPACE]/session-recovery-profile.json",
       "schema": "pi.session_store_v2.recovery_swarm_profile.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 312,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1233,7 +1233,7 @@
       "path": "[WORKSPACE]/rpc-swarm-e2e.json",
       "schema": "pi.rpc.concurrent_swarm_e2e.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 260,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1242,7 +1242,7 @@
       "path": "[WORKSPACE]/rch-artifact-sync.json",
       "schema": "pi.rch.artifact_sync_preflight.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 264,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     },
     {
@@ -1251,7 +1251,7 @@
       "path": "[WORKSPACE]/progress-slo.json",
       "schema": "pi.swarm.progress_slo.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 2002,
+      "size_bytes": "[SIZE_BYTES]",
       "status": "ok"
     }
   ],
@@ -1516,7 +1516,7 @@
         "inferred_status": "failed",
         "path": "[WORKSPACE]/validation.log",
         "sha256": "[SHA256]",
-        "size_bytes": 71,
+        "size_bytes": "[SIZE_BYTES]",
         "snippet": "cargo clippy failed\nerror: [REDACTED] should be redacted\n"
       }
     ],
