@@ -966,10 +966,10 @@ pub struct RenderBuffers {
     /// Taken via `std::mem::take`, built into, then returned.
     /// The buffer is put back (capacity preserved) after use.
     conversation: RefCell<String>,
-    /// Reusable buffer for `render_header()`.
+    /// Reusable header buffer retained for render-buffer tests.
     #[cfg(test)]
     header: RefCell<String>,
-    /// Reusable buffer for `render_footer()`.
+    /// Reusable footer buffer retained for render-buffer tests.
     #[cfg(test)]
     footer: RefCell<String>,
     /// Capacity of the previous frame's final view output.
