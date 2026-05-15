@@ -28,9 +28,15 @@ use pi::tools::ToolRegistry;
 use pi::vcr::{VcrMode, VcrRecorder};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
+#[cfg(unix)]
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -805,6 +811,904 @@ fn rpc_concurrent_keyless_swarm_e2e_preserves_session_index_and_filesystem_state
             "structured log context should redact sensitive fields"
         );
     });
+}
+
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_HARNESS_SCHEMA: &str = "pi.rpc.crash_interrupt_recovery_soak.v1";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_WORKER_SCHEMA: &str = "pi.rpc.crash_interrupt_recovery_worker.v1";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_WORKER_ENV: &str = "PI_CRASH_INTERRUPT_RECOVERY_WORKER";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_ROLE_ENV: &str = "PI_CRASH_INTERRUPT_RECOVERY_ROLE";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_CYCLE_ENV: &str = "PI_CRASH_INTERRUPT_RECOVERY_CYCLE";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_MODE_ENV: &str = "PI_CRASH_INTERRUPT_RECOVERY_MODE";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_SESSIONS_ENV: &str = "PI_CRASH_INTERRUPT_RECOVERY_SESSIONS_ROOT";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_ARTIFACT_ENV: &str = "PI_CRASH_INTERRUPT_RECOVERY_ARTIFACT_DIR";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_PROJECT_ENV: &str = "PI_CRASH_INTERRUPT_RECOVERY_PROJECT_DIR";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_READY_ENV: &str = "PI_CRASH_INTERRUPT_RECOVERY_READY_PATH";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_SUMMARY_ENV: &str = "PI_CRASH_INTERRUPT_RECOVERY_SUMMARY_PATH";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_SESSION_ENV: &str = "PI_CRASH_INTERRUPT_RECOVERY_SESSION_PATH";
+#[cfg(unix)]
+const CRASH_INTERRUPT_RECOVERY_DEFAULT_TIMEOUT: Duration = Duration::from_secs(45);
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug)]
+enum CrashInterruptRecoveryMode {
+    Crash,
+    Sigint,
+    Sighup,
+}
+
+#[cfg(unix)]
+impl CrashInterruptRecoveryMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Crash => "crash",
+            Self::Sigint => "sigint",
+            Self::Sighup => "sighup",
+        }
+    }
+
+    const fn signal_arg(self) -> &'static str {
+        match self {
+            Self::Crash => "-KILL",
+            Self::Sigint => "-INT",
+            Self::Sighup => "-HUP",
+        }
+    }
+
+    const fn expected_signal(self) -> i32 {
+        match self {
+            Self::Crash => 9,
+            Self::Sigint => 2,
+            Self::Sighup => 1,
+        }
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct SpawnedCrashInterruptWorker {
+    child: Child,
+    stdout_handle: JoinHandle<Vec<u8>>,
+    stderr_handle: JoinHandle<Vec<u8>>,
+    started_at: Instant,
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct CrashInterruptWorkerResult {
+    exit_code: i32,
+    exit_signal: Option<i32>,
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
+}
+
+#[cfg(unix)]
+fn crash_interrupt_recovery_schedule() -> Vec<CrashInterruptRecoveryMode> {
+    let base = [
+        CrashInterruptRecoveryMode::Crash,
+        CrashInterruptRecoveryMode::Sigint,
+        CrashInterruptRecoveryMode::Sighup,
+    ];
+    let configured_cycles = std::env::var("PI_CRASH_INTERRUPT_RECOVERY_CYCLES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0);
+    let cycle_count = configured_cycles.unwrap_or_else(|| {
+        if std::env::var_os("PI_CRASH_INTERRUPT_RECOVERY_LONG").is_some() {
+            base.len() * 3
+        } else {
+            base.len()
+        }
+    });
+    base.iter().copied().cycle().take(cycle_count).collect()
+}
+
+#[cfg(unix)]
+fn crash_interrupt_artifact_path(
+    artifact_dir: &Path,
+    prefix: &str,
+    cycle: usize,
+    mode: CrashInterruptRecoveryMode,
+    extension: &str,
+) -> PathBuf {
+    artifact_dir.join(format!("{prefix}-{cycle}-{}.{extension}", mode.as_str()))
+}
+
+#[cfg(unix)]
+fn crash_interrupt_artifact_name(
+    prefix: &str,
+    cycle: usize,
+    mode: CrashInterruptRecoveryMode,
+    extension: &str,
+) -> String {
+    format!("{prefix}-{cycle}-{}.{extension}", mode.as_str())
+}
+
+#[cfg(unix)]
+fn crash_interrupt_display_path(path: &Path) -> String {
+    path.display().to_string()
+}
+
+#[cfg(unix)]
+fn crash_interrupt_context_field(name: &str, value: impl std::fmt::Display) -> (String, String) {
+    (name.to_owned(), value.to_string())
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn spawn_crash_interrupt_recovery_worker(
+    current_exe: &Path,
+    role: &str,
+    cycle: usize,
+    mode: CrashInterruptRecoveryMode,
+    sessions_root: &Path,
+    artifact_dir: &Path,
+    project_dir: &Path,
+    ready_path: &Path,
+    summary_path: &Path,
+    session_path: Option<&Path>,
+) -> SpawnedCrashInterruptWorker {
+    let mut command = Command::new(current_exe);
+    command
+        .arg("--exact")
+        .arg("crash_interrupt_recovery_worker_process_entrypoint")
+        .arg("--nocapture")
+        .env(CRASH_INTERRUPT_RECOVERY_WORKER_ENV, "1")
+        .env(CRASH_INTERRUPT_RECOVERY_ROLE_ENV, role)
+        .env(CRASH_INTERRUPT_RECOVERY_CYCLE_ENV, cycle.to_string())
+        .env(CRASH_INTERRUPT_RECOVERY_MODE_ENV, mode.as_str())
+        .env(CRASH_INTERRUPT_RECOVERY_SESSIONS_ENV, sessions_root)
+        .env(CRASH_INTERRUPT_RECOVERY_ARTIFACT_ENV, artifact_dir)
+        .env(CRASH_INTERRUPT_RECOVERY_PROJECT_ENV, project_dir)
+        .env(CRASH_INTERRUPT_RECOVERY_READY_ENV, ready_path)
+        .env(CRASH_INTERRUPT_RECOVERY_SUMMARY_ENV, summary_path)
+        .current_dir(project_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(session_path) = session_path {
+        command.env(CRASH_INTERRUPT_RECOVERY_SESSION_ENV, session_path);
+    }
+
+    let mut child = command
+        .spawn()
+        .expect("spawn crash interrupt recovery worker");
+    let mut child_stdout = child.stdout.take().expect("child stdout piped");
+    let mut child_stderr = child.stderr.take().expect("child stderr piped");
+    let stdout_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut child_stdout, &mut buf);
+        buf
+    });
+    let stderr_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut child_stderr, &mut buf);
+        buf
+    });
+
+    SpawnedCrashInterruptWorker {
+        child,
+        stdout_handle,
+        stderr_handle,
+        started_at: Instant::now(),
+    }
+}
+
+#[cfg(unix)]
+fn wait_crash_interrupt_recovery_worker(
+    mut spawned: SpawnedCrashInterruptWorker,
+    timeout: Duration,
+) -> CrashInterruptWorkerResult {
+    let mut timed_out = false;
+    let status = loop {
+        match spawned.child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(_) => {
+                let _ = spawned.child.kill();
+                let _ = spawned.child.wait();
+                break None;
+            }
+        }
+
+        if spawned.started_at.elapsed() > timeout {
+            timed_out = true;
+            let _ = spawned.child.kill();
+            break spawned.child.wait().ok();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    let stdout =
+        String::from_utf8_lossy(&spawned.stdout_handle.join().unwrap_or_default()).to_string();
+    let mut stderr =
+        String::from_utf8_lossy(&spawned.stderr_handle.join().unwrap_or_default()).to_string();
+    if timed_out {
+        stderr = format!("ERROR: timed out after {timeout:?}\n{stderr}");
+    }
+    let exit_signal = status.and_then(|status| status.signal());
+    let exit_code = status.and_then(|status| status.code()).unwrap_or(-1);
+
+    CrashInterruptWorkerResult {
+        exit_code,
+        exit_signal,
+        stdout,
+        stderr,
+        timed_out,
+    }
+}
+
+#[cfg(unix)]
+fn signal_crash_interrupt_recovery_worker(
+    worker: &SpawnedCrashInterruptWorker,
+    mode: CrashInterruptRecoveryMode,
+) {
+    let status = Command::new("kill")
+        .arg(mode.signal_arg())
+        .arg(worker.child.id().to_string())
+        .status()
+        .expect("send worker signal");
+    assert!(status.success(), "kill command failed with {status:?}");
+}
+
+#[cfg(unix)]
+fn wait_for_crash_interrupt_checkpoint(path: &Path, timeout: Duration) -> Value {
+    let started_at = Instant::now();
+    loop {
+        if path.exists() {
+            let raw = std::fs::read_to_string(path).expect("read worker checkpoint");
+            return serde_json::from_str(&raw).unwrap_or_else(|source| {
+                exit_crash_interrupt_worker(CrashInterruptCheckpointParseError { path, source })
+            });
+        }
+        assert!(
+            started_at.elapsed() <= timeout,
+            "timed out waiting for worker checkpoint {}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(unix)]
+struct CrashInterruptCheckpointParseError<'a> {
+    path: &'a Path,
+    source: serde_json::Error,
+}
+
+#[cfg(unix)]
+impl std::fmt::Display for CrashInterruptCheckpointParseError<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "parse worker checkpoint {}: {}",
+            self.path.display(),
+            self.source
+        )
+    }
+}
+
+#[cfg(unix)]
+fn exit_crash_interrupt_worker(message: impl std::fmt::Display) -> ! {
+    use std::io::Write as _;
+
+    let _ = writeln!(std::io::stderr(), "{message}");
+    std::process::exit(2);
+}
+
+#[cfg(unix)]
+fn write_json_atomic(path: &Path, value: &Value) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create json artifact parent");
+    }
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(
+        &tmp_path,
+        serde_json::to_string_pretty(value).expect("serialize json artifact"),
+    )
+    .expect("write json artifact tmp");
+    std::fs::rename(&tmp_path, path).expect("publish json artifact");
+}
+
+#[cfg(unix)]
+fn env_required(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| {
+        exit_crash_interrupt_worker(format!("missing required env var {name}"));
+    })
+}
+
+#[cfg(unix)]
+fn session_lock_path(session_path: &Path) -> PathBuf {
+    let mut lock_path = session_path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    PathBuf::from(lock_path)
+}
+
+#[cfg(unix)]
+fn assert_lock_released(lock_path: &Path) {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+        .expect("open lock file");
+    if let Err(err) = fs4::fs_std::FileExt::try_lock_exclusive(&file) {
+        exit_crash_interrupt_worker(format!(
+            "lock should be released after interrupted worker: {} ({err})",
+            lock_path.display()
+        ));
+    }
+    fs4::fs_std::FileExt::unlock(&file).expect("unlock test lock probe");
+}
+
+#[cfg(unix)]
+fn count_tempish_files(root: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| {
+            let path = entry.path();
+            let file_type = entry.file_type().ok();
+            if file_type.as_ref().is_some_and(std::fs::FileType::is_dir) {
+                return count_tempish_files(&path);
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            usize::from(name.ends_with(".tmp") || name.contains(".tmp."))
+        })
+        .sum()
+}
+
+#[cfg(unix)]
+async fn build_persistent_keyless_agent_session_with_js_extension(
+    session: Session,
+    cwd: &Path,
+    extension_entry: PathBuf,
+) -> AgentSession {
+    let mut agent_session = build_persistent_keyless_agent_session(session, cwd);
+    agent_session
+        .enable_extensions(&[], cwd, None, &[extension_entry])
+        .await
+        .expect("enable crash recovery extension");
+    agent_session
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_lines)]
+fn run_crash_interrupt_recovery_active_worker(
+    cycle: usize,
+    mode: CrashInterruptRecoveryMode,
+    sessions_root: PathBuf,
+    artifact_dir: PathBuf,
+    project_dir: PathBuf,
+    ready_path: PathBuf,
+) {
+    std::fs::create_dir_all(&sessions_root).expect("create sessions root");
+    std::fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+    std::fs::create_dir_all(&project_dir).expect("create project dir");
+
+    let runtime = asupersync::runtime::RuntimeBuilder::multi_thread()
+        .blocking_threads(1, 4)
+        .enable_parking(false)
+        .build()
+        .expect("build active worker runtime");
+    let handle = runtime.handle();
+
+    runtime.block_on(async move {
+        let extension_entry = artifact_dir.join(format!("active-{cycle}-{}.mjs", mode.as_str()));
+        std::fs::write(&extension_entry, RPC_PROMPT_EXTENSION_COMMAND_EXT)
+            .expect("write active worker extension");
+
+        let mut session = Session::create_with_dir(Some(sessions_root.clone()));
+        session.header.cwd = project_dir.display().to_string();
+        session.header.provider = Some("keyless-replay".to_string());
+        session.header.model_id = Some("keyless-rpc-replay".to_string());
+        session.header.thinking_level = Some("off".to_string());
+        let session_id = session.header.id.clone();
+
+        let agent_session = build_persistent_keyless_agent_session_with_js_extension(
+            session,
+            &project_dir,
+            extension_entry,
+        )
+        .await;
+        let options = build_options(
+            &handle,
+            artifact_dir.join(format!("active-{cycle}-auth.json")),
+            vec![],
+            vec![],
+        );
+        let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
+        let (out_tx, out_rx) = rpc_output_channel();
+        let out_rx = Arc::new(Mutex::new(out_rx));
+        let _server = handle.spawn(async move { run(agent_session, options, in_rx, out_tx).await });
+
+        let marker_path = artifact_dir.join(format!("active-{cycle}-{}.txt", mode.as_str()));
+        let marker_content = format!("active-cycle-{cycle}-{}", mode.as_str());
+        let bash = json!({
+            "id": format!("active-{cycle}-bash"),
+            "type": "bash",
+            "command": format!(
+                "printf {} > {}",
+                shell_single_quote(&marker_content),
+                shell_single_quote(&marker_path.display().to_string())
+            ),
+        })
+        .to_string();
+        let bash_resp = send_recv(&in_tx, &out_rx, &bash, "active bash").await;
+        assert_ok(&bash_resp, "bash");
+
+        let extension_prompt = json!({
+            "id": format!("active-{cycle}-extension"),
+            "type": "prompt",
+            "message": "/emit-now",
+        })
+        .to_string();
+        let extension_resp = send_recv(
+            &in_tx,
+            &out_rx,
+            &extension_prompt,
+            "active extension command",
+        )
+        .await;
+        assert_ok(&extension_resp, "prompt");
+        let _messages = wait_for_custom_message(
+            &in_tx,
+            &out_rx,
+            "rpc-note",
+            "rpc-message",
+            "active extension custom message",
+        )
+        .await;
+
+        let prompt = json!({
+            "id": format!("active-{cycle}-prompt"),
+            "type": "prompt",
+            "message": format!("interrupt recovery streaming prompt {cycle}"),
+        })
+        .to_string();
+        let prompt_resp = send_recv(&in_tx, &out_rx, &prompt, "active streaming prompt").await;
+        assert_ok(&prompt_resp, "prompt");
+        let streaming_state = wait_for_streaming_state(&in_tx, &out_rx, cycle).await;
+        let session_file = require_response_field_str(
+            &streaming_state,
+            "sessionFile",
+            "active streaming get_state",
+        );
+        let message_count =
+            require_response_field_u64(&streaming_state, "messageCount", "active get_state");
+
+        write_json_atomic(
+            &ready_path,
+            &json!({
+                "schema": CRASH_INTERRUPT_RECOVERY_WORKER_SCHEMA,
+                "role": "active",
+                "cycle": cycle,
+                "interrupt": mode.as_str(),
+                "sessionId": session_id,
+                "sessionFile": session_file,
+                "messageCountBeforeInterrupt": message_count,
+                "markerPath": marker_path.display().to_string(),
+                "extensionCommandObserved": true,
+                "streamingBeforeInterrupt": is_streaming(&streaming_state),
+            }),
+        );
+
+        loop {
+            asupersync::time::sleep(asupersync::time::wall_now(), Duration::from_secs(60)).await;
+        }
+    });
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_lines)]
+fn run_crash_interrupt_recovery_restart_worker(
+    cycle: usize,
+    mode: CrashInterruptRecoveryMode,
+    sessions_root: PathBuf,
+    artifact_dir: PathBuf,
+    project_dir: PathBuf,
+    session_path: PathBuf,
+    summary_path: PathBuf,
+) {
+    std::fs::create_dir_all(&sessions_root).expect("create sessions root");
+    std::fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+    std::fs::create_dir_all(&project_dir).expect("create project dir");
+
+    let runtime = asupersync::runtime::RuntimeBuilder::multi_thread()
+        .blocking_threads(1, 4)
+        .enable_parking(false)
+        .build()
+        .expect("build restart worker runtime");
+    let handle = runtime.handle();
+
+    runtime.block_on(async move {
+        let (loaded, diagnostics) =
+            Session::open_with_diagnostics(session_path.to_string_lossy().as_ref())
+                .await
+                .expect("restart worker opens interrupted session");
+        assert!(
+            diagnostics.skipped_entries.is_empty(),
+            "restart should not skip interrupted session entries: {diagnostics:?}"
+        );
+        let message_count_before = loaded.to_messages_for_current_path().len();
+
+        let extension_entry = artifact_dir.join(format!("restart-{cycle}-{}.mjs", mode.as_str()));
+        std::fs::write(&extension_entry, RPC_PROMPT_EXTENSION_COMMAND_EXT)
+            .expect("write restart worker extension");
+        let agent_session = build_persistent_keyless_agent_session_with_js_extension(
+            loaded,
+            &project_dir,
+            extension_entry,
+        )
+        .await;
+        let options = build_options(
+            &handle,
+            artifact_dir.join(format!("restart-{cycle}-auth.json")),
+            vec![],
+            vec![],
+        );
+        let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
+        let (out_tx, out_rx) = rpc_output_channel();
+        let out_rx = Arc::new(Mutex::new(out_rx));
+        let server = handle.spawn(async move { run(agent_session, options, in_rx, out_tx).await });
+
+        let marker_path = artifact_dir.join(format!("restart-{cycle}-{}.txt", mode.as_str()));
+        let marker_content = format!("restart-cycle-{cycle}-{}", mode.as_str());
+        let bash = json!({
+            "id": format!("restart-{cycle}-bash"),
+            "type": "bash",
+            "command": format!(
+                "printf {} > {}",
+                shell_single_quote(&marker_content),
+                shell_single_quote(&marker_path.display().to_string())
+            ),
+        })
+        .to_string();
+        let bash_resp = send_recv(&in_tx, &out_rx, &bash, "restart bash").await;
+        assert_ok(&bash_resp, "bash");
+
+        let extension_prompt = json!({
+            "id": format!("restart-{cycle}-extension"),
+            "type": "prompt",
+            "message": "/emit-now",
+        })
+        .to_string();
+        let extension_resp = send_recv(
+            &in_tx,
+            &out_rx,
+            &extension_prompt,
+            "restart extension command",
+        )
+        .await;
+        assert_ok(&extension_resp, "prompt");
+        let _messages = wait_for_custom_message(
+            &in_tx,
+            &out_rx,
+            "rpc-note",
+            "rpc-message",
+            "restart extension custom message",
+        )
+        .await;
+
+        let state_cmd = json!({
+            "id": format!("restart-{cycle}-state"),
+            "type": "get_state",
+        })
+        .to_string();
+        let state_after = send_recv(&in_tx, &out_rx, &state_cmd, "restart get_state").await;
+        assert_ok(&state_after, "get_state");
+        let message_count_after =
+            require_response_field_u64(&state_after, "messageCount", "restart get_state");
+
+        drop(in_tx);
+        let server_result = server.await;
+        assert!(
+            server_result.is_ok(),
+            "restart rpc server error: {server_result:?}"
+        );
+
+        let index = SessionIndex::for_sessions_root(&sessions_root);
+        let index_summary = index
+            .refresh_incremental()
+            .expect("restart worker refresh session index");
+        let indexed = index
+            .list_sessions(Some(&project_dir.display().to_string()))
+            .expect("restart worker list sessions");
+
+        write_json_atomic(
+            &summary_path,
+            &json!({
+                "schema": CRASH_INTERRUPT_RECOVERY_WORKER_SCHEMA,
+                "role": "restart",
+                "cycle": cycle,
+                "interrupt": mode.as_str(),
+                "sessionPath": session_path.display().to_string(),
+                "messageCountBeforeRestart": message_count_before,
+                "messageCountAfterRestart": message_count_after,
+                "indexFailedFiles": index_summary.failed_files,
+                "indexedSessionCount": indexed.len(),
+                "markerPath": marker_path.display().to_string(),
+                "extensionCommandObserved": true,
+            }),
+        );
+    });
+}
+
+#[cfg(unix)]
+fn run_crash_interrupt_recovery_worker_from_env() {
+    let role = env_required(CRASH_INTERRUPT_RECOVERY_ROLE_ENV);
+    let cycle_raw = env_required(CRASH_INTERRUPT_RECOVERY_CYCLE_ENV);
+    let cycle = cycle_raw.parse::<usize>().unwrap_or_else(|err| {
+        exit_crash_interrupt_worker(format!("parse recovery cycle {cycle_raw}: {err}"))
+    });
+    let mode = match env_required(CRASH_INTERRUPT_RECOVERY_MODE_ENV).as_str() {
+        "crash" => CrashInterruptRecoveryMode::Crash,
+        "sigint" => CrashInterruptRecoveryMode::Sigint,
+        "sighup" => CrashInterruptRecoveryMode::Sighup,
+        other => {
+            exit_crash_interrupt_worker(format!("unknown crash interrupt recovery mode {other}"))
+        }
+    };
+    let sessions_root = PathBuf::from(env_required(CRASH_INTERRUPT_RECOVERY_SESSIONS_ENV));
+    let artifact_dir = PathBuf::from(env_required(CRASH_INTERRUPT_RECOVERY_ARTIFACT_ENV));
+    let project_dir = PathBuf::from(env_required(CRASH_INTERRUPT_RECOVERY_PROJECT_ENV));
+    match role.as_str() {
+        "active" => run_crash_interrupt_recovery_active_worker(
+            cycle,
+            mode,
+            sessions_root,
+            artifact_dir,
+            project_dir,
+            PathBuf::from(env_required(CRASH_INTERRUPT_RECOVERY_READY_ENV)),
+        ),
+        "restart" => run_crash_interrupt_recovery_restart_worker(
+            cycle,
+            mode,
+            sessions_root,
+            artifact_dir,
+            project_dir,
+            PathBuf::from(env_required(CRASH_INTERRUPT_RECOVERY_SESSION_ENV)),
+            PathBuf::from(env_required(CRASH_INTERRUPT_RECOVERY_SUMMARY_ENV)),
+        ),
+        other => exit_crash_interrupt_worker(format!(
+            "unknown crash interrupt recovery worker role {other}"
+        )),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn crash_interrupt_recovery_worker_process_entrypoint() {
+    if std::env::var_os(CRASH_INTERRUPT_RECOVERY_WORKER_ENV).is_none() {
+        return;
+    }
+    run_crash_interrupt_recovery_worker_from_env();
+}
+
+#[cfg(unix)]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn crash_interrupt_recovery_soak_harness_survives_signals_and_restarts() {
+    let harness = TestHarness::new("crash_interrupt_recovery_soak_harness");
+    let logger = harness.log();
+    let current_exe = std::env::current_exe().expect("current test binary path");
+    let project_dir = harness.temp_path("project");
+    let sessions_root = harness.temp_path("sessions");
+    let artifact_dir = harness.temp_path("crash-interrupt-artifacts");
+    std::fs::create_dir_all(&project_dir).expect("create project dir");
+    std::fs::create_dir_all(&sessions_root).expect("create sessions root");
+    std::fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+
+    let schedule = crash_interrupt_recovery_schedule();
+    let mut cycle_summaries = Vec::new();
+    for (cycle, mode) in schedule.iter().copied().enumerate() {
+        let ready_path = crash_interrupt_artifact_path(&artifact_dir, "ready", cycle, mode, "json");
+        let active_summary_path =
+            crash_interrupt_artifact_path(&artifact_dir, "active", cycle, mode, "json");
+        let restart_summary_path =
+            crash_interrupt_artifact_path(&artifact_dir, "restart", cycle, mode, "json");
+        let active_worker = spawn_crash_interrupt_recovery_worker(
+            &current_exe,
+            "active",
+            cycle,
+            mode,
+            &sessions_root,
+            &artifact_dir,
+            &project_dir,
+            &ready_path,
+            &active_summary_path,
+            None,
+        );
+        let ready = wait_for_crash_interrupt_checkpoint(
+            &ready_path,
+            CRASH_INTERRUPT_RECOVERY_DEFAULT_TIMEOUT,
+        );
+        signal_crash_interrupt_recovery_worker(&active_worker, mode);
+        let active_result = wait_crash_interrupt_recovery_worker(
+            active_worker,
+            CRASH_INTERRUPT_RECOVERY_DEFAULT_TIMEOUT,
+        );
+        assert!(
+            !active_result.timed_out,
+            "active worker timed out: stderr={}",
+            active_result.stderr
+        );
+        assert_eq!(
+            active_result.exit_signal,
+            Some(mode.expected_signal()),
+            "active worker should terminate by {}. stdout:\n{}\nstderr:\n{}",
+            mode.as_str(),
+            active_result.stdout,
+            active_result.stderr
+        );
+
+        let session_path = PathBuf::from(
+            ready
+                .get("sessionFile")
+                .and_then(Value::as_str)
+                .expect("ready sessionFile"),
+        );
+        assert!(session_path.exists(), "session file should survive signal");
+        let marker_path = PathBuf::from(
+            ready
+                .get("markerPath")
+                .and_then(Value::as_str)
+                .expect("ready markerPath"),
+        );
+        assert!(
+            marker_path.exists(),
+            "pre-interrupt bash marker should survive"
+        );
+        assert_lock_released(&session_lock_path(&session_path));
+
+        let restart_worker = spawn_crash_interrupt_recovery_worker(
+            &current_exe,
+            "restart",
+            cycle,
+            mode,
+            &sessions_root,
+            &artifact_dir,
+            &project_dir,
+            &ready_path,
+            &restart_summary_path,
+            Some(&session_path),
+        );
+        let restart_result = wait_crash_interrupt_recovery_worker(
+            restart_worker,
+            CRASH_INTERRUPT_RECOVERY_DEFAULT_TIMEOUT,
+        );
+        assert!(
+            !restart_result.timed_out,
+            "restart worker timed out: stderr={}",
+            restart_result.stderr
+        );
+        assert_eq!(
+            restart_result.exit_code, 0,
+            "restart worker failed\nstdout:\n{}\nstderr:\n{}",
+            restart_result.stdout, restart_result.stderr
+        );
+        let restart_summary = wait_for_crash_interrupt_checkpoint(
+            &restart_summary_path,
+            CRASH_INTERRUPT_RECOVERY_DEFAULT_TIMEOUT,
+        );
+        assert_eq!(
+            restart_summary
+                .get("indexFailedFiles")
+                .and_then(Value::as_u64),
+            Some(0),
+            "restart worker index refresh should be clean: {restart_summary}"
+        );
+        assert_lock_released(&session_lock_path(&session_path));
+        assert_lock_released(&sessions_root.join("session-index.lock"));
+
+        let parent_session_path_display = crash_interrupt_display_path(&session_path);
+        let parent_session_path_display_for_log = crash_interrupt_display_path(&session_path);
+        let parent_session_path = session_path;
+        let (reopened, diagnostics) = common::run_async(async move {
+            Session::open_with_diagnostics(parent_session_path.to_string_lossy().as_ref()).await
+        })
+        .expect("parent reopens recovered session");
+        assert!(
+            diagnostics.skipped_entries.is_empty(),
+            "parent reopen should not skip entries after {}: {diagnostics:?}",
+            mode.as_str()
+        );
+        let parent_message_count = reopened.to_messages_for_current_path().len();
+        let restart_message_count = restart_summary
+            .get("messageCountAfterRestart")
+            .and_then(Value::as_u64)
+            .expect("restart message count");
+        assert!(
+            restart_message_count >= 1,
+            "restart should observe messages after recovery"
+        );
+
+        harness.record_artifact(
+            crash_interrupt_artifact_name("ready", cycle, mode, "json"),
+            &ready_path,
+        );
+        harness.record_artifact(
+            crash_interrupt_artifact_name("restart", cycle, mode, "json"),
+            &restart_summary_path,
+        );
+        logger.info_ctx("crash-interrupt-recovery", "cycle recovered", |ctx| {
+            ctx.push(crash_interrupt_context_field("cycle", cycle));
+            ctx.push(crash_interrupt_context_field("interrupt", mode.as_str()));
+            ctx.push(("session_path".into(), parent_session_path_display_for_log));
+            ctx.push(crash_interrupt_context_field(
+                "parent_message_count",
+                parent_message_count,
+            ));
+        });
+
+        cycle_summaries.push(json!({
+            "cycle": cycle,
+            "interrupt": mode.as_str(),
+            "activeExitSignal": active_result.exit_signal,
+            "sessionPath": parent_session_path_display,
+            "parentMessageCount": parent_message_count,
+            "restart": restart_summary,
+            "ready": ready,
+        }));
+    }
+
+    let index = SessionIndex::for_sessions_root(&sessions_root);
+    let index_summary = index
+        .refresh_incremental()
+        .expect("parent final refresh session index");
+    assert_eq!(
+        index_summary.failed_files, 0,
+        "final reindex should not report failed files"
+    );
+    let indexed = index
+        .list_sessions(Some(&project_dir.display().to_string()))
+        .expect("parent list recovered sessions");
+    assert!(
+        indexed.len() >= schedule.len(),
+        "session index should include every interrupted cycle"
+    );
+    let tempish_files = count_tempish_files(&sessions_root) + count_tempish_files(&artifact_dir);
+    assert!(
+        tempish_files <= schedule.len(),
+        "temp artifact growth exceeded one file per cycle: tempish_files={tempish_files}, cycles={}",
+        schedule.len()
+    );
+    assert_lock_released(&sessions_root.join("session-index.lock"));
+
+    let summary_path = harness.temp_path("crash-interrupt-recovery-soak-summary.json");
+    let summary = json!({
+        "schema": CRASH_INTERRUPT_RECOVERY_HARNESS_SCHEMA,
+        "mode": if std::env::var_os("PI_CRASH_INTERRUPT_RECOVERY_LONG").is_some() {
+            "long"
+        } else {
+            "ci"
+        },
+        "cycles": schedule.len(),
+        "interrupts": schedule.iter().map(|mode| mode.as_str()).collect::<Vec<_>>(),
+        "sessionsRoot": sessions_root.display().to_string(),
+        "indexedSessionCount": indexed.len(),
+        "indexFailedFiles": index_summary.failed_files,
+        "tempishFileCount": tempish_files,
+        "cyclesRecovered": cycle_summaries,
+    });
+    write_json_atomic(&summary_path, &summary);
+    harness.record_artifact("crash-interrupt-recovery-soak-summary.json", &summary_path);
 }
 
 // ---------------------------------------------------------------------------
