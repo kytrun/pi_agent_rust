@@ -16,6 +16,8 @@ This runbook is operator guidance. It does not replace Beads as the work ledger,
 | Handoff bundle | Operator runpack | `python3 scripts/build_swarm_operator_runpack.py --capture-current ...` |
 | Progress posture | Read-only progress SLO report | `pi swarm-progress --input <progress-slo-input.json> --out-json <progress-slo.json>` |
 | Queue convergence | Read-only empty-queue convergence report | `python3 scripts/report_empty_queue_convergence.py --json` |
+| Dry-run self-healing guidance | Runpack action plan and work admission gate | `python3 scripts/build_swarm_operator_runpack.py --out-action-plan-json ... --out-work-admission-gate-json ...` |
+| Evidence renewal posture | Stale evidence renewal queue | `python3 scripts/build_stale_evidence_renewal_queue.py --out-json ...` |
 | Saturation and timeline evidence | Redacted swarm activity ledger | `docs/swarm-activity-ledger.md`, schema `pi.swarm.activity_digest.v1` |
 | Deterministic replay evidence | Swarm flight recorder | `docs/swarm-flight-recorder.md`, schema `pi.swarm.flight_recorder.report.v1` |
 | Offline replay policy comparison | Swarm replay operator workflow | `docs/swarm-replay-operator-workflow.md`, `pi swarm-replay-preview --trace <trace.json>` |
@@ -308,6 +310,118 @@ Privacy boundaries:
   green evidence.
 - A progress SLO report is current only for its source window and source hashes.
   Rebuild it for a new handoff rather than carrying stale status forward.
+
+## Fourth-Wave Self-Healing Workflow
+
+Fourth-wave self-healing artifacts help operators choose the next safe action
+when a swarm is noisy. They are dry-run guidance only. They do not claim beads,
+reserve files, kill processes, quarantine extensions, regenerate evidence,
+overwrite outputs, start or cancel RCH work, push commits, or authorize strict
+drop-in release wording.
+
+Use the workflow in this order:
+
+1. Capture source facts: Beads, git status, Doctor swarm output, RCH status,
+   cargo headroom, validation broker status when available, and any source
+   evidence that the runpack will summarize.
+2. Build dry-run diagnostics: stale-evidence renewal queue, optional budget
+   lease simulation, optional extension quarantine rehearsal, runpack, autopilot
+   input pack, autopilot plan, action plan, and work admission gate.
+3. Read `work-admission-gate.json` before starting new work. If it says
+   `wait`, `renew_evidence`, `pause_escalate`, or any non-admitting decision,
+   stop admitting new implementation agents until a human operator either runs
+   the named safe commands or explicitly records an override.
+4. When the plan recommends a mutating real-world action, copy the command into
+   the handoff as a proposed command, not an executed action. Require explicit
+   human confirmation before changing Beads ownership, Agent Mail reservations,
+   extension configuration, git refs, or evidence files.
+
+Example capture that writes only new files under an empty capture directory:
+
+```bash
+capture_dir="/data/tmp/pi_swarm_fourth_wave/${AGENT_NAME:-agent}-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$capture_dir"
+
+br ready --json > "$capture_dir/beads-ready.json"
+br list --status=in_progress --json > "$capture_dir/beads-in-progress.json"
+git status --short --branch > "$capture_dir/git-status.txt"
+pi doctor --only swarm --format json > "$capture_dir/doctor-swarm.json"
+scripts/cargo_headroom.sh --runner rch --admit-only check --all-targets \
+  --decision-json "$capture_dir/cargo-admission.json"
+rch status > "$capture_dir/rch-status.txt"
+rch queue > "$capture_dir/rch-queue.txt"
+
+python3 scripts/build_stale_evidence_renewal_queue.py \
+  --source-root /data/projects/pi_agent_rust \
+  --freshness-hours 336 \
+  --max-items 25 \
+  --out-json "$capture_dir/stale-evidence-renewal.json"
+
+python3 scripts/build_swarm_operator_runpack.py \
+  --capture-current \
+  --capture-dir "$capture_dir/runpack-sources" \
+  --project-root /data/projects/pi_agent_rust \
+  --agent-name "$AGENT_NAME" \
+  --stale-evidence-renewal-json "$capture_dir/stale-evidence-renewal.json" \
+  --out-json "$capture_dir/operator-runpack.json" \
+  --out-md "$capture_dir/operator-runpack.md" \
+  --out-autopilot-input-pack-json "$capture_dir/autopilot-input-pack.json" \
+  --out-autopilot-plan-json "$capture_dir/autopilot-plan.json" \
+  --out-action-plan-json "$capture_dir/action-plan.json" \
+  --out-work-admission-gate-json "$capture_dir/work-admission-gate.json"
+```
+
+Optional drills stay dry-run and should be captured beside the runpack:
+
+```bash
+python3 scripts/simulate_swarm_budget_leases.py \
+  --fixture-id rch_saturation \
+  --out-json "$capture_dir/budget-lease-simulation.json"
+
+python3 scripts/rehearse_extension_quarantine.py \
+  --fixture-id startup_crash_loop_quarantine \
+  --out-json "$capture_dir/extension-quarantine-rehearsal.json"
+```
+
+Interpret the fourth-wave outputs conservatively:
+
+| Output | Operator use | Boundary |
+| --- | --- | --- |
+| `action-plan.json` | Orders the next safest operator actions from captured sources. | Advisory only; commands require operator execution. |
+| `work-admission-gate.json` | Decides whether to admit new implementation work, renew evidence, wait, or pause. | Fail-closed gate only; it does not enforce runtime throttles. |
+| `turn_pressure_ledger` in the runpack | Shows prompt, tool, provider, TUI, and session-write pressure without raw payload bodies. | Diagnostic only; not benchmark or release evidence. |
+| `budget-lease-simulation.json` | Recommends fair per-agent budget allocation and reduced fanout under saturation. | Does not reserve capacity or mutate Agent Mail, Beads, RCH, or processes. |
+| `extension-quarantine-rehearsal.json` | Rehearses quarantine or rollback decisions from fixture or captured extension facts. | Does not edit extension config or quarantine anything by itself. |
+| `stale-evidence-renewal.json` | Lists stale, missing, contract-drifted, or RCH-blocked evidence and bounded renewal commands. | Does not regenerate or overwrite evidence and does not weaken the drop-in claim gate. |
+| Handoff summaries | Give the next operator redacted source status, selected advisory action, and blocked/degraded reasons. | They are not source-of-truth evidence and do not replace Beads, Agent Mail, Doctor, RCH, CI, UBS, or release gates. |
+
+Claim boundaries are unchanged: claim through Beads, reserve through Agent Mail
+when healthy, and use Beads comments as the soft lock when Mail is corrupt or
+read-only. A work admission gate can recommend `use_beads_soft_lock`, but it
+cannot prove that unreserved files are free. Operators still inspect `br show`,
+recent comments, `git log -- <file>`, and the dirty worktree before touching a
+file family.
+
+Stop admitting new implementation work when any of these are true:
+
+- `work-admission-gate.json` has `admit_new_implementation=false`.
+- `action-plan.json` selects `renew_stale_evidence`, `wait_for_pressure`, or
+  `pause_or_surface_blocker`.
+- `stale-evidence-renewal.json` lists blocked or renewal-required items that
+  are needed for the claim being made.
+- The extension rehearsal recommends quarantine or rollback and no human
+  operator has approved the actual config change.
+- The budget lease simulation reports saturation for the resource class needed
+  by the next agent or heavy validation command.
+
+Safe handoff wording:
+
+```text
+Fourth-wave artifacts are advisory dry-run outputs. Next recommended action:
+<decision from action-plan/work-admission-gate>. Proposed commands require
+explicit operator execution. No Beads, Agent Mail, extension config, git refs,
+evidence files, RCH jobs, or release claims were mutated by these artifacts.
+```
 
 ## Throttle Or Pause
 

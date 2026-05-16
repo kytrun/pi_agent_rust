@@ -1949,6 +1949,16 @@ The autopilot never mutates ownership or replaces Doctor, Beads, Agent Mail,
 RCH, git, or the source artifacts; it only turns those inputs into reproducible
 operator next-action guidance.
 
+Fourth-wave swarm self-healing guidance layers a read-only stale-evidence
+renewal queue, dry-run action plan, work admission gate, budget lease
+simulation, turn pressure ledger, extension quarantine rehearsal, and redacted
+handoff summaries onto that runpack flow. These artifacts can recommend
+`renew_stale_evidence`, `wait_for_pressure`, `use_beads_soft_lock`, or similar
+operator actions, but they do not mutate Beads, Agent Mail, extension
+configuration, git, evidence files, RCH jobs, or release claims. The full
+workflow and safe handoff wording live in
+[docs/swarm-operations-runbook.md#fourth-wave-self-healing-workflow](docs/swarm-operations-runbook.md#fourth-wave-self-healing-workflow).
+
 Offline swarm replay traces can be previewed before handoff with
 `pi swarm-replay-preview --trace <trace.json> --format json`. The command is
 read-only, emits `pi.swarm.replay_preview.v1` JSON or concise text, refuses to
