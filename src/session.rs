@@ -14,7 +14,8 @@ use crate::model::{
 };
 use crate::provider_metadata::{canonical_provider_id, provider_ids_match};
 use crate::session_index::{
-    SessionIndex, enqueue_session_index_snapshot_update, is_session_file_path, session_file_stats,
+    SessionIndex, SessionIndexRefreshSummary, enqueue_session_index_snapshot_update,
+    is_session_file_path, session_file_stats,
 };
 use crate::session_store_v2::{self, SessionStoreV2};
 use crate::tui::PiConsole;
@@ -970,6 +971,8 @@ pub struct SessionOpenOrphanedParentLink {
 
 /// Stable schema identifier for session cold-start trace bundles.
 pub const SESSION_COLD_START_TRACE_SCHEMA: &str = "pi.session.cold_start_trace.v1";
+pub const SESSION_REPLAY_MINIMIZATION_TRACE_SCHEMA: &str =
+    "pi.session.replay_minimization_trace.v1";
 
 /// Bounded, redacted trace bundle for diagnosing large-session startup latency.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -981,6 +984,7 @@ pub struct SessionColdStartTraceBundle {
     pub phases: Vec<SessionColdStartPhaseTrace>,
     pub index_refresh: SessionColdStartIndexRefreshTrace,
     pub open_diagnostics: SessionColdStartOpenDiagnosticsTrace,
+    pub replay_minimization: SessionReplayMinimizationTrace,
     pub compaction_scan: SessionColdStartCompactionTrace,
     pub first_render: SessionColdStartFirstRenderTrace,
     pub bounds: SessionColdStartBoundsTrace,
@@ -1030,6 +1034,21 @@ pub struct SessionColdStartIndexRefreshTrace {
 pub struct SessionColdStartOpenDiagnosticsTrace {
     pub skipped_entries: usize,
     pub orphaned_parent_links: usize,
+}
+
+/// Bounded replay-minimization evidence for branch-heavy session resumes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionReplayMinimizationTrace {
+    pub schema: String,
+    pub branch_count: usize,
+    pub entry_count: usize,
+    pub selected_depth: usize,
+    pub scanned_files: usize,
+    pub replayed_entries: usize,
+    pub skipped_sibling_entries: usize,
+    pub deterministic_steps: usize,
+    pub fallback_behavior: Option<String>,
+    pub verdict: String,
 }
 
 /// Bounded compaction scan summary for the current session path.
@@ -1172,6 +1191,11 @@ impl SessionColdStartTraceBundle {
             open_skipped_entries = self.open_diagnostics.skipped_entries,
             open_orphaned_parent_links = self.open_diagnostics.orphaned_parent_links,
             index_cache_hit_files = self.index_refresh.cache_hit_files,
+            replay_branch_count = self.replay_minimization.branch_count,
+            replay_entry_count = self.replay_minimization.entry_count,
+            replay_selected_depth = self.replay_minimization.selected_depth,
+            replay_skipped_sibling_entries = self.replay_minimization.skipped_sibling_entries,
+            replay_verdict = self.replay_minimization.verdict.as_str(),
             first_render_projected_messages = self.first_render.projected_messages,
             total_elapsed_us = self.total_elapsed_us,
             "session cold-start trace bundle"
@@ -1597,6 +1621,9 @@ impl Session {
             status: "ok".to_string(),
         });
 
+        let replay_minimization =
+            session.cold_start_replay_minimization_trace(&storage, &index_summary, &diagnostics);
+
         let bundle = SessionColdStartTraceBundle {
             schema: SESSION_COLD_START_TRACE_SCHEMA.to_string(),
             session_path_hash: cold_start_hash_path(path),
@@ -1611,6 +1638,7 @@ impl Session {
                 skipped_entries: diagnostics.skipped_entries.len(),
                 orphaned_parent_links: diagnostics.orphaned_parent_links.len(),
             },
+            replay_minimization,
             compaction_scan,
             first_render,
             bounds: SessionColdStartBoundsTrace {
@@ -1700,6 +1728,104 @@ impl Session {
             return self.entries.iter().collect();
         }
         self.entries_for_current_path()
+    }
+
+    fn cold_start_total_entries_and_branch_count(&self) -> (usize, usize) {
+        let loaded_summary = self.branch_summary();
+        let mut entry_count = loaded_summary.total_entries;
+        let mut branch_count = loaded_summary.branch_point_count;
+
+        if let Some(v2_root) = self.v2_sidecar_root.as_ref() {
+            if let Ok(store) = SessionStoreV2::create(v2_root, 64 * 1024 * 1024) {
+                entry_count =
+                    entry_count.max(usize::try_from(store.entry_count()).unwrap_or(usize::MAX));
+                if let Ok(Some(manifest)) = store.read_manifest() {
+                    branch_count = branch_count.max(
+                        usize::try_from(manifest.counters.branches_total).unwrap_or(usize::MAX),
+                    );
+                    entry_count = entry_count.max(
+                        usize::try_from(manifest.counters.entries_total).unwrap_or(usize::MAX),
+                    );
+                }
+            }
+        }
+
+        (entry_count, branch_count)
+    }
+
+    fn cold_start_replay_minimization_trace(
+        &self,
+        storage: &SessionColdStartStorageTrace,
+        index_summary: &SessionIndexRefreshSummary,
+        diagnostics: &SessionOpenDiagnostics,
+    ) -> SessionReplayMinimizationTrace {
+        let path_entries = self.cold_start_current_path_entries();
+        let selected_depth = path_entries.len();
+        let replayed_entries = path_entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    SessionEntry::Message(_)
+                        | SessionEntry::BranchSummary(_)
+                        | SessionEntry::Compaction(_)
+                )
+            })
+            .count();
+        let (entry_count, branch_count) = self.cold_start_total_entries_and_branch_count();
+        let skipped_sibling_entries = entry_count.saturating_sub(selected_depth);
+        let deterministic_steps = selected_depth
+            .saturating_add(index_summary.scanned_files)
+            .saturating_add(diagnostics.skipped_entries.len())
+            .saturating_add(diagnostics.orphaned_parent_links.len());
+        let opened_backend = storage.opened_backend.as_str();
+        let selected_backend = storage.selected_backend.as_str();
+        let backend_changed = !matches!(
+            (opened_backend, selected_backend),
+            ("jsonl", "jsonl") | ("v2_sidecar", "v2_sidecar")
+        );
+
+        let fallback_behavior = if !diagnostics.orphaned_parent_links.is_empty() {
+            Some("orphaned_parent_links_detected".to_string())
+        } else if !diagnostics.skipped_entries.is_empty() {
+            Some("corrupt_jsonl_entries_skipped".to_string())
+        } else if backend_changed {
+            Some(format!(
+                "{}_fallback_to_{}",
+                storage.selected_backend, storage.opened_backend
+            ))
+        } else if let Some(reason) = storage.fallback_reason.as_ref() {
+            Some(reason.clone())
+        } else if matches!(opened_backend, "jsonl") && !storage.v2_sidecar_present {
+            Some("jsonl_full_scan_without_sidecar".to_string())
+        } else {
+            None
+        };
+
+        let verdict = if diagnostics.orphaned_parent_links.is_empty()
+            && diagnostics.skipped_entries.is_empty()
+            && skipped_sibling_entries > 0
+            && fallback_behavior.is_none()
+        {
+            "bounded_selected_branch".to_string()
+        } else if fallback_behavior.is_some() {
+            "fallback_explicit".to_string()
+        } else {
+            "linear_or_single_branch".to_string()
+        };
+
+        SessionReplayMinimizationTrace {
+            schema: SESSION_REPLAY_MINIMIZATION_TRACE_SCHEMA.to_string(),
+            branch_count,
+            entry_count,
+            selected_depth,
+            scanned_files: index_summary.scanned_files,
+            replayed_entries,
+            skipped_sibling_entries,
+            deterministic_steps,
+            fallback_behavior,
+            verdict,
+        }
     }
 
     fn cold_start_compaction_scan_trace(&self) -> SessionColdStartCompactionTrace {
@@ -6710,6 +6836,180 @@ mod tests {
         assert_eq!(info.branch_point_count, 1);
         assert!(info.branch_points.contains(&id_a));
         assert!(info.leaves.contains(&id_b));
+    }
+
+    fn build_branch_heavy_session(
+        path: &Path,
+        fork_count: usize,
+        side_branch_len: usize,
+    ) -> (Session, String) {
+        let mut session = Session::create();
+        session.path = Some(path.to_path_buf());
+        let mut selected_tip = session.append_message(make_test_message("root"));
+
+        for fork_idx in 0..fork_count {
+            assert!(
+                session.navigate_to(&selected_tip),
+                "navigate to selected tip before side branch {fork_idx}"
+            );
+            for side_idx in 0..side_branch_len {
+                session.append_message(make_test_message(&format!("side-{fork_idx}-{side_idx}")));
+            }
+
+            assert!(
+                session.navigate_to(&selected_tip),
+                "return to selected tip before active branch {fork_idx}"
+            );
+            selected_tip = session.append_message(make_test_message(&format!("active-{fork_idx}")));
+        }
+
+        (session, selected_tip)
+    }
+
+    #[test]
+    fn cold_start_replay_minimization_bounds_branch_heavy_v2_resume() {
+        const FORKS: usize = 700;
+        const SIDE_BRANCH_LEN: usize = 15;
+
+        let temp = tempdir_under_tmpdir("branch-heavy-v2-resume");
+        let path = temp.path().join("branch-heavy.jsonl");
+        let (mut session, selected_tip) = build_branch_heavy_session(&path, FORKS, SIDE_BRANCH_LEN);
+        session.header.current_leaf = Some("stale-missing-leaf".to_string());
+        run_async(async { session.save().await }).expect("save branch-heavy session");
+        create_v2_sidecar_from_jsonl(&path).expect("create v2 sidecar");
+
+        let trace = run_async(async {
+            Session::cold_start_trace_bundle(&path, temp.path())
+                .await
+                .expect("cold-start trace")
+        });
+
+        let expected_entries = 1 + (FORKS * (SIDE_BRANCH_LEN + 1));
+        let expected_depth = 1 + FORKS;
+        assert_eq!(trace.schema, SESSION_COLD_START_TRACE_SCHEMA);
+        assert_eq!(
+            trace.replay_minimization.schema,
+            SESSION_REPLAY_MINIMIZATION_TRACE_SCHEMA
+        );
+        assert_eq!(trace.storage.selected_backend, "v2_sidecar");
+        assert_eq!(trace.storage.opened_backend, "v2_sidecar");
+        assert_eq!(trace.input.total_entries, expected_depth);
+        assert_eq!(trace.replay_minimization.entry_count, expected_entries);
+        assert_eq!(trace.replay_minimization.branch_count, FORKS);
+        assert_eq!(trace.replay_minimization.selected_depth, expected_depth);
+        assert_eq!(trace.replay_minimization.replayed_entries, expected_depth);
+        assert_eq!(
+            trace.replay_minimization.skipped_sibling_entries,
+            expected_entries - expected_depth
+        );
+        assert!(trace.replay_minimization.scanned_files >= 1);
+        assert_eq!(trace.replay_minimization.fallback_behavior, None);
+        assert_eq!(trace.replay_minimization.verdict, "bounded_selected_branch");
+        assert_eq!(trace.compaction_scan.scanned_entries, expected_depth);
+        assert_eq!(trace.first_render.current_path_entries, expected_depth);
+        assert_eq!(trace.first_render.projected_messages, expected_depth);
+
+        let loaded = run_async(async { Session::open(path.to_string_lossy().as_ref()).await })
+            .expect("open branch-heavy session");
+        assert_eq!(loaded.leaf_id(), Some(selected_tip.as_str()));
+        assert_eq!(
+            loaded.to_messages_for_current_path().len(),
+            expected_depth,
+            "active replay must not include sibling branch messages"
+        );
+    }
+
+    #[test]
+    fn cold_start_replay_minimization_reports_missing_and_stale_sidecar_fallbacks() {
+        let temp = tempdir_under_tmpdir("branch-heavy-fallbacks");
+        let path = temp.path().join("branch-fallback.jsonl");
+        let (mut session, _selected_tip) = build_branch_heavy_session(&path, 12, 3);
+        run_async(async { session.save().await }).expect("save branch-heavy session");
+
+        let missing_sidecar_trace = run_async(async {
+            Session::cold_start_trace_bundle(&path, temp.path())
+                .await
+                .expect("missing sidecar trace")
+        });
+        assert_eq!(missing_sidecar_trace.storage.selected_backend, "jsonl");
+        assert_eq!(missing_sidecar_trace.storage.opened_backend, "jsonl");
+        assert_eq!(
+            missing_sidecar_trace
+                .replay_minimization
+                .fallback_behavior
+                .as_deref(),
+            Some("jsonl_full_scan_without_sidecar")
+        );
+        assert_eq!(
+            missing_sidecar_trace.replay_minimization.verdict,
+            "fallback_explicit"
+        );
+        assert!(
+            missing_sidecar_trace
+                .replay_minimization
+                .skipped_sibling_entries
+                > 0
+        );
+
+        let corrupt_path = temp.path().join("branch-corrupt-tail.jsonl");
+        let (mut corrupt_session, _selected_tip) = build_branch_heavy_session(&corrupt_path, 8, 2);
+        run_async(async { corrupt_session.save().await }).expect("save corrupt-tail fixture");
+        {
+            use std::io::Write as _;
+
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&corrupt_path)
+                .expect("open corrupt-tail fixture");
+            writeln!(file, "{{invalid-tail-frame").expect("append corrupt tail frame");
+        }
+
+        let corrupt_tail_trace = run_async(async {
+            Session::cold_start_trace_bundle(&corrupt_path, temp.path())
+                .await
+                .expect("corrupt tail trace")
+        });
+        assert_eq!(
+            corrupt_tail_trace.open_diagnostics.skipped_entries, 1,
+            "corrupt tail frames must be surfaced in cold-start diagnostics"
+        );
+        assert_eq!(
+            corrupt_tail_trace
+                .replay_minimization
+                .fallback_behavior
+                .as_deref(),
+            Some("corrupt_jsonl_entries_skipped")
+        );
+        assert_eq!(
+            corrupt_tail_trace.replay_minimization.verdict,
+            "fallback_explicit"
+        );
+
+        create_v2_sidecar_from_jsonl(&path).expect("create v2 sidecar");
+        std::thread::sleep(Duration::from_millis(25));
+        session.append_message(make_test_message("jsonl-tail-after-sidecar"));
+        run_async(async { session.save().await }).expect("save stale jsonl tail");
+
+        let stale_sidecar_trace = run_async(async {
+            Session::cold_start_trace_bundle(&path, temp.path())
+                .await
+                .expect("stale sidecar trace")
+        });
+        assert!(stale_sidecar_trace.storage.v2_sidecar_present);
+        assert!(stale_sidecar_trace.storage.v2_sidecar_stale);
+        assert_eq!(stale_sidecar_trace.storage.selected_backend, "jsonl");
+        assert_eq!(stale_sidecar_trace.storage.opened_backend, "jsonl");
+        assert_eq!(
+            stale_sidecar_trace
+                .replay_minimization
+                .fallback_behavior
+                .as_deref(),
+            Some("v2_sidecar_stale")
+        );
+        assert_eq!(
+            stale_sidecar_trace.replay_minimization.verdict,
+            "fallback_explicit"
+        );
     }
 
     #[test]
