@@ -1,0 +1,220 @@
+{
+  "schema": "pi.swarm.stale_evidence_renewal_queue_fixtures.v1",
+  "scenarios": [
+    {
+      "id": "fresh_evidence",
+      "generated_at": "2026-05-16T08:00:00+00:00",
+      "freshness_hours": 48,
+      "files": [
+        {
+          "role": "contract",
+          "path": "docs/contracts/fresh-contract.json",
+          "mtime": "2026-05-15T08:00:00+00:00",
+          "json": {
+            "schema": "pi.fixture.contract.v1",
+            "output_schema": "pi.fixture.fresh.v1"
+          }
+        },
+        {
+          "role": "artifact",
+          "path": "docs/evidence/fresh.json",
+          "mtime": "2026-05-16T07:00:00+00:00",
+          "json": {
+            "schema": "pi.fixture.fresh.v1",
+            "generated_at": "2026-05-16T07:00:00+00:00",
+            "source_paths": [
+              "docs/contracts/fresh-contract.json"
+            ],
+            "status": "pass"
+          }
+        }
+      ],
+      "expected": {
+        "status": "ready",
+        "renewal_item_count": 0,
+        "action_plan_decision": "implement_ready_work"
+      }
+    },
+    {
+      "id": "expired_evidence",
+      "generated_at": "2026-05-16T08:00:00+00:00",
+      "freshness_hours": 24,
+      "files": [
+        {
+          "role": "contract",
+          "path": "docs/contracts/expired-contract.json",
+          "mtime": "2026-05-10T00:00:00+00:00",
+          "json": {
+            "schema": "pi.fixture.contract.v1",
+            "output_schema": "pi.fixture.expired.v1"
+          }
+        },
+        {
+          "role": "artifact",
+          "path": "docs/evidence/expired.json",
+          "mtime": "2026-05-11T00:00:00+00:00",
+          "json": {
+            "schema": "pi.fixture.expired.v1",
+            "generated_at": "2026-05-10T00:00:00+00:00",
+            "source_paths": [
+              "docs/contracts/expired-contract.json"
+            ],
+            "status": "pass"
+          }
+        }
+      ],
+      "expected": {
+        "status": "degraded",
+        "renewal_item_count": 1,
+        "reason_code": "expired",
+        "action_plan_decision": "renew_stale_evidence",
+        "requires_safe_command": true
+      }
+    },
+    {
+      "id": "missing_source_refs",
+      "generated_at": "2026-05-16T08:00:00+00:00",
+      "freshness_hours": 48,
+      "files": [
+        {
+          "role": "contract",
+          "path": "docs/contracts/missing-source-contract.json",
+          "mtime": "2026-05-15T00:00:00+00:00",
+          "json": {
+            "schema": "pi.fixture.contract.v1",
+            "output_schema": "pi.fixture.missing_source.v1"
+          }
+        },
+        {
+          "role": "artifact",
+          "path": "docs/evidence/missing-source.json",
+          "mtime": "2026-05-16T07:00:00+00:00",
+          "json": {
+            "schema": "pi.fixture.missing_source.v1",
+            "generated_at": "2026-05-16T07:00:00+00:00",
+            "source_paths": [
+              "docs/evidence/does-not-exist.json"
+            ],
+            "status": "pass"
+          }
+        }
+      ],
+      "expected": {
+        "status": "degraded",
+        "renewal_item_count": 1,
+        "reason_code": "missing_source_ref",
+        "action_plan_decision": "renew_stale_evidence",
+        "requires_safe_command": true
+      }
+    },
+    {
+      "id": "changed_contract_schema",
+      "generated_at": "2026-05-16T08:00:00+00:00",
+      "freshness_hours": 48,
+      "files": [
+        {
+          "role": "contract",
+          "path": "docs/contracts/changed-contract.json",
+          "mtime": "2026-05-16T07:30:00+00:00",
+          "json": {
+            "schema": "pi.fixture.contract.v2",
+            "output_schema": "pi.fixture.changed_contract.v1"
+          }
+        },
+        {
+          "role": "artifact",
+          "path": "docs/evidence/changed-contract.json",
+          "mtime": "2026-05-15T07:00:00+00:00",
+          "json": {
+            "schema": "pi.fixture.changed_contract.v1",
+            "contract_schema": "pi.fixture.contract.v1",
+            "generated_at": "2026-05-16T07:00:00+00:00",
+            "source_paths": [
+              "docs/contracts/changed-contract.json"
+            ],
+            "status": "pass"
+          }
+        }
+      ],
+      "expected": {
+        "status": "degraded",
+        "renewal_item_count": 1,
+        "reason_code": "contract_schema_changed",
+        "action_plan_decision": "renew_stale_evidence",
+        "requires_safe_command": true
+      }
+    },
+    {
+      "id": "blocked_rch",
+      "generated_at": "2026-05-16T08:00:00+00:00",
+      "freshness_hours": 48,
+      "files": [
+        {
+          "role": "contract",
+          "path": "docs/contracts/rch-contract.json",
+          "mtime": "2026-05-15T00:00:00+00:00",
+          "json": {
+            "schema": "pi.fixture.contract.v1",
+            "output_schema": "pi.fixture.rch.v1"
+          }
+        },
+        {
+          "role": "artifact",
+          "path": "docs/evidence/rch-blocked.json",
+          "mtime": "2026-05-16T07:00:00+00:00",
+          "json": {
+            "schema": "pi.fixture.rch.v1",
+            "generated_at": "2026-05-16T07:00:00+00:00",
+            "source_paths": [
+              "docs/contracts/rch-contract.json"
+            ],
+            "rch_status": "blocked"
+          }
+        }
+      ],
+      "expected": {
+        "status": "blocked",
+        "renewal_item_count": 1,
+        "reason_code": "blocked_rch",
+        "action_plan_decision": "renew_stale_evidence",
+        "requires_safe_command": true
+      }
+    },
+    {
+      "id": "known_safe_renewal_commands",
+      "generated_at": "2026-05-16T08:00:00+00:00",
+      "freshness_hours": 1,
+      "files": [
+        {
+          "role": "contract",
+          "path": "docs/contracts/safe-command-contract.json",
+          "mtime": "2026-05-15T00:00:00+00:00",
+          "json": {
+            "schema": "pi.fixture.contract.v1",
+            "output_schema": "pi.fixture.safe_commands.v1"
+          }
+        },
+        {
+          "role": "artifact",
+          "path": "docs/evidence/safe-commands.json",
+          "mtime": "2026-05-15T00:00:00+00:00",
+          "json": {
+            "schema": "pi.fixture.safe_commands.v1",
+            "generated_at": "2026-05-15T00:00:00+00:00",
+            "source_paths": [
+              "docs/contracts/safe-command-contract.json"
+            ],
+            "status": "pass"
+          }
+        }
+      ],
+      "expected": {
+        "status": "degraded",
+        "renewal_item_count": 1,
+        "reason_code": "known_safe_renewal_command",
+        "action_plan_decision": "renew_stale_evidence",
+        "requires_safe_command": true
+      }
+    }
+  ]
+}

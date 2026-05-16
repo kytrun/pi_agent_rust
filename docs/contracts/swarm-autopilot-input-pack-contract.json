@@ -31,7 +31,8 @@
     "activity_digest",
     "host_preflight",
     "operator_runpack",
-    "validation_broker"
+    "validation_broker",
+    "stale_evidence_renewal_queue"
   ],
   "required_summary_paths": [
     "normalized_inputs.doctor_swarm.status",

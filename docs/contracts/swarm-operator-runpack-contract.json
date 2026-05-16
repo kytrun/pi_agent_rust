@@ -45,7 +45,8 @@
     "rpc_swarm_e2e",
     "rch_artifact_sync",
     "validation_broker",
-    "progress_slo"
+    "progress_slo",
+    "stale_evidence_renewal_queue"
   ],
   "required_summary_paths": [
     "doctor_swarm.agent_mail_build_slots",
@@ -105,6 +106,12 @@
     "progress_slo.reason_ids",
     "progress_slo.saturation_summary",
     "progress_slo.guards",
+    "stale_evidence_renewal_queue.schema",
+    "stale_evidence_renewal_queue.status",
+    "stale_evidence_renewal_queue.summary.renewal_item_count",
+    "stale_evidence_renewal_queue.summary.blocked_count",
+    "stale_evidence_renewal_queue.queue",
+    "stale_evidence_renewal_queue.action_plan_integration.recommended_decision",
     "tail_latency.schema",
     "tail_latency.telemetry_enabled",
     "tail_latency.redaction_summary",

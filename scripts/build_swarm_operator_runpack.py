@@ -37,6 +37,7 @@ TAIL_LATENCY_SCHEMA = "pi.operator_tail_latency.v1"
 BOTTLENECK_ATTRIBUTION_SCHEMA = "pi.swarm.bottleneck_attribution_dashboard.v1"
 TURN_PRESSURE_LEDGER_SCHEMA = "pi.swarm.turn_pressure_ledger.v1"
 TURN_PRESSURE_LEDGER_CONTRACT_SCHEMA = "pi.swarm.turn_pressure_ledger_contract.v1"
+STALE_EVIDENCE_RENEWAL_QUEUE_SCHEMA = "pi.swarm.stale_evidence_renewal_queue.v1"
 FLIGHT_RECORDER_REPORT_SCHEMA = "pi.swarm.flight_recorder.report.v1"
 HOST_PREFLIGHT_SCHEMA = "pi.doctor.swarm_resource_preflight.v1"
 CONTEXT_INTELLIGENCE_SCHEMA = "pi.doctor.context_intelligence_posture.v1"
@@ -199,6 +200,7 @@ AUTOPILOT_OPTIONAL_SOURCE_IDS = (
     "host_preflight",
     "operator_runpack",
     "validation_broker",
+    "stale_evidence_renewal_queue",
 )
 AUTOPILOT_SOURCE_COMMAND_IDS: dict[str, tuple[str, ...]] = {
     "doctor_swarm": ("doctor_swarm",),
@@ -220,6 +222,7 @@ AUTOPILOT_SOURCE_COMMAND_IDS: dict[str, tuple[str, ...]] = {
     "host_preflight": (),
     "operator_runpack": (),
     "validation_broker": ("validation_broker_status",),
+    "stale_evidence_renewal_queue": (),
 }
 AUTOPILOT_FORBIDDEN_ACTIONS = (
     "destructive git reset",
@@ -1433,6 +1436,15 @@ def source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
                 expected_schema=PROGRESS_SLO_SCHEMA,
             )
         )
+    stale_evidence_renewal_json = getattr(args, "stale_evidence_renewal_json", None)
+    if stale_evidence_renewal_json is not None:
+        sources.append(
+            load_json_source(
+                "stale_evidence_renewal_queue",
+                stale_evidence_renewal_json,
+                expected_schema=STALE_EVIDENCE_RENEWAL_QUEUE_SCHEMA,
+            )
+        )
     return sources
 
 
@@ -1468,6 +1480,15 @@ def autopilot_source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
     validation_broker_json = getattr(args, "validation_broker_json", None)
     if validation_broker_json is not None:
         sources.append(load_validation_broker_source(validation_broker_json))
+    stale_evidence_renewal_json = getattr(args, "stale_evidence_renewal_json", None)
+    if stale_evidence_renewal_json is not None:
+        sources.append(
+            load_json_source(
+                "stale_evidence_renewal_queue",
+                stale_evidence_renewal_json,
+                expected_schema=STALE_EVIDENCE_RENEWAL_QUEUE_SCHEMA,
+            )
+        )
     return sources
 
 
@@ -4665,6 +4686,56 @@ def summarize_operator_runpack(source: SourcePayload, max_items: int) -> dict[st
     }
 
 
+def summarize_stale_evidence_renewal_queue(
+    source: SourcePayload,
+    max_items: int,
+) -> dict[str, Any]:
+    payload = source.payload
+    if not isinstance(payload, dict):
+        return {"status": source.status, "schema": source.schema}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    action_plan = (
+        payload.get("action_plan_integration")
+        if isinstance(payload.get("action_plan_integration"), dict)
+        else {}
+    )
+    runpack = (
+        payload.get("runpack_integration")
+        if isinstance(payload.get("runpack_integration"), dict)
+        else {}
+    )
+    return {
+        "status": source.status if source.status != "ok" else payload.get("status"),
+        "schema": payload.get("schema"),
+        "generated_at": payload.get("generated_at"),
+        "purpose": payload.get("purpose"),
+        "source_path": source.path,
+        "freshness_window_hours": payload.get("freshness_window_hours"),
+        "summary": {
+            "scanned_artifacts": summary.get("scanned_artifacts"),
+            "fresh_artifacts": summary.get("fresh_artifacts"),
+            "renewal_item_count": summary.get("renewal_item_count"),
+            "renewal_recommended_count": summary.get("renewal_recommended_count"),
+            "blocked_count": summary.get("blocked_count"),
+            "contract_count": summary.get("contract_count"),
+        },
+        "queue": bounded(payload.get("queue") or [], max_items),
+        "action_plan_integration": {
+            "schema": action_plan.get("schema"),
+            "status": action_plan.get("status"),
+            "recommended_decision": action_plan.get("recommended_decision"),
+            "commands_require_operator_execution": action_plan.get(
+                "commands_require_operator_execution"
+            ),
+        },
+        "runpack_integration": {
+            "schema": runpack.get("schema"),
+            "status": runpack.get("status"),
+            "operator_next_action": runpack.get("operator_next_action"),
+        },
+    }
+
+
 def command_provenance(
     capture_summary: dict[str, Any],
     max_items: int,
@@ -5092,6 +5163,13 @@ def build_autopilot_input_pack(args: argparse.Namespace) -> dict[str, Any]:
         pack["normalized_inputs"]["validation_broker"] = summarize_validation_broker_source(
             by_id["validation_broker"],
             args.max_items,
+        )
+    if "stale_evidence_renewal_queue" in by_id:
+        pack["normalized_inputs"]["stale_evidence_renewal_queue"] = (
+            summarize_stale_evidence_renewal_queue(
+                by_id["stale_evidence_renewal_queue"],
+                args.max_items,
+            )
         )
     status, reasons = derive_autopilot_input_pack_status(pack)
     pack["status"] = status
@@ -6263,6 +6341,30 @@ def action_plan_stale_required_sources(input_pack: dict[str, Any]) -> list[dict[
     return stale
 
 
+def action_plan_renewal_queue(input_pack: dict[str, Any]) -> dict[str, Any] | None:
+    queue = normalized_section(input_pack, "stale_evidence_renewal_queue")
+    if not queue:
+        return None
+    summary = queue.get("summary") if isinstance(queue.get("summary"), dict) else {}
+    renewal_count = int_value(summary.get("renewal_item_count"))
+    blocked_count = int_value(summary.get("blocked_count"))
+    if not renewal_count and not blocked_count:
+        return None
+    action_plan = (
+        queue.get("action_plan_integration")
+        if isinstance(queue.get("action_plan_integration"), dict)
+        else {}
+    )
+    return {
+        "renewal_count": renewal_count,
+        "blocked_count": blocked_count,
+        "status": action_plan.get("status") or queue.get("status"),
+        "recommended_decision": action_plan.get("recommended_decision")
+        or "renew_stale_evidence",
+        "queue": queue.get("queue") if isinstance(queue.get("queue"), list) else [],
+    }
+
+
 def action_plan_validation_failure(
     input_pack: dict[str, Any],
     plan: dict[str, Any],
@@ -6315,7 +6417,29 @@ def build_action_plan_decision(
     actions = sorted_autopilot_actions(plan)
     first_action = actions[0] if actions else {}
     stale_sources = action_plan_stale_required_sources(input_pack)
+    renewal_queue = action_plan_renewal_queue(input_pack)
     validation_failure = action_plan_validation_failure(input_pack, plan)
+    if renewal_queue is not None:
+        return {
+            "decision": "renew_stale_evidence",
+            "source_action": first_action.get("action"),
+            "rank": first_action.get("rank"),
+            "title": "Renew stale evidence queue items",
+            "severity": "high"
+            if int_value(renewal_queue.get("blocked_count"))
+            else "medium",
+            "confidence": "high",
+            "rationale": (
+                f"renewal_item_count={renewal_queue.get('renewal_count')} "
+                f"blocked_count={renewal_queue.get('blocked_count')}"
+            ),
+            "evidence_paths": [
+                "normalized_inputs.stale_evidence_renewal_queue.summary",
+                "normalized_inputs.stale_evidence_renewal_queue.queue",
+            ],
+            "command_safety_classes": action_plan_command_safety_classes(first_action),
+            "commands_require_operator_execution": True,
+        }
     if stale_sources:
         return {
             "decision": "renew_stale_evidence",
@@ -7147,6 +7271,13 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
             by_id["progress_slo"],
             args.max_items,
         )
+    if "stale_evidence_renewal_queue" in by_id:
+        runpack["stale_evidence_renewal_queue"] = (
+            summarize_stale_evidence_renewal_queue(
+                by_id["stale_evidence_renewal_queue"],
+                args.max_items,
+            )
+        )
     runpack["turn_pressure_ledger"] = build_turn_pressure_ledger(
         runpack,
         by_id,
@@ -7265,6 +7396,15 @@ def operator_next_actions(runpack: dict[str, Any]) -> list[str]:
             actions.append("Review validation-broker stale slot warnings before launching heavy validation")
         if duplicate.get("count"):
             actions.append("Use validation-broker duplicate-gate opportunities only after provenance matches")
+    stale_queue = runpack.get("stale_evidence_renewal_queue")
+    if isinstance(stale_queue, dict):
+        summary = stale_queue.get("summary") if isinstance(stale_queue.get("summary"), dict) else {}
+        renewal_count = int_value(summary.get("renewal_item_count"))
+        blocked_count = int_value(summary.get("blocked_count"))
+        if renewal_count or blocked_count:
+            actions.append(
+                "Renew stale evidence queue items before relying on runpack or release-claim evidence"
+            )
     progress_slo = runpack.get("progress_slo")
     if not isinstance(progress_slo, dict):
         progress_slo = runpack.get("doctor_swarm", {}).get("progress_slo")
@@ -7362,6 +7502,15 @@ def render_markdown(runpack: dict[str, Any]) -> str:
             "- Validation broker: "
             f"`{validation_broker.get('source_status')}` "
             f"(stale `{stale.get('count')}`, duplicate `{duplicate.get('count')}`)"
+        )
+    stale_queue = runpack.get("stale_evidence_renewal_queue")
+    if isinstance(stale_queue, dict):
+        summary = stale_queue.get("summary") if isinstance(stale_queue.get("summary"), dict) else {}
+        lines.append(
+            "- Stale evidence renewal queue: "
+            f"`{stale_queue.get('status')}` "
+            f"(renew `{summary.get('renewal_item_count')}`, "
+            f"blocked `{summary.get('blocked_count')}`)"
         )
     progress_slo = runpack.get("progress_slo")
     if not isinstance(progress_slo, dict):
@@ -14729,6 +14878,11 @@ def parse_args() -> argparse.Namespace:
         "--progress-slo-json",
         type=Path,
         help="optional pi.swarm.progress_slo.v1 JSON to summarize as advisory progress posture",
+    )
+    parser.add_argument(
+        "--stale-evidence-renewal-json",
+        type=Path,
+        help="optional pi.swarm.stale_evidence_renewal_queue.v1 JSON to summarize and feed the dry-run action plan",
     )
     parser.add_argument(
         "--operator-runpack-json",
