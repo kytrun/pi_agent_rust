@@ -1,0 +1,118 @@
+{
+  "schema": "pi.cancellation.cleanup.proof.v1",
+  "generatedAt": "2026-05-15T23:52:16Z",
+  "bead": "bd-h66tp.6",
+  "purpose": "Deterministic proof that cancellation and timeout paths leave structured session/tool evidence and ignore late successful completions.",
+  "coverage": [
+    {
+      "surface": "bash_tool_timeout",
+      "test": "tools::tests::test_bash_timeout",
+      "proof": {
+        "isError": true,
+        "detailsPointer": "/cancellation",
+        "schema": "pi.tool.bash.cancellation.v1",
+        "status": "cancelled",
+        "reason": "timeout",
+        "cleanup": "process_group_tree_terminated",
+        "lateSuccessAllowed": false
+      }
+    },
+    {
+      "surface": "bash_tool_ambient_cancellation",
+      "test": "tools::tests::test_bash_cancelled_context_kills_process_tree",
+      "proof": {
+        "resultCancelled": true,
+        "reason": "ambient_cancellation",
+        "cleanup": "process_group_tree_terminated",
+        "leakedChildMarker": false
+      }
+    },
+    {
+      "surface": "agent_tool_abort_session_evidence",
+      "test": "agent::abort_tests::abort_during_tool_execution_records_aborted_tool_result",
+      "proof": {
+        "persistedMessage": "toolResult",
+        "isError": true,
+        "detailsPointer": "/",
+        "schema": "pi.tool.cancellation.v1",
+        "status": "cancelled",
+        "reason": "abort_signal",
+        "cleanup": "tool_result_recorded_no_success",
+        "lateSuccessAllowed": false
+      }
+    },
+    {
+      "surface": "extension_hostcall_timeout",
+      "test": "extensions_js::tests::pijs_hostcall_timeout_rejects_promise",
+      "proof": {
+        "hostcallTimedOut": 1,
+        "promiseRejectedWith": "timeout",
+        "lateCompletionIgnored": true,
+        "lateSuccessValue": null
+      }
+    },
+    {
+      "surface": "extension_hostcall_shutdown",
+      "test": "extensions::tests::js_hostcall_manager_shutdown_maps_to_denied",
+      "proof": {
+        "shutdownCode": "denied",
+        "legacyShutdownCodeAllowed": false
+      }
+    }
+  ],
+  "validation": {
+    "status": "passed",
+    "completedAt": "2026-05-16T00:35:20Z",
+    "commands": [
+      {
+        "command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey/target TMPDIR=/tmp cargo test --lib bash -- --nocapture",
+        "status": "passed",
+        "tests": 37
+      },
+      {
+        "command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey/target TMPDIR=/tmp cargo test --lib hostcall -- --nocapture",
+        "status": "passed",
+        "tests": 406
+      },
+      {
+        "command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey/target TMPDIR=/tmp cargo test --lib abort_during_tool_execution_records_aborted_tool_result -- --nocapture",
+        "status": "passed",
+        "tests": 1
+      },
+      {
+        "command": "cargo fmt --check",
+        "status": "passed"
+      },
+      {
+        "command": "git diff --check",
+        "status": "passed"
+      },
+      {
+        "command": "python3 -m json.tool docs/evidence/cancellation-cleanup-proof.json",
+        "status": "passed"
+      },
+      {
+        "command": "./scripts/reconcile_beads_ledger.sh",
+        "status": "passed"
+      },
+      {
+        "command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey/target TMPDIR=/tmp cargo check --all-targets",
+        "status": "passed"
+      },
+      {
+        "command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey/target TMPDIR=/tmp cargo clippy --all-targets -- -D warnings",
+        "status": "passed"
+      }
+    ],
+    "notes": [
+      "An initial broad bash run used a remote-missing TMPDIR and failed before exercising code; rerunning with worker-existing TMPDIR=/tmp passed."
+    ]
+  },
+  "mailFallback": {
+    "agent": "AmberOsprey",
+    "registration": "partial-read-only",
+    "reservation": "failed",
+    "messageSend": "failed",
+    "reason": "Agent Mail health red: sqlite schema missing projects, agents, messages, message_recipients"
+  }
+}

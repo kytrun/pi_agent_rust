@@ -24406,8 +24406,9 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                     r#"
                     globalThis.done = false;
                     globalThis.code = null;
+                    globalThis.value = null;
                     pi.tool("read", { path: "test.txt" })
-                        .then(() => { globalThis.done = true; })
+                        .then((value) => { globalThis.value = value; globalThis.done = true; })
                         .catch((e) => { globalThis.code = e.code; globalThis.done = true; });
                     "#,
                 )
@@ -24429,6 +24430,10 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                 get_global_json(&runtime, "code").await,
                 serde_json::json!("timeout")
             );
+            assert_eq!(
+                get_global_json(&runtime, "value").await,
+                serde_json::Value::Null
+            );
 
             // Late completions should be ignored.
             runtime.complete_hostcall(
@@ -24438,6 +24443,14 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             let stats = runtime.tick().await.expect("tick late completion");
             assert!(stats.ran_macrotask);
             assert_eq!(stats.hostcalls_timed_out, 1);
+            assert_eq!(
+                get_global_json(&runtime, "code").await,
+                serde_json::json!("timeout")
+            );
+            assert_eq!(
+                get_global_json(&runtime, "value").await,
+                serde_json::Value::Null
+            );
         });
     }
 

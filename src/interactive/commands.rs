@@ -617,11 +617,28 @@ fn parse_user_bash_event_result(value: &Value) -> Option<crate::tools::BashRunRe
         .or_else(|| obj.get("full_output_path"))
         .and_then(Value::as_str)
         .map(ToString::to_string);
+    let cancellation = obj.get("cancellation").and_then(Value::as_object);
+    let cancellation_reason = cancellation
+        .and_then(|details| details.get("reason"))
+        .and_then(Value::as_str)
+        .and_then(|reason| match reason {
+            "timeout" => Some(crate::tools::BashCancellationReason::Timeout),
+            "ambient_cancellation" => {
+                Some(crate::tools::BashCancellationReason::AmbientCancellation)
+            }
+            _ => None,
+        });
+    let timeout_ms = cancellation
+        .and_then(|details| details.get("timeoutMs"))
+        .or_else(|| obj.get("timeoutMs"))
+        .and_then(Value::as_u64);
 
     Some(crate::tools::BashRunResult {
         output,
         exit_code: i32::try_from(exit_code).unwrap_or(0),
         cancelled,
+        cancellation_reason,
+        timeout_ms,
         truncated,
         full_output_path,
         truncation: None,

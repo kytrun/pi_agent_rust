@@ -77,6 +77,7 @@ const MAX_FOLLOW_UP_QUEUE_SIZE: usize = 100;
 const MAX_AGENT_MESSAGES: usize = 10_000;
 /// Schema identifier for per-turn latency budget breakdowns.
 pub const TURN_LATENCY_BREAKDOWN_SCHEMA_V1: &str = "pi.agent.turn_latency_breakdown.v1";
+const TOOL_CANCELLATION_SCHEMA_V1: &str = "pi.tool.cancellation.v1";
 const SEMANTIC_CONTEXT_PROMPT_SCHEMA_V1: &str = "pi.semantic_context_prompt.v1";
 const SEMANTIC_CONTEXT_PROVENANCE_SCHEMA_V1: &str = "pi.semantic_context_provenance.v1";
 const SEMANTIC_CONTEXT_CUSTOM_TYPE: &str = "semantic_context_bundle";
@@ -2662,7 +2663,10 @@ impl Agent {
                     content: vec![ContentBlock::Text(TextContent::new(
                         "Tool execution aborted",
                     ))],
-                    details: None,
+                    details: Some(Self::tool_cancellation_details(
+                        &tool_call.name,
+                        "abort_signal",
+                    )),
                     is_error: true,
                 };
 
@@ -2889,6 +2893,16 @@ impl Agent {
             details: None,
             is_error: true,
         }
+    }
+
+    fn tool_cancellation_details(tool_name: &str, reason: &str) -> Value {
+        json!({
+            "schema": TOOL_CANCELLATION_SCHEMA_V1,
+            "status": "cancelled",
+            "reason": reason,
+            "toolName": tool_name,
+            "cleanup": "tool_result_recorded_no_success",
+        })
     }
 
     async fn dispatch_tool_call_hook(
@@ -6713,6 +6727,15 @@ mod abort_tests {
                 "missing aborted tool marker in tool output: {:?}",
                 tool_result.content
             );
+            let details = tool_result
+                .details
+                .as_ref()
+                .expect("aborted tool result should include structured details");
+            assert_eq!(details["schema"], TOOL_CANCELLATION_SCHEMA_V1);
+            assert_eq!(details["status"], "cancelled");
+            assert_eq!(details["reason"], "abort_signal");
+            assert_eq!(details["toolName"], "hanging_tool");
+            assert_eq!(details["cleanup"], "tool_result_recorded_no_success");
         });
     }
 }

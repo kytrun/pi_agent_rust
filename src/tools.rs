@@ -199,6 +199,7 @@ pub const IMAGE_MAX_BYTES: usize = 4_718_592;
 pub const DEFAULT_BASH_TIMEOUT_SECS: u64 = 120;
 
 const BASH_TERMINATE_GRACE_SECS: u64 = 5;
+const BASH_CANCELLATION_SCHEMA_V1: &str = "pi.tool.bash.cancellation.v1";
 
 /// Hard limit for bash output file size (1GB) to prevent disk exhaustion DoS.
 pub(crate) const BASH_FILE_LIMIT_BYTES: usize = 1024 * 1024 * 1024; // 1 GiB
@@ -231,6 +232,21 @@ pub struct TruncationResult {
 pub enum TruncatedBy {
     Lines,
     Bytes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BashCancellationReason {
+    Timeout,
+    AmbientCancellation,
+}
+
+impl BashCancellationReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::AmbientCancellation => "ambient_cancellation",
+        }
+    }
 }
 
 /// Truncate from the beginning (keep first N lines).
@@ -3026,6 +3042,8 @@ pub struct BashRunResult {
     pub output: String,
     pub exit_code: i32,
     pub cancelled: bool,
+    pub cancellation_reason: Option<BashCancellationReason>,
+    pub timeout_ms: Option<u64>,
     pub truncated: bool,
     pub full_output_path: Option<String>,
     pub truncation: Option<TruncationResult>,
@@ -3049,6 +3067,21 @@ fn exit_status_code(status: std::process::ExitStatus) -> i32 {
         {
             -1
         }
+    })
+}
+
+fn bash_cancellation_details(
+    reason: BashCancellationReason,
+    timeout_ms: Option<u64>,
+    exit_code: i32,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": BASH_CANCELLATION_SCHEMA_V1,
+        "status": "cancelled",
+        "reason": reason.as_str(),
+        "cleanup": "process_group_tree_terminated",
+        "exitCode": exit_code,
+        "timeoutMs": timeout_ms,
     })
 }
 
@@ -3145,6 +3178,7 @@ pub(crate) async fn run_bash_command(
     let cx = AgentCx::for_current_or_request();
     let mut timed_out = false;
     let mut cancelled = false;
+    let mut cancellation_reason: Option<BashCancellationReason> = None;
     let mut exit_code: Option<i32> = None;
     let start = cx
         .cx()
@@ -3193,6 +3227,7 @@ pub(crate) async fn run_bash_command(
             let elapsed = std::time::Duration::from_nanos(now.duration_since(start));
             if elapsed >= timeout {
                 timed_out = true;
+                cancellation_reason = Some(BashCancellationReason::Timeout);
                 let pid = guard.child.as_ref().map(std::process::Child::id);
                 terminate_process_group_tree(pid);
                 terminate_deadline = Some(now + Duration::from_secs(BASH_TERMINATE_GRACE_SECS));
@@ -3201,6 +3236,7 @@ pub(crate) async fn run_bash_command(
 
         if terminate_deadline.is_none() && cx.checkpoint().is_err() {
             cancelled = true;
+            cancellation_reason = Some(BashCancellationReason::AmbientCancellation);
             let _ = guard.kill();
             exit_code = Some(-1);
             break;
@@ -3259,6 +3295,7 @@ pub(crate) async fn run_bash_command(
             }
             if allow_drain_cancellation && cx.checkpoint().is_err() {
                 cancelled = true;
+                cancellation_reason.get_or_insert(BashCancellationReason::AmbientCancellation);
                 break;
             }
             sleep(now, tick).await;
@@ -3367,6 +3404,8 @@ pub(crate) async fn run_bash_command(
         output: output_text,
         exit_code,
         cancelled,
+        cancellation_reason,
+        timeout_ms: timeout_secs.map(|s| s.saturating_mul(1000)),
         truncated: truncation.truncated,
         full_output_path,
         truncation: if truncation.truncated {
@@ -3473,6 +3512,12 @@ impl Tool for BashTool {
             details_map.insert(
                 "fullOutputPath".to_string(),
                 serde_json::Value::String(path.clone()),
+            );
+        }
+        if let Some(reason) = result.cancellation_reason {
+            details_map.insert(
+                "cancellation".to_string(),
+                bash_cancellation_details(reason, result.timeout_ms, result.exit_code),
             );
         }
 
@@ -9352,6 +9397,16 @@ mod tests {
                 msg.to_lowercase().contains("timeout") || msg.to_lowercase().contains("timed out"),
                 "expected timeout indication, got: {msg}"
             );
+            let cancellation = out
+                .details
+                .as_ref()
+                .and_then(|details| details.get("cancellation"))
+                .expect("timeout should include structured cancellation details");
+            assert_eq!(cancellation["schema"], BASH_CANCELLATION_SCHEMA_V1);
+            assert_eq!(cancellation["status"], "cancelled");
+            assert_eq!(cancellation["reason"], "timeout");
+            assert_eq!(cancellation["cleanup"], "process_group_tree_terminated");
+            assert_eq!(cancellation["timeoutMs"], 2000);
         });
     }
 
@@ -9420,6 +9475,10 @@ mod tests {
             assert!(
                 result.cancelled,
                 "expected cancelled bash result: {result:?}"
+            );
+            assert_eq!(
+                result.cancellation_reason,
+                Some(BashCancellationReason::AmbientCancellation)
             );
 
             std::thread::sleep(Duration::from_secs(4));
