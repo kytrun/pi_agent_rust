@@ -25,7 +25,7 @@ import tempfile
 import traceback
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +59,8 @@ AUTOPILOT_INPUT_PACK_SCHEMA = "pi.swarm.autopilot_input_pack.v1"
 AUTOPILOT_INPUT_PACK_CONTRACT_SCHEMA = "pi.swarm.autopilot_input_pack_contract.v1"
 AUTOPILOT_PLAN_SCHEMA = "pi.swarm.autopilot_plan.v1"
 AUTOPILOT_PLAN_CONTRACT_SCHEMA = "pi.swarm.autopilot_plan_contract.v1"
+ACTION_PLAN_SCHEMA = "pi.swarm.action_plan.v1"
+ACTION_PLAN_CONTRACT_SCHEMA = "pi.swarm.action_plan_contract.v1"
 BUDGET_DRIFT_SCHEMA = "pi.swarm.budget_drift.v1"
 AUTOPILOT_HANDOFF_SCHEMA = "pi.swarm.autopilot_handoff.v1"
 AUTOPILOT_E2E_SCHEMA = "pi.swarm.autopilot_e2e.v1"
@@ -81,6 +83,7 @@ AUTOPILOT_INPUT_PACK_CONTRACT_PATH = Path(
     "docs/contracts/swarm-autopilot-input-pack-contract.json"
 )
 AUTOPILOT_PLAN_CONTRACT_PATH = Path("docs/contracts/swarm-autopilot-plan-contract.json")
+ACTION_PLAN_CONTRACT_PATH = Path("docs/contracts/swarm-action-plan-contract.json")
 AUTOPILOT_DECISION_GATE_CONTRACT_PATH = Path(
     "docs/contracts/swarm-autopilot-decision-gate-contract.json"
 )
@@ -229,6 +232,37 @@ AUTOPILOT_PLAN_ALLOWED_ACTIONS = (
     "run_docs_only_work",
     "plan_new_bead",
 )
+ACTION_PLAN_ALLOWED_DECISIONS = (
+    "implement_ready_work",
+    "create_or_refine_beads",
+    "renew_stale_evidence",
+    "wait_for_pressure",
+    "pause_or_surface_blocker",
+)
+ACTION_PLAN_ALLOWED_STATUSES = ("ready", "degraded", "blocked")
+ACTION_PLAN_COMMAND_SAFETY_CLASSES = (
+    "read_only_probe",
+    "coordination_probe",
+    "validation_probe",
+    "evidence_capture",
+    "beads_mutation_requires_operator",
+)
+AUTOPILOT_TO_ACTION_PLAN_DECISION = {
+    "claim_ready_bead": "implement_ready_work",
+    "create_or_refine_backlog": "create_or_refine_beads",
+    "run_docs_only_work": "create_or_refine_beads",
+    "plan_new_bead": "create_or_refine_beads",
+    "split_by_surface": "create_or_refine_beads",
+    "wait_for_rch": "wait_for_pressure",
+    "use_beads_soft_lock": "wait_for_pressure",
+    "adjust_swarm_budget": "wait_for_pressure",
+    "stop_and_surface_blocker": "pause_or_surface_blocker",
+    "reopen_stale_bead_candidate": "pause_or_surface_blocker",
+    "capture_handoff": "pause_or_surface_blocker",
+}
+ACTION_PLAN_VALIDATION_FAILURE_IDS = {
+    "FAIL-RCH-REMOTE-COMPILE",
+}
 AUTOPILOT_PLAN_SEVERITIES = ("critical", "high", "medium", "low", "info")
 AUTOPILOT_PLAN_CONFIDENCE = ("high", "medium", "low")
 AUTOPILOT_PLAN_DANGEROUS_COMMAND_FRAGMENTS = (
@@ -248,6 +282,8 @@ AUTOPILOT_E2E_REQUIRED_SCENARIOS = (
     "dirty_mail_rch_empty_beads_dry_run",
     "stale_in_progress_bead",
     "unrelated_dirty_worktree",
+    "stale_action_plan_evidence",
+    "validation_failure_fail_closed",
     "malformed_source_fail_closed",
 )
 AUTOPILOT_DECISION_GATE_CHILD_BEADS = (
@@ -5728,6 +5764,232 @@ def build_autopilot_plan(
     return plan
 
 
+def action_plan_command_safety_class(command: dict[str, Any]) -> str:
+    text = str(command.get("command") or "").strip()
+    lower = text.lower()
+    for fragment in AUTOPILOT_PLAN_DANGEROUS_COMMAND_FRAGMENTS:
+        if fragment in lower:
+            raise AssertionError(
+                f"action plan command includes dangerous fragment: {fragment}"
+            )
+    if lower.startswith(("br update", "br create", "br dep add", "br close", "br sync")):
+        return "beads_mutation_requires_operator"
+    if (
+        " --capture-current" in lower
+        or " --out-" in lower
+        or lower.startswith("mkdir -p ")
+    ):
+        return "evidence_capture"
+    if (
+        " cargo " in f" {lower} "
+        or lower.startswith("cargo ")
+        or lower.startswith("rch ")
+        or "cargo_headroom" in lower
+    ):
+        return "validation_probe"
+    if lower.startswith(("am ", "br ", "git ", "pi doctor")):
+        return "coordination_probe"
+    return "read_only_probe"
+
+
+def action_plan_command_safety_classes(action: dict[str, Any]) -> list[str]:
+    classes = {
+        action_plan_command_safety_class(command)
+        for command in action.get("commands", [])
+        if isinstance(command, dict)
+    }
+    return sorted(classes)
+
+
+def action_plan_stale_required_sources(input_pack: dict[str, Any]) -> list[dict[str, Any]]:
+    stale: list[dict[str, Any]] = []
+    for item in input_pack.get("source_classification", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("required") is True and item.get("classification") == "stale":
+            stale.append(item)
+    return stale
+
+
+def action_plan_validation_failure(
+    input_pack: dict[str, Any],
+    plan: dict[str, Any],
+) -> dict[str, Any] | None:
+    for action in plan.get("failure_actions", []):
+        if not isinstance(action, dict):
+            continue
+        if action.get("id") in ACTION_PLAN_VALIDATION_FAILURE_IDS:
+            return action
+    for index, command in enumerate(input_pack.get("command_provenance", [])):
+        if not isinstance(command, dict) or command.get("status") in {None, "ok"}:
+            continue
+        text = failure_signal_text(command).lower()
+        if ("cargo " in text or "rustc" in text or "error[" in text) and (
+            "failed" in text or "exit_code=101" in text
+        ):
+            return {
+                "id": "ACTION-PLAN-VALIDATION-FAILED",
+                "title": "Validation command failed",
+                "match_confidence": "medium",
+                "evidence_paths": [f"command_provenance[{index}]"],
+                "safe_commands": [
+                    plan_command("Inspect failed validation", "git status --short --branch"),
+                    plan_command(
+                        "Rerun focused validation through RCH",
+                        "env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/${USER:-agent}/target TMPDIR=/data/tmp/pi_agent_rust_cargo/${USER:-agent}/tmp rch exec -- cargo check --all-targets",
+                    ),
+                ],
+            }
+    return None
+
+
+def sorted_autopilot_actions(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    actions = [action for action in plan.get("actions", []) if isinstance(action, dict)]
+    return sorted(actions, key=lambda item: int_value(item.get("rank")) or 999)
+
+
+def action_plan_decision_for_action(action: dict[str, Any]) -> str:
+    source_action = str(action.get("action") or "")
+    return AUTOPILOT_TO_ACTION_PLAN_DECISION.get(
+        source_action,
+        "pause_or_surface_blocker",
+    )
+
+
+def build_action_plan_decision(
+    input_pack: dict[str, Any],
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    actions = sorted_autopilot_actions(plan)
+    first_action = actions[0] if actions else {}
+    stale_sources = action_plan_stale_required_sources(input_pack)
+    validation_failure = action_plan_validation_failure(input_pack, plan)
+    if stale_sources:
+        return {
+            "decision": "renew_stale_evidence",
+            "source_action": first_action.get("action"),
+            "rank": first_action.get("rank"),
+            "title": "Renew stale required planner evidence",
+            "severity": "high",
+            "confidence": "high",
+            "rationale": "; ".join(
+                f"{item.get('id')} freshness_hours={item.get('freshness_hours')}"
+                for item in stale_sources
+            ),
+            "evidence_paths": [
+                f"source_classification[{item.get('id')}]"
+                for item in stale_sources
+            ],
+            "command_safety_classes": action_plan_command_safety_classes(first_action),
+            "commands_require_operator_execution": True,
+        }
+    if validation_failure is not None:
+        return {
+            "decision": "pause_or_surface_blocker",
+            "source_action": first_action.get("action"),
+            "rank": first_action.get("rank"),
+            "title": "Pause for validation failure triage",
+            "severity": "critical",
+            "confidence": validation_failure.get("match_confidence") or "medium",
+            "rationale": str(validation_failure.get("title") or "validation failed"),
+            "evidence_paths": list(validation_failure.get("evidence_paths") or []),
+            "command_safety_classes": sorted(
+                {
+                    action_plan_command_safety_class(command)
+                    for command in validation_failure.get("safe_commands", [])
+                    if isinstance(command, dict)
+                }
+            ),
+            "commands_require_operator_execution": True,
+        }
+    return {
+        "decision": action_plan_decision_for_action(first_action),
+        "source_action": first_action.get("action"),
+        "rank": first_action.get("rank"),
+        "title": first_action.get("title"),
+        "severity": first_action.get("severity"),
+        "confidence": first_action.get("confidence"),
+        "rationale": first_action.get("rationale"),
+        "evidence_paths": list(first_action.get("evidence_paths") or []),
+        "command_safety_classes": action_plan_command_safety_classes(first_action),
+        "commands_require_operator_execution": True,
+    }
+
+
+def derive_action_plan_status(decision: str, plan: dict[str, Any]) -> str:
+    if decision == "pause_or_surface_blocker" or plan.get("status") == "blocked":
+        return "blocked"
+    if decision in {"renew_stale_evidence", "wait_for_pressure"}:
+        return "degraded"
+    if plan.get("status") == "degraded":
+        return "degraded"
+    return "ready"
+
+
+def build_swarm_action_plan(
+    input_pack: dict[str, Any],
+    autopilot_plan: dict[str, Any],
+    *,
+    max_items: int,
+) -> dict[str, Any]:
+    if input_pack.get("schema") != AUTOPILOT_INPUT_PACK_SCHEMA:
+        raise RunpackError(
+            "action plan requires "
+            f"{AUTOPILOT_INPUT_PACK_SCHEMA}, got {input_pack.get('schema')}"
+        )
+    if autopilot_plan.get("schema") != AUTOPILOT_PLAN_SCHEMA:
+        raise RunpackError(
+            "action plan requires "
+            f"{AUTOPILOT_PLAN_SCHEMA}, got {autopilot_plan.get('schema')}"
+        )
+    next_safest = build_action_plan_decision(input_pack, autopilot_plan)
+    operator_actions = []
+    for action in sorted_autopilot_actions(autopilot_plan):
+        operator_actions.append(
+            {
+                "rank": action.get("rank"),
+                "source_action": action.get("action"),
+                "decision": action_plan_decision_for_action(action),
+                "title": action.get("title"),
+                "severity": action.get("severity"),
+                "confidence": action.get("confidence"),
+                "evidence_paths": list(action.get("evidence_paths") or []),
+                "command_safety_classes": action_plan_command_safety_classes(action),
+            }
+        )
+    decision = str(next_safest.get("decision") or "pause_or_surface_blocker")
+    action_plan = {
+        "schema": ACTION_PLAN_SCHEMA,
+        "generated_at": input_pack.get("generated_at"),
+        "status": derive_action_plan_status(decision, autopilot_plan),
+        "purpose": "dry_run_swarm_action_plan_not_source_of_truth",
+        "source_plan_schema": autopilot_plan.get("schema"),
+        "input_pack_schema": input_pack.get("schema"),
+        "input_pack_status": input_pack.get("status"),
+        "next_safest_action": next_safest,
+        "operator_actions": bounded(operator_actions, max_items),
+        "failure_actions": bounded(autopilot_plan.get("failure_actions") or [], max_items),
+        "source_statuses": bounded(input_pack.get("source_statuses") or [], max_items),
+        "source_classification": bounded(
+            input_pack.get("source_classification") or [],
+            max_items,
+        ),
+        "degraded_reasons": input_pack.get("degraded_reasons", []),
+        "forbidden_actions": list(AUTOPILOT_FORBIDDEN_ACTIONS),
+        "planner_guards": {
+            "dry_run_only": True,
+            "no_source_mutation": True,
+            "commands_require_operator_execution": True,
+            "dangerous_runnable_commands_blocked": True,
+            "output_overwrite_refusal": True,
+            "source_of_truth": "upstream_source_artifacts",
+        },
+        "redaction_summary": input_pack.get("redaction_summary"),
+    }
+    assert_action_plan_contract(action_plan)
+    return action_plan
+
+
 def int_value(value: Any) -> int:
     if isinstance(value, bool):
         return int(value)
@@ -6563,6 +6825,19 @@ def write_autopilot_plan_output(
     output_path.write_text(json_dumps(plan, pretty=True), encoding="utf-8")
 
 
+def write_action_plan_output(
+    args: argparse.Namespace,
+    action_plan: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_action_plan_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(f"refusing to overwrite existing action plan: {output_path}")
+    output_path.write_text(json_dumps(action_plan, pretty=True), encoding="utf-8")
+
+
 def artifact_path(value: Path | None) -> str | None:
     return str(value) if value is not None else None
 
@@ -7001,6 +7276,50 @@ def assert_autopilot_plan_contract(plan: dict[str, Any]) -> None:
     assert guards.get("commands_require_operator_execution") is True
     assert guards.get("dangerous_runnable_commands_blocked") is True
     assert_autopilot_plan_commands_are_safe(plan)
+
+
+def assert_action_plan_contract(action_plan: dict[str, Any]) -> None:
+    repo_root = Path(__file__).resolve().parent.parent
+    contract_path = repo_root / ACTION_PLAN_CONTRACT_PATH
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AssertionError(f"missing action plan contract: {contract_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"action plan contract is malformed JSON: {contract_path}: {exc}"
+        ) from exc
+    assert contract.get("schema") == ACTION_PLAN_CONTRACT_SCHEMA
+    assert contract.get("action_plan_schema") == ACTION_PLAN_SCHEMA
+    assert action_plan.get("schema") == contract["action_plan_schema"]
+    assert action_plan.get("purpose") == contract.get("purpose")
+    assert action_plan.get("status") in set(contract.get("allowed_statuses", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in action_plan, f"missing top-level action plan key: {key}"
+    next_action = action_plan.get("next_safest_action")
+    assert isinstance(next_action, dict)
+    for key in contract.get("required_next_action_fields", []):
+        assert key in next_action, f"missing next_safest_action key: {key}"
+    allowed_decisions = set(contract.get("allowed_decisions", []))
+    assert next_action.get("decision") in allowed_decisions
+    safety_classes = set(contract.get("command_safety_classes", []))
+    for item in next_action.get("command_safety_classes", []):
+        assert item in safety_classes, f"unknown action plan safety class: {item}"
+    assert next_action.get("commands_require_operator_execution") is True
+    operator_actions = action_plan.get("operator_actions")
+    assert isinstance(operator_actions, list) and operator_actions
+    for action in operator_actions:
+        assert isinstance(action, dict)
+        assert action.get("decision") in allowed_decisions
+        for item in action.get("command_safety_classes", []):
+            assert item in safety_classes, f"unknown action safety class: {item}"
+    guards = action_plan.get("planner_guards")
+    assert isinstance(guards, dict)
+    for guard in contract.get("required_true_guards", []):
+        assert guards.get(guard) is True, f"action plan guard must be true: {guard}"
+    assert set(action_plan.get("forbidden_actions", [])).issuperset(
+        set(contract.get("required_forbidden_actions", []))
+    )
 
 
 def canonicalize_for_golden(value: Any, workspace: Path) -> Any:
@@ -7853,6 +8172,7 @@ def build_autopilot_e2e_summary(
         beads_ready_payload: Any,
         commands: list[dict[str, Any]],
         expected_actions: list[str],
+        expected_action_plan_decision: str | None = None,
         cargo_payload: dict[str, Any] | None = None,
         agent_mail_payload: dict[str, Any] | None = None,
         git_payload: dict[str, Any] | None = None,
@@ -7895,6 +8215,13 @@ def build_autopilot_e2e_summary(
         )
         input_pack = build_autopilot_input_pack(args)
         plan = build_autopilot_plan(input_pack, max_items=max_items)
+        action_plan = build_swarm_action_plan(input_pack, plan, max_items=max_items)
+        if expected_action_plan_decision is not None:
+            actual_decision = action_plan["next_safest_action"]["decision"]
+            assert actual_decision == expected_action_plan_decision, (
+                f"{scenario_id} action plan decision mismatch: "
+                f"expected {expected_action_plan_decision}, got {actual_decision}"
+            )
         result = autopilot_e2e_result_from_plan(
             scenario_id=scenario_id,
             scenario_dir=scenario_dir,
@@ -7905,6 +8232,15 @@ def build_autopilot_e2e_summary(
             expected_actions=expected_actions,
             events_path=events_path,
         )
+        result["action_plan"] = {
+            "schema": action_plan["schema"],
+            "status": action_plan["status"],
+            "decision": action_plan["next_safest_action"]["decision"],
+            "source_action": action_plan["next_safest_action"]["source_action"],
+            "command_safety_classes": action_plan["next_safest_action"][
+                "command_safety_classes"
+            ],
+        }
         results.append(result)
         return input_pack, plan, result
 
@@ -7927,6 +8263,7 @@ def build_autopilot_e2e_summary(
         beads_ready_payload=ready_queue,
         commands=ready_commands,
         expected_actions=["claim_ready_bead"],
+        expected_action_plan_decision="implement_ready_work",
     )
 
     empty_beads, empty_ready, empty_commands = build_real_beads_sources(
@@ -7941,6 +8278,7 @@ def build_autopilot_e2e_summary(
         beads_ready_payload=empty_ready,
         commands=empty_commands,
         expected_actions=["run_docs_only_work"],
+        expected_action_plan_decision="create_or_refine_beads",
     )
     deferred_roadmap_payload = {
         "issues": [
@@ -7972,6 +8310,7 @@ def build_autopilot_e2e_summary(
         beads_ready_payload=empty_ready,
         commands=empty_commands,
         expected_actions=["create_or_refine_backlog"],
+        expected_action_plan_decision="create_or_refine_beads",
     )
 
     degraded_mail_commands = list(ready_commands) + [
@@ -7993,6 +8332,7 @@ def build_autopilot_e2e_summary(
         beads_ready_payload=ready_queue,
         commands=degraded_mail_commands,
         expected_actions=["use_beads_soft_lock"],
+        expected_action_plan_decision="wait_for_pressure",
         agent_mail_payload=load_shared_agent_mail_schema_corrupt_fixture(
             generated_at=generated_at,
         ),
@@ -8017,6 +8357,7 @@ def build_autopilot_e2e_summary(
             }
         ],
         expected_actions=["adjust_swarm_budget", "wait_for_rch"],
+        expected_action_plan_decision="wait_for_pressure",
         cargo_payload=autopilot_e2e_cargo_payload(
             decision="backoff",
             queue_action="backoff",
@@ -8240,6 +8581,7 @@ def build_autopilot_e2e_summary(
             "run_docs_only_work",
             "plan_new_bead",
         ],
+        expected_action_plan_decision="wait_for_pressure",
         cargo_payload=dry_run_cargo,
         agent_mail_payload=dry_run_mail,
         git_status_file=dry_run_git_path,
@@ -8330,8 +8672,61 @@ def build_autopilot_e2e_summary(
         beads_ready_payload=empty_ready,
         commands=dirty_git_commands + empty_commands,
         expected_actions=["capture_handoff"],
+        expected_action_plan_decision="pause_or_surface_blocker",
         git_status_file=dirty_git_path,
     )
+
+    stale_generated_at = (
+        parse_utc(generated_at) - timedelta(hours=stale_after_hours + 2)
+    ).isoformat()
+    stale_mail_payload = autopilot_e2e_agent_mail_status(stale_generated_at)
+    stale_input, stale_plan, stale_result = run_plan_scenario(
+        "stale_action_plan_evidence",
+        beads_payload=ready_beads,
+        beads_ready_payload=ready_queue,
+        commands=ready_commands,
+        expected_actions=["stop_and_surface_blocker"],
+        expected_action_plan_decision="renew_stale_evidence",
+        agent_mail_payload=stale_mail_payload,
+    )
+    stale_classifications = [
+        item
+        for item in stale_input["source_classification"]
+        if item.get("classification") == "stale"
+    ]
+    assert stale_classifications
+    assert stale_result["action_plan"]["decision"] == "renew_stale_evidence"
+    assert stale_plan["status"] == "blocked"
+
+    validation_failure_commands = [
+        {
+            "id": "remote_validation_rch_check",
+            "command": "rch exec -- cargo check --all-targets",
+            "cwd": str(workspace),
+            "status": "failed",
+            "exit_code": 101,
+            "issue": "[rch] remote cargo check failed error[E0308]",
+            "stdout_path": None,
+            "stderr_snippet": (
+                "[rch] remote cargo check failed error[E0308]: mismatched types"
+            ),
+            "redaction_summary": {"redacted_count": 0, "fields": []},
+        }
+    ] + list(ready_commands)
+    validation_input, validation_plan, validation_result = run_plan_scenario(
+        "validation_failure_fail_closed",
+        beads_payload=ready_beads,
+        beads_ready_payload=ready_queue,
+        commands=validation_failure_commands,
+        expected_actions=["claim_ready_bead"],
+        expected_action_plan_decision="pause_or_surface_blocker",
+    )
+    assert validation_input["capture"]["status"] == "degraded"
+    assert any(
+        action.get("id") == "FAIL-RCH-REMOTE-COMPILE"
+        for action in validation_plan["failure_actions"]
+    )
+    assert validation_result["action_plan"]["status"] == "blocked"
 
     malformed_dir = workspace / "malformed_source_fail_closed"
     malformed_dir.mkdir(parents=True, exist_ok=True)
@@ -8392,6 +8787,13 @@ def build_autopilot_e2e_summary(
                 "budget_state": event["budget_state"],
                 "command_count": len(ready_commands),
                 "artifact_dir": str(malformed_dir),
+                "action_plan": {
+                    "schema": ACTION_PLAN_SCHEMA,
+                    "status": "blocked",
+                    "decision": "pause_or_surface_blocker",
+                    "source_action": "fail_closed",
+                    "command_safety_classes": ["read_only_probe"],
+                },
             }
         )
     else:
@@ -8435,6 +8837,12 @@ def assert_autopilot_e2e_summary(summary: dict[str, Any]) -> None:
         assert isinstance(scenario["redaction_summary"], dict)
         assert isinstance(scenario["budget_state"], dict)
         assert scenario["command_count"] > 0
+        action_plan = scenario.get("action_plan")
+        assert isinstance(action_plan, dict)
+        assert action_plan.get("schema") == ACTION_PLAN_SCHEMA
+        assert action_plan.get("decision") in ACTION_PLAN_ALLOWED_DECISIONS
+        assert action_plan.get("status") in ACTION_PLAN_ALLOWED_STATUSES
+        assert isinstance(action_plan.get("command_safety_classes"), list)
     events_path = Path(str(summary.get("events_jsonl")))
     assert events_path.exists(), f"missing autopilot E2E events JSONL: {events_path}"
     events = [
@@ -13429,6 +13837,11 @@ def parse_args() -> argparse.Namespace:
         help="write pi.swarm.autopilot_plan.v1 JSON; refuses to overwrite",
     )
     parser.add_argument(
+        "--out-action-plan-json",
+        type=Path,
+        help="write pi.swarm.action_plan.v1 JSON; refuses to overwrite",
+    )
+    parser.add_argument(
         "--run-autopilot-e2e",
         action="store_true",
         help="run no-mock swarm autopilot E2E scenarios with JSONL evidence",
@@ -13513,6 +13926,11 @@ def parse_args() -> argparse.Namespace:
         "--print-autopilot-plan",
         action="store_true",
         help="print the dry-run autopilot plan JSON",
+    )
+    parser.add_argument(
+        "--print-action-plan",
+        action="store_true",
+        help="print the dry-run swarm action plan JSON",
     )
     parser.add_argument("--self-test", action="store_true", help="run fixture-backed self-test")
     return parser.parse_args()
@@ -13630,15 +14048,28 @@ def main() -> int:
         runpack = build_runpack(args)
         input_pack: dict[str, Any] | None = None
         plan: dict[str, Any] | None = None
+        action_plan: dict[str, Any] | None = None
         if (
             args.out_autopilot_input_pack_json
             or args.print_autopilot_input_pack
             or args.out_autopilot_plan_json
             or args.print_autopilot_plan
+            or args.out_action_plan_json
+            or args.print_action_plan
         ):
             input_pack = build_autopilot_input_pack(args)
-            if args.out_autopilot_plan_json or args.print_autopilot_plan:
+            if (
+                args.out_autopilot_plan_json
+                or args.print_autopilot_plan
+                or args.out_action_plan_json
+                or args.print_action_plan
+            ):
                 plan = build_autopilot_plan(input_pack, max_items=args.max_items)
+                action_plan = build_swarm_action_plan(
+                    input_pack,
+                    plan,
+                    max_items=args.max_items,
+                )
                 runpack["autopilot_handoff"] = build_autopilot_handoff_summary(
                     args,
                     input_pack,
@@ -13653,6 +14084,10 @@ def main() -> int:
             write_autopilot_plan_output(args, plan)
             if args.print_autopilot_plan:
                 print(json_dumps(plan, pretty=True))
+        if action_plan is not None:
+            write_action_plan_output(args, action_plan)
+            if args.print_action_plan:
+                print(json_dumps(action_plan, pretty=True))
     except (RunpackError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -13661,10 +14096,12 @@ def main() -> int:
         and not args.out_md
         and not args.out_autopilot_input_pack_json
         and not args.out_autopilot_plan_json
+        and not args.out_action_plan_json
         and not args.out_context_intelligence_final_gate_json
         and not args.out_runtime_intelligence_final_gate_json
         and not args.print_autopilot_input_pack
         and not args.print_autopilot_plan
+        and not args.print_action_plan
         and not args.print_context_intelligence_final_gate
         and not args.print_runtime_intelligence_final_gate
     ):
