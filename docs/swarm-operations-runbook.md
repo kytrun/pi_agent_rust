@@ -423,6 +423,15 @@ explicit operator execution. No Beads, Agent Mail, extension config, git refs,
 evidence files, RCH jobs, or release claims were mutated by these artifacts.
 ```
 
+The fourth-wave closeout gate emits
+`pi.swarm.fourth_wave_self_healing.closeout_gate.v1`, governed by
+`docs/contracts/fourth-wave-self-healing-closeout-gate-contract.json`; the
+current artifact is
+`docs/evidence/fourth-wave-self-healing-closeout-gate.json`. The gate maps each
+`bd-63x3v.7` child bead to source paths, docs/contracts/evidence, validation
+commands, pushed refs, and advisory claim boundaries before the roadmap can be
+closed.
+
 ## Throttle Or Pause
 
 Back off new claims when any of these are true:

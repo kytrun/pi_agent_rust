@@ -1959,6 +1959,15 @@ configuration, git, evidence files, RCH jobs, or release claims. The full
 workflow and safe handoff wording live in
 [docs/swarm-operations-runbook.md#fourth-wave-self-healing-workflow](docs/swarm-operations-runbook.md#fourth-wave-self-healing-workflow).
 
+The fourth-wave closeout gate emits
+`pi.swarm.fourth_wave_self_healing.closeout_gate.v1`. It maps the
+`bd-63x3v.7` child Beads to implementation artifacts, contracts, fixtures,
+operator docs, validation commands, pushed refs, source-boundary checks, and
+remaining advisory limits. It is governed by
+`docs/contracts/fourth-wave-self-healing-closeout-gate-contract.json`; the
+current closeout artifact is
+`docs/evidence/fourth-wave-self-healing-closeout-gate.json`.
+
 Offline swarm replay traces can be previewed before handoff with
 `pi swarm-replay-preview --trace <trace.json> --format json`. The command is
 read-only, emits `pi.swarm.replay_preview.v1` JSON or concise text, refuses to

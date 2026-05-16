@@ -1,0 +1,895 @@
+{
+  "checklist": [
+    {
+      "evidence": [
+        {
+          "child_statuses": {
+            "bd-63x3v.7.1": "closed",
+            "bd-63x3v.7.2": "closed",
+            "bd-63x3v.7.3": "closed",
+            "bd-63x3v.7.4": "closed",
+            "bd-63x3v.7.5": "closed",
+            "bd-63x3v.7.6": "closed",
+            "bd-63x3v.7.7": "closed",
+            "bd-63x3v.7.8": "closed"
+          },
+          "close_reasons": {
+            "bd-63x3v.7.1": "Completed: added pi.swarm.action_plan.v1 dry-run projection, contract, CLI output, replay scenario assertions for ready/empty/deferred/dirty/degraded/RCH/stale/validation-failure cases, and command safety classes.",
+            "bd-63x3v.7.2": "Completed: added fail-closed pi.swarm.work_admission_gate.v1 projection, contract, CLI output, and E2E replay assertions for ready/open/deferred, degraded Mail/RCH, dirty worktree, stale evidence, malformed source, and validation failure cases.",
+            "bd-63x3v.7.3": "Completed: added dry-run per-agent budget lease simulator, contract, and fixture-backed stable JSON self-tests for fair allocation, over-commit rejection, stale lease expiry, mixed-priority allocation, RCH saturation, and provider budget exhaustion.",
+            "bd-63x3v.7.4": "Completed: added deterministic pi.swarm.turn_pressure_ledger.v1 runpack section, contract, markdown/next-action integration, and golden-backed self-test coverage for normal turns, large tool artifact spillover, compaction admission pressure, provider reroute, TUI frame pressure, and session write backpressure.",
+            "bd-63x3v.7.5": "Completed: added no-network extension quarantine and rollback rehearsal CLI, contract, and fixture self-tests covering startup/runtime crash quarantine, permission escalation rejection, stale provenance, trusted rollback selection, action-plan projection, and fail-closed missing policy/provenance.",
+            "bd-63x3v.7.6": "Completed: added deterministic operator handoff summary CLI, contract, and fixture self-tests covering clean handoff, dirty worktree, unpushed commits, expired reservations, stale evidence, failed validation, redaction, and JSON/Markdown output.",
+            "bd-63x3v.7.7": "Completed: added deterministic pi.swarm.stale_evidence_renewal_queue.v1 scanner, contract, fixture self-tests for fresh/expired/missing-source/contract-drift/RCH-blocked/safe-command scenarios, and optional runpack/action-plan integration that recommends renew_stale_evidence without mutating evidence or weakening drop-in gates.",
+            "bd-63x3v.7.8": "Completed: documented the fourth-wave self-healing operator workflow in the swarm runbook and README, including dry-run action planner, work-admission stop gate, budget leases, turn pressure ledger, extension quarantine rehearsal, handoff summaries, stale-evidence renewal, claim boundaries, and safe handoff wording that preserves human confirmation and release-claim gates."
+          },
+          "path": ".beads/issues.jsonl"
+        }
+      ],
+      "id": "child_beads_closed",
+      "issue": null,
+      "requirement": "All fourth-wave implementation and docs child Beads are closed before closeout.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "artifact_paths_exist": true,
+          "child_artifact_map": [
+            {
+              "bead_id": "bd-63x3v.7.1",
+              "claim_boundary_text": "Dry-run action planning does not claim Beads, mutate source artifacts, run commands, or replace operator judgment.",
+              "close_reason": "Completed: added pi.swarm.action_plan.v1 dry-run projection, contract, CLI output, replay scenario assertions for ready/empty/deferred/dirty/degraded/RCH/stale/validation-failure cases, and command safety classes.",
+              "code_paths": [
+                "scripts/build_swarm_operator_runpack.py"
+              ],
+              "commit": "d17f403264761b55c8ff3281558c83c99ede862b",
+              "docs_or_evidence_paths": [
+                "docs/contracts/swarm-action-plan-contract.json"
+              ],
+              "status": "closed",
+              "test_paths": [],
+              "title": "Add dry-run swarm action planner and replay fixtures",
+              "validation_commands": [
+                "python3 scripts/build_swarm_operator_runpack.py --self-test"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.7.2",
+              "claim_boundary_text": "The work admission gate is fail-closed advisory evidence and does not enforce runtime throttles or start implementation work.",
+              "close_reason": "Completed: added fail-closed pi.swarm.work_admission_gate.v1 projection, contract, CLI output, and E2E replay assertions for ready/open/deferred, degraded Mail/RCH, dirty worktree, stale evidence, malformed source, and validation failure cases.",
+              "code_paths": [
+                "scripts/build_swarm_operator_runpack.py"
+              ],
+              "commit": "96acd31b645b2227cee6da8177af48fe230e3e16",
+              "docs_or_evidence_paths": [
+                "docs/contracts/swarm-work-admission-gate-contract.json"
+              ],
+              "status": "closed",
+              "test_paths": [],
+              "title": "Add global stop-admitting-work gate",
+              "validation_commands": [
+                "python3 scripts/build_swarm_operator_runpack.py --self-test"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.7.3",
+              "claim_boundary_text": "Budget lease simulation recommends allocations only; it does not reserve capacity, mutate Agent Mail, or throttle processes.",
+              "close_reason": "Completed: added dry-run per-agent budget lease simulator, contract, and fixture-backed stable JSON self-tests for fair allocation, over-commit rejection, stale lease expiry, mixed-priority allocation, RCH saturation, and provider budget exhaustion.",
+              "code_paths": [
+                "scripts/simulate_swarm_budget_leases.py"
+              ],
+              "commit": "96acd31b645b2227cee6da8177af48fe230e3e16",
+              "docs_or_evidence_paths": [
+                "docs/contracts/swarm-budget-lease-simulator-contract.json"
+              ],
+              "status": "closed",
+              "test_paths": [
+                "tests/fixtures/swarm_budget_leases/scenarios.json"
+              ],
+              "title": "Add per-agent swarm budget lease simulator",
+              "validation_commands": [
+                "python3 scripts/simulate_swarm_budget_leases.py --self-test"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.7.4",
+              "claim_boundary_text": "The turn pressure ledger is diagnostic operator evidence only and does not support benchmark, capacity, or release claims.",
+              "close_reason": "Completed: added deterministic pi.swarm.turn_pressure_ledger.v1 runpack section, contract, markdown/next-action integration, and golden-backed self-test coverage for normal turns, large tool artifact spillover, compaction admission pressure, provider reroute, TUI frame pressure, and session write backpressure.",
+              "code_paths": [
+                "scripts/build_swarm_operator_runpack.py"
+              ],
+              "commit": "f85b26331a74787c8c3d461b7406738654fb4bd0",
+              "docs_or_evidence_paths": [
+                "docs/contracts/swarm-turn-pressure-ledger-contract.json"
+              ],
+              "status": "closed",
+              "test_paths": [],
+              "title": "Record prompt and tool pressure ledger per turn",
+              "validation_commands": [
+                "python3 scripts/build_swarm_operator_runpack.py --self-test"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.7.5",
+              "claim_boundary_text": "Extension quarantine rehearsal does not edit configuration, quarantine extensions, or roll back anything without operator confirmation.",
+              "close_reason": "Completed: added no-network extension quarantine and rollback rehearsal CLI, contract, and fixture self-tests covering startup/runtime crash quarantine, permission escalation rejection, stale provenance, trusted rollback selection, action-plan projection, and fail-closed missing policy/provenance.",
+              "code_paths": [
+                "scripts/rehearse_extension_quarantine.py"
+              ],
+              "commit": "4bd167f2685424993bad86b64b617f1c836ecc48",
+              "docs_or_evidence_paths": [
+                "docs/contracts/extension-quarantine-rehearsal-contract.json"
+              ],
+              "status": "closed",
+              "test_paths": [
+                "tests/fixtures/extension_quarantine_rehearsal/scenarios.json"
+              ],
+              "title": "Rehearse extension crash quarantine and rollback",
+              "validation_commands": [
+                "python3 scripts/rehearse_extension_quarantine.py --self-test"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.7.6",
+              "claim_boundary_text": "Operator handoff summaries are redacted summaries and do not replace Beads, Agent Mail, RCH, Doctor, CI, UBS, or source evidence.",
+              "close_reason": "Completed: added deterministic operator handoff summary CLI, contract, and fixture self-tests covering clean handoff, dirty worktree, unpushed commits, expired reservations, stale evidence, failed validation, redaction, and JSON/Markdown output.",
+              "code_paths": [
+                "scripts/summarize_operator_handoff.py"
+              ],
+              "commit": "6ec525c36ca4a2105bea7409a787f8ce2ada25f7",
+              "docs_or_evidence_paths": [
+                "docs/contracts/operator-handoff-summary-contract.json"
+              ],
+              "status": "closed",
+              "test_paths": [
+                "tests/fixtures/operator_handoff_summary/scenarios.json"
+              ],
+              "title": "Add operator handoff invariant summarizer",
+              "validation_commands": [
+                "python3 scripts/summarize_operator_handoff.py --self-test"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.7.7",
+              "claim_boundary_text": "The stale-evidence renewal queue does not regenerate evidence, overwrite artifacts, or weaken the drop-in claim gate.",
+              "close_reason": "Completed: added deterministic pi.swarm.stale_evidence_renewal_queue.v1 scanner, contract, fixture self-tests for fresh/expired/missing-source/contract-drift/RCH-blocked/safe-command scenarios, and optional runpack/action-plan integration that recommends renew_stale_evidence without mutating evidence or weakening drop-in gates.",
+              "code_paths": [
+                "scripts/build_stale_evidence_renewal_queue.py"
+              ],
+              "commit": "9c613929f2f9df7bc24e6774283673b057204f10",
+              "docs_or_evidence_paths": [
+                "docs/contracts/stale-evidence-renewal-queue-contract.json"
+              ],
+              "status": "closed",
+              "test_paths": [
+                "tests/fixtures/stale_evidence_renewal_queue/scenarios.json"
+              ],
+              "title": "Add stale evidence renewal queue",
+              "validation_commands": [
+                "python3 scripts/build_stale_evidence_renewal_queue.py --self-test"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.7.8",
+              "claim_boundary_text": "Operator docs preserve human confirmation points and do not claim autonomous destructive remediation or strict drop-in authority.",
+              "close_reason": "Completed: documented the fourth-wave self-healing operator workflow in the swarm runbook and README, including dry-run action planner, work-admission stop gate, budget leases, turn pressure ledger, extension quarantine rehearsal, handoff summaries, stale-evidence renewal, claim boundaries, and safe handoff wording that preserves human confirmation and release-claim gates.",
+              "code_paths": [],
+              "commit": "68185ba5f243310670bf7fd4e8d877a0fc030990",
+              "docs_or_evidence_paths": [
+                "README.md",
+                "docs/swarm-operations-runbook.md"
+              ],
+              "status": "closed",
+              "test_paths": [],
+              "title": "Document fourth-wave self-healing operator workflow",
+              "validation_commands": [
+                "git diff --check",
+                "timeout 120s ubs --staged --only=rust ."
+              ]
+            }
+          ],
+          "commits_present": true,
+          "weak_child_rows": []
+        }
+      ],
+      "id": "child_artifact_mapping",
+      "issue": null,
+      "requirement": "Every fourth-wave child bead maps to pushed commits, source paths, validation commands, and claim-boundary text.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/contracts/swarm-action-plan-contract.json"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ],
+      "id": "action_planner",
+      "issue": null,
+      "requirement": "Dry-run action planner contract, implementation, and docs are present.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/contracts/swarm-work-admission-gate-contract.json"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ],
+      "id": "work_admission_gate",
+      "issue": null,
+      "requirement": "Stop-admitting-work gate is fail-closed and documented as advisory guidance.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/simulate_swarm_budget_leases.py"
+        },
+        {
+          "path": "docs/contracts/swarm-budget-lease-simulator-contract.json"
+        },
+        {
+          "path": "tests/fixtures/swarm_budget_leases/scenarios.json"
+        }
+      ],
+      "id": "budget_lease_simulator",
+      "issue": null,
+      "requirement": "Budget lease simulator has contract, fixtures, self-test, and no runtime enforcement claim.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/contracts/swarm-turn-pressure-ledger-contract.json"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ],
+      "id": "turn_pressure_ledger",
+      "issue": null,
+      "requirement": "Turn pressure ledger is generated into the runpack and bounded to diagnostic claims.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/rehearse_extension_quarantine.py"
+        },
+        {
+          "path": "docs/contracts/extension-quarantine-rehearsal-contract.json"
+        },
+        {
+          "path": "tests/fixtures/extension_quarantine_rehearsal/scenarios.json"
+        }
+      ],
+      "id": "extension_quarantine_rehearsal",
+      "issue": null,
+      "requirement": "Extension quarantine rehearsal covers quarantine, rollback, blocked provenance, and operator confirmation boundaries.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/summarize_operator_handoff.py"
+        },
+        {
+          "path": "docs/contracts/operator-handoff-summary-contract.json"
+        },
+        {
+          "path": "tests/fixtures/operator_handoff_summary/scenarios.json"
+        }
+      ],
+      "id": "operator_handoff_summary",
+      "issue": null,
+      "requirement": "Operator handoff summaries remain redacted, advisory, and bounded to source-status handoff.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_stale_evidence_renewal_queue.py"
+        },
+        {
+          "path": "docs/contracts/stale-evidence-renewal-queue-contract.json"
+        },
+        {
+          "path": "tests/fixtures/stale_evidence_renewal_queue/scenarios.json"
+        }
+      ],
+      "id": "stale_evidence_renewal",
+      "issue": null,
+      "requirement": "Stale evidence renewal queue is read-only, contract-backed, fixture-tested, and preserves drop-in claim gates.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "README.md"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        },
+        {
+          "path": "docs/contracts/fourth-wave-self-healing-closeout-gate-contract.json"
+        }
+      ],
+      "id": "operator_docs",
+      "issue": null,
+      "requirement": "README and runbook document fourth-wave workflow, human confirmation points, and closeout artifacts.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "boundary": "Beads issue state and comments remain the work ledger.",
+          "evidence": [
+            ".beads/issues.jsonl"
+          ],
+          "id": "beads_are_source_of_truth",
+          "status": "pass"
+        },
+        {
+          "boundary": "Agent Mail reservations and messages coordinate agents but do not replace Beads, source review, or validation gates.",
+          "evidence": [
+            "docs/swarm-operations-runbook.md"
+          ],
+          "id": "agent_mail_is_coordination_only",
+          "status": "pass"
+        },
+        {
+          "boundary": "Action plans and handoff artifacts are dry-run guidance only.",
+          "evidence": [
+            "docs/contracts/swarm-action-plan-contract.json"
+          ],
+          "id": "dry_run_artifacts_only",
+          "status": "pass"
+        },
+        {
+          "boundary": "The work admission gate can stop new implementation admission procedurally but does not enforce runtime throttles.",
+          "evidence": [
+            "docs/contracts/swarm-work-admission-gate-contract.json"
+          ],
+          "id": "work_admission_is_not_runtime_enforcement",
+          "status": "pass"
+        },
+        {
+          "boundary": "Mutating Beads, Agent Mail, extension configuration, git refs, or evidence files requires explicit human operator execution.",
+          "evidence": [
+            "docs/swarm-operations-runbook.md"
+          ],
+          "id": "human_confirmation_required",
+          "status": "pass"
+        },
+        {
+          "boundary": "The stale-evidence queue recommends renewal commands but does not regenerate or overwrite evidence.",
+          "evidence": [
+            "docs/contracts/stale-evidence-renewal-queue-contract.json"
+          ],
+          "id": "no_evidence_auto_regeneration",
+          "status": "pass"
+        },
+        {
+          "boundary": "Heavy Cargo validation must prove RCH execution.",
+          "evidence": [
+            "AGENTS.md",
+            "docs/swarm-operations-runbook.md"
+          ],
+          "id": "rch_required_for_heavy_cargo",
+          "status": "pass"
+        },
+        {
+          "boundary": "Staged UBS remains mandatory before commit.",
+          "evidence": [
+            "AGENTS.md",
+            "docs/swarm-operations-runbook.md"
+          ],
+          "id": "staged_ubs_required",
+          "status": "pass"
+        },
+        {
+          "boundary": "Beads ledger reconciliation remains mandatory before commit.",
+          "evidence": [
+            "scripts/reconcile_beads_ledger.sh"
+          ],
+          "id": "beads_ledger_required",
+          "status": "pass"
+        },
+        {
+          "boundary": "Fourth-wave self-healing evidence does not authorize release, benchmark, capacity, performance, or strict drop-in wording.",
+          "evidence": [
+            "docs/contracts/dropin-certification-contract.json",
+            "docs/evidence/dropin-certification-verdict.json"
+          ],
+          "id": "no_release_or_dropin_claims",
+          "status": "pass"
+        },
+        {
+          "boundary": "The closeout gate summarizes child evidence and does not replace source contracts, tests, docs, or pushed commits.",
+          "evidence": [
+            "docs/evidence/fourth-wave-self-healing-closeout-gate.json"
+          ],
+          "id": "closeout_does_not_replace_child_artifacts",
+          "status": "pass"
+        }
+      ],
+      "id": "source_boundaries",
+      "issue": null,
+      "requirement": "Closeout source boundaries preserve Beads, Agent Mail, dry-run, human-confirmation, RCH, UBS, ledger, and release-claim authorities.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "child_commits": [
+            "d17f403264761b55c8ff3281558c83c99ede862b",
+            "96acd31b645b2227cee6da8177af48fe230e3e16",
+            "96acd31b645b2227cee6da8177af48fe230e3e16",
+            "f85b26331a74787c8c3d461b7406738654fb4bd0",
+            "4bd167f2685424993bad86b64b617f1c836ecc48",
+            "6ec525c36ca4a2105bea7409a787f8ce2ada25f7",
+            "9c613929f2f9df7bc24e6774283673b057204f10",
+            "68185ba5f243310670bf7fd4e8d877a0fc030990"
+          ],
+          "head_before_closeout_commit": "0b5ae69ff307e1d2823c238727576a6011c51f2d",
+          "origin_legacy_mirror_before_closeout_commit": "0b5ae69ff307e1d2823c238727576a6011c51f2d",
+          "origin_main_before_closeout_commit": "0b5ae69ff307e1d2823c238727576a6011c51f2d",
+          "pushed_remote_refs_equal_head": true
+        }
+      ],
+      "id": "pushed_commits",
+      "issue": null,
+      "requirement": "All prerequisite child commits are pushed to origin/main and legacy origin/master before final closeout generation.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "heavy_cargo_uses_rch": true,
+          "provided_quality_gates": [
+            {
+              "command": "python3 -m py_compile scripts/build_swarm_operator_runpack.py",
+              "id": "py_compile",
+              "status": "pass"
+            },
+            {
+              "command": "python3 scripts/build_swarm_operator_runpack.py --self-test",
+              "id": "runpack_self_test",
+              "status": "pass"
+            },
+            {
+              "command": "python3 scripts/simulate_swarm_budget_leases.py --self-test && python3 scripts/rehearse_extension_quarantine.py --self-test && python3 scripts/summarize_operator_handoff.py --self-test && python3 scripts/build_stale_evidence_renewal_queue.py --self-test",
+              "id": "helper_self_tests",
+              "status": "pass"
+            },
+            {
+              "command": "python3 -m json.tool docs/contracts/fourth-wave-self-healing-closeout-gate-contract.json",
+              "id": "json_contracts",
+              "status": "pass"
+            },
+            {
+              "command": "rch exec -- cargo test --test fourth_wave_self_healing_closeout_gate_contract -- --nocapture",
+              "id": "fourth_wave_closeout_gate_contract_rch",
+              "status": "pass"
+            },
+            {
+              "command": "cargo fmt --check",
+              "id": "cargo_fmt",
+              "status": "pass"
+            },
+            {
+              "command": "git diff --check",
+              "id": "git_diff_check",
+              "status": "pass"
+            },
+            {
+              "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_63x3v_7_9/target TMPDIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_63x3v_7_9/tmp rch exec -- cargo check --all-targets",
+              "id": "cargo_check_all_targets_rch",
+              "status": "pass"
+            },
+            {
+              "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_63x3v_7_9/target TMPDIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_63x3v_7_9/tmp rch exec -- cargo clippy --all-targets -- -D warnings",
+              "id": "cargo_clippy_all_targets_rch",
+              "status": "pass"
+            },
+            {
+              "command": "timeout 120s ubs --staged --only=rust .",
+              "id": "staged_ubs",
+              "status": "pass"
+            },
+            {
+              "command": "./scripts/reconcile_beads_ledger.sh",
+              "id": "beads_ledger_reconcile",
+              "status": "pass"
+            }
+          ],
+          "required_quality_gates": [
+            "py_compile",
+            "runpack_self_test",
+            "helper_self_tests",
+            "json_contracts",
+            "fourth_wave_closeout_gate_contract_rch",
+            "cargo_fmt",
+            "git_diff_check",
+            "cargo_check_all_targets_rch",
+            "cargo_clippy_all_targets_rch",
+            "staged_ubs",
+            "beads_ledger_reconcile"
+          ]
+        }
+      ],
+      "id": "quality_gates",
+      "issue": null,
+      "requirement": "Required closeout quality gates passed, with every Cargo/Rust validation gate run through RCH.",
+      "status": "pass"
+    }
+  ],
+  "child_artifact_map": [
+    {
+      "bead_id": "bd-63x3v.7.1",
+      "claim_boundary_text": "Dry-run action planning does not claim Beads, mutate source artifacts, run commands, or replace operator judgment.",
+      "close_reason": "Completed: added pi.swarm.action_plan.v1 dry-run projection, contract, CLI output, replay scenario assertions for ready/empty/deferred/dirty/degraded/RCH/stale/validation-failure cases, and command safety classes.",
+      "code_paths": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "commit": "d17f403264761b55c8ff3281558c83c99ede862b",
+      "docs_or_evidence_paths": [
+        "docs/contracts/swarm-action-plan-contract.json"
+      ],
+      "status": "closed",
+      "test_paths": [],
+      "title": "Add dry-run swarm action planner and replay fixtures",
+      "validation_commands": [
+        "python3 scripts/build_swarm_operator_runpack.py --self-test"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.7.2",
+      "claim_boundary_text": "The work admission gate is fail-closed advisory evidence and does not enforce runtime throttles or start implementation work.",
+      "close_reason": "Completed: added fail-closed pi.swarm.work_admission_gate.v1 projection, contract, CLI output, and E2E replay assertions for ready/open/deferred, degraded Mail/RCH, dirty worktree, stale evidence, malformed source, and validation failure cases.",
+      "code_paths": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "commit": "96acd31b645b2227cee6da8177af48fe230e3e16",
+      "docs_or_evidence_paths": [
+        "docs/contracts/swarm-work-admission-gate-contract.json"
+      ],
+      "status": "closed",
+      "test_paths": [],
+      "title": "Add global stop-admitting-work gate",
+      "validation_commands": [
+        "python3 scripts/build_swarm_operator_runpack.py --self-test"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.7.3",
+      "claim_boundary_text": "Budget lease simulation recommends allocations only; it does not reserve capacity, mutate Agent Mail, or throttle processes.",
+      "close_reason": "Completed: added dry-run per-agent budget lease simulator, contract, and fixture-backed stable JSON self-tests for fair allocation, over-commit rejection, stale lease expiry, mixed-priority allocation, RCH saturation, and provider budget exhaustion.",
+      "code_paths": [
+        "scripts/simulate_swarm_budget_leases.py"
+      ],
+      "commit": "96acd31b645b2227cee6da8177af48fe230e3e16",
+      "docs_or_evidence_paths": [
+        "docs/contracts/swarm-budget-lease-simulator-contract.json"
+      ],
+      "status": "closed",
+      "test_paths": [
+        "tests/fixtures/swarm_budget_leases/scenarios.json"
+      ],
+      "title": "Add per-agent swarm budget lease simulator",
+      "validation_commands": [
+        "python3 scripts/simulate_swarm_budget_leases.py --self-test"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.7.4",
+      "claim_boundary_text": "The turn pressure ledger is diagnostic operator evidence only and does not support benchmark, capacity, or release claims.",
+      "close_reason": "Completed: added deterministic pi.swarm.turn_pressure_ledger.v1 runpack section, contract, markdown/next-action integration, and golden-backed self-test coverage for normal turns, large tool artifact spillover, compaction admission pressure, provider reroute, TUI frame pressure, and session write backpressure.",
+      "code_paths": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "commit": "f85b26331a74787c8c3d461b7406738654fb4bd0",
+      "docs_or_evidence_paths": [
+        "docs/contracts/swarm-turn-pressure-ledger-contract.json"
+      ],
+      "status": "closed",
+      "test_paths": [],
+      "title": "Record prompt and tool pressure ledger per turn",
+      "validation_commands": [
+        "python3 scripts/build_swarm_operator_runpack.py --self-test"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.7.5",
+      "claim_boundary_text": "Extension quarantine rehearsal does not edit configuration, quarantine extensions, or roll back anything without operator confirmation.",
+      "close_reason": "Completed: added no-network extension quarantine and rollback rehearsal CLI, contract, and fixture self-tests covering startup/runtime crash quarantine, permission escalation rejection, stale provenance, trusted rollback selection, action-plan projection, and fail-closed missing policy/provenance.",
+      "code_paths": [
+        "scripts/rehearse_extension_quarantine.py"
+      ],
+      "commit": "4bd167f2685424993bad86b64b617f1c836ecc48",
+      "docs_or_evidence_paths": [
+        "docs/contracts/extension-quarantine-rehearsal-contract.json"
+      ],
+      "status": "closed",
+      "test_paths": [
+        "tests/fixtures/extension_quarantine_rehearsal/scenarios.json"
+      ],
+      "title": "Rehearse extension crash quarantine and rollback",
+      "validation_commands": [
+        "python3 scripts/rehearse_extension_quarantine.py --self-test"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.7.6",
+      "claim_boundary_text": "Operator handoff summaries are redacted summaries and do not replace Beads, Agent Mail, RCH, Doctor, CI, UBS, or source evidence.",
+      "close_reason": "Completed: added deterministic operator handoff summary CLI, contract, and fixture self-tests covering clean handoff, dirty worktree, unpushed commits, expired reservations, stale evidence, failed validation, redaction, and JSON/Markdown output.",
+      "code_paths": [
+        "scripts/summarize_operator_handoff.py"
+      ],
+      "commit": "6ec525c36ca4a2105bea7409a787f8ce2ada25f7",
+      "docs_or_evidence_paths": [
+        "docs/contracts/operator-handoff-summary-contract.json"
+      ],
+      "status": "closed",
+      "test_paths": [
+        "tests/fixtures/operator_handoff_summary/scenarios.json"
+      ],
+      "title": "Add operator handoff invariant summarizer",
+      "validation_commands": [
+        "python3 scripts/summarize_operator_handoff.py --self-test"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.7.7",
+      "claim_boundary_text": "The stale-evidence renewal queue does not regenerate evidence, overwrite artifacts, or weaken the drop-in claim gate.",
+      "close_reason": "Completed: added deterministic pi.swarm.stale_evidence_renewal_queue.v1 scanner, contract, fixture self-tests for fresh/expired/missing-source/contract-drift/RCH-blocked/safe-command scenarios, and optional runpack/action-plan integration that recommends renew_stale_evidence without mutating evidence or weakening drop-in gates.",
+      "code_paths": [
+        "scripts/build_stale_evidence_renewal_queue.py"
+      ],
+      "commit": "9c613929f2f9df7bc24e6774283673b057204f10",
+      "docs_or_evidence_paths": [
+        "docs/contracts/stale-evidence-renewal-queue-contract.json"
+      ],
+      "status": "closed",
+      "test_paths": [
+        "tests/fixtures/stale_evidence_renewal_queue/scenarios.json"
+      ],
+      "title": "Add stale evidence renewal queue",
+      "validation_commands": [
+        "python3 scripts/build_stale_evidence_renewal_queue.py --self-test"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.7.8",
+      "claim_boundary_text": "Operator docs preserve human confirmation points and do not claim autonomous destructive remediation or strict drop-in authority.",
+      "close_reason": "Completed: documented the fourth-wave self-healing operator workflow in the swarm runbook and README, including dry-run action planner, work-admission stop gate, budget leases, turn pressure ledger, extension quarantine rehearsal, handoff summaries, stale-evidence renewal, claim boundaries, and safe handoff wording that preserves human confirmation and release-claim gates.",
+      "code_paths": [],
+      "commit": "68185ba5f243310670bf7fd4e8d877a0fc030990",
+      "docs_or_evidence_paths": [
+        "README.md",
+        "docs/swarm-operations-runbook.md"
+      ],
+      "status": "closed",
+      "test_paths": [],
+      "title": "Document fourth-wave self-healing operator workflow",
+      "validation_commands": [
+        "git diff --check",
+        "timeout 120s ubs --staged --only=rust ."
+      ]
+    }
+  ],
+  "claim_boundaries": {
+    "allowed_claim": "advisory fourth-wave self-healing closeout evidence only",
+    "closeout_replaces_source_artifacts": false,
+    "human_confirmation_required_for_mutation": true,
+    "self_healing_artifacts_mutate_sources": false,
+    "strict_dropin_or_release_claim_authorized": false,
+    "work_admission_gate_enforces_runtime_throttle": false
+  },
+  "decision": "close_final_gate_and_parent_epic",
+  "epic_can_close_after_this_commit": true,
+  "final_gate_bead": {
+    "assignee": "AmberOsprey",
+    "id": "bd-63x3v.7.9",
+    "status": "in_progress"
+  },
+  "follow_up_beads": [],
+  "follow_up_required": false,
+  "generated_at": "2026-05-16T08:00:00+00:00",
+  "known_limitations": [
+    "Fourth-wave self-healing artifacts are advisory dry-run operator evidence only.",
+    "The work admission gate does not enforce runtime throttles or mutate Beads, Agent Mail, RCH, git, extension configuration, or evidence files.",
+    "Mutating commands recommended by action plans, handoff summaries, quarantine rehearsal, or stale-evidence renewal require explicit human operator execution.",
+    "This closeout does not authorize release, benchmark, capacity, performance, or strict drop-in claims."
+  ],
+  "missing_checks": [],
+  "parent_epic": {
+    "id": "bd-63x3v.7",
+    "status": "deferred",
+    "title": "Swarm self-healing operator action fourth-wave roadmap"
+  },
+  "purpose": "prompt_to_artifact_fourth_wave_self_healing_closeout_gate_not_source_of_truth",
+  "quality_gate_results": [
+    {
+      "command": "python3 -m py_compile scripts/build_swarm_operator_runpack.py",
+      "id": "py_compile",
+      "status": "pass"
+    },
+    {
+      "command": "python3 scripts/build_swarm_operator_runpack.py --self-test",
+      "id": "runpack_self_test",
+      "status": "pass"
+    },
+    {
+      "command": "python3 scripts/simulate_swarm_budget_leases.py --self-test && python3 scripts/rehearse_extension_quarantine.py --self-test && python3 scripts/summarize_operator_handoff.py --self-test && python3 scripts/build_stale_evidence_renewal_queue.py --self-test",
+      "id": "helper_self_tests",
+      "status": "pass"
+    },
+    {
+      "command": "python3 -m json.tool docs/contracts/fourth-wave-self-healing-closeout-gate-contract.json",
+      "id": "json_contracts",
+      "status": "pass"
+    },
+    {
+      "command": "rch exec -- cargo test --test fourth_wave_self_healing_closeout_gate_contract -- --nocapture",
+      "id": "fourth_wave_closeout_gate_contract_rch",
+      "status": "pass"
+    },
+    {
+      "command": "cargo fmt --check",
+      "id": "cargo_fmt",
+      "status": "pass"
+    },
+    {
+      "command": "git diff --check",
+      "id": "git_diff_check",
+      "status": "pass"
+    },
+    {
+      "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_63x3v_7_9/target TMPDIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_63x3v_7_9/tmp rch exec -- cargo check --all-targets",
+      "id": "cargo_check_all_targets_rch",
+      "status": "pass"
+    },
+    {
+      "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_63x3v_7_9/target TMPDIR=/data/tmp/pi_agent_rust_cargo/amberosprey_bd_63x3v_7_9/tmp rch exec -- cargo clippy --all-targets -- -D warnings",
+      "id": "cargo_clippy_all_targets_rch",
+      "status": "pass"
+    },
+    {
+      "command": "timeout 120s ubs --staged --only=rust .",
+      "id": "staged_ubs",
+      "status": "pass"
+    },
+    {
+      "command": "./scripts/reconcile_beads_ledger.sh",
+      "id": "beads_ledger_reconcile",
+      "status": "pass"
+    }
+  ],
+  "remaining_follow_ups": [],
+  "required_checks": [
+    "child_beads_closed",
+    "child_artifact_mapping",
+    "action_planner",
+    "work_admission_gate",
+    "budget_lease_simulator",
+    "turn_pressure_ledger",
+    "extension_quarantine_rehearsal",
+    "operator_handoff_summary",
+    "stale_evidence_renewal",
+    "operator_docs",
+    "source_boundaries",
+    "pushed_commits",
+    "quality_gates"
+  ],
+  "schema": "pi.swarm.fourth_wave_self_healing.closeout_gate.v1",
+  "source_boundary_checks": [
+    {
+      "boundary": "Beads issue state and comments remain the work ledger.",
+      "evidence": [
+        ".beads/issues.jsonl"
+      ],
+      "id": "beads_are_source_of_truth",
+      "status": "pass"
+    },
+    {
+      "boundary": "Agent Mail reservations and messages coordinate agents but do not replace Beads, source review, or validation gates.",
+      "evidence": [
+        "docs/swarm-operations-runbook.md"
+      ],
+      "id": "agent_mail_is_coordination_only",
+      "status": "pass"
+    },
+    {
+      "boundary": "Action plans and handoff artifacts are dry-run guidance only.",
+      "evidence": [
+        "docs/contracts/swarm-action-plan-contract.json"
+      ],
+      "id": "dry_run_artifacts_only",
+      "status": "pass"
+    },
+    {
+      "boundary": "The work admission gate can stop new implementation admission procedurally but does not enforce runtime throttles.",
+      "evidence": [
+        "docs/contracts/swarm-work-admission-gate-contract.json"
+      ],
+      "id": "work_admission_is_not_runtime_enforcement",
+      "status": "pass"
+    },
+    {
+      "boundary": "Mutating Beads, Agent Mail, extension configuration, git refs, or evidence files requires explicit human operator execution.",
+      "evidence": [
+        "docs/swarm-operations-runbook.md"
+      ],
+      "id": "human_confirmation_required",
+      "status": "pass"
+    },
+    {
+      "boundary": "The stale-evidence queue recommends renewal commands but does not regenerate or overwrite evidence.",
+      "evidence": [
+        "docs/contracts/stale-evidence-renewal-queue-contract.json"
+      ],
+      "id": "no_evidence_auto_regeneration",
+      "status": "pass"
+    },
+    {
+      "boundary": "Heavy Cargo validation must prove RCH execution.",
+      "evidence": [
+        "AGENTS.md",
+        "docs/swarm-operations-runbook.md"
+      ],
+      "id": "rch_required_for_heavy_cargo",
+      "status": "pass"
+    },
+    {
+      "boundary": "Staged UBS remains mandatory before commit.",
+      "evidence": [
+        "AGENTS.md",
+        "docs/swarm-operations-runbook.md"
+      ],
+      "id": "staged_ubs_required",
+      "status": "pass"
+    },
+    {
+      "boundary": "Beads ledger reconciliation remains mandatory before commit.",
+      "evidence": [
+        "scripts/reconcile_beads_ledger.sh"
+      ],
+      "id": "beads_ledger_required",
+      "status": "pass"
+    },
+    {
+      "boundary": "Fourth-wave self-healing evidence does not authorize release, benchmark, capacity, performance, or strict drop-in wording.",
+      "evidence": [
+        "docs/contracts/dropin-certification-contract.json",
+        "docs/evidence/dropin-certification-verdict.json"
+      ],
+      "id": "no_release_or_dropin_claims",
+      "status": "pass"
+    },
+    {
+      "boundary": "The closeout gate summarizes child evidence and does not replace source contracts, tests, docs, or pushed commits.",
+      "evidence": [
+        "docs/evidence/fourth-wave-self-healing-closeout-gate.json"
+      ],
+      "id": "closeout_does_not_replace_child_artifacts",
+      "status": "pass"
+    }
+  ],
+  "status": "pass"
+}
