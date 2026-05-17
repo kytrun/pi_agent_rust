@@ -77,6 +77,8 @@ const MAX_FOLLOW_UP_QUEUE_SIZE: usize = 100;
 const MAX_AGENT_MESSAGES: usize = 10_000;
 /// Schema identifier for per-turn latency budget breakdowns.
 pub const TURN_LATENCY_BREAKDOWN_SCHEMA_V1: &str = "pi.agent.turn_latency_breakdown.v1";
+/// Schema identifier for deterministic tool-effect batch plan evidence.
+pub const TOOL_EFFECT_BATCH_PLAN_SCHEMA_V1: &str = "pi.agent.tool_effect_batch_plan.v1";
 const TOOL_CANCELLATION_SCHEMA_V1: &str = "pi.tool.cancellation.v1";
 const SEMANTIC_CONTEXT_PROMPT_SCHEMA_V1: &str = "pi.semantic_context_prompt.v1";
 const SEMANTIC_CONTEXT_PROVENANCE_SCHEMA_V1: &str = "pi.semantic_context_provenance.v1";
@@ -376,6 +378,39 @@ struct ToolEffectBatch {
     end: usize,
 }
 
+/// Serializable evidence for one planned tool-effect batch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolEffectBatchEvidence {
+    /// Inclusive start index in the original tool-call order.
+    pub start: usize,
+    /// Exclusive end index in the original tool-call order.
+    pub end: usize,
+    /// Number of tool calls covered by this batch.
+    pub len: usize,
+    /// Stable labels for the union of all effects in this batch.
+    pub combined_effects: Vec<&'static str>,
+    /// Whether this batch can be executed with compatible-tool parallelism.
+    pub parallel_safe: bool,
+    /// Fail-closed barrier reason when the batch is serialized.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub barrier_reason: Option<&'static str>,
+}
+
+/// Serializable evidence for the full planned tool-effect batch layout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolEffectBatchPlanEvidence {
+    /// Versioned schema identifier for downstream evidence consumers.
+    pub schema: &'static str,
+    /// Number of tool calls in the source plan.
+    pub tool_count: usize,
+    /// Parallelism cap that compatible batches will use at execution time.
+    pub parallelism_cap: usize,
+    /// Deterministic contiguous batch plan.
+    pub batches: Vec<ToolEffectBatchEvidence>,
+}
+
 fn plan_tool_effect_batches(effects: &[ToolEffects]) -> Vec<ToolEffectBatch> {
     let Some((&first_effects, remaining_effects)) = effects.split_first() else {
         return Vec::new();
@@ -401,6 +436,58 @@ fn plan_tool_effect_batches(effects: &[ToolEffects]) -> Vec<ToolEffectBatch> {
         end: effects.len(),
     });
     batches
+}
+
+fn combined_tool_effects(effects: &[ToolEffects]) -> Option<ToolEffects> {
+    effects.iter().copied().reduce(ToolEffects::union)
+}
+
+const fn tool_effect_barrier_reason(effects: ToolEffects) -> Option<&'static str> {
+    if effects.parallel_safe() {
+        return None;
+    }
+    match (effects.writes(), effects.appends(), effects.processes()) {
+        (true, true, true) => Some("write_append_process_barrier"),
+        (true, true, false) => Some("write_append_barrier"),
+        (true, false, true) => Some("write_process_barrier"),
+        (false, true, true) => Some("append_process_barrier"),
+        (true, false, false) => Some("write_barrier"),
+        (false, true, false) => Some("append_barrier"),
+        (false, false, true) => Some("process_barrier"),
+        (false, false, false) => Some("undeclared_effects_barrier"),
+    }
+}
+
+/// Build deterministic machine-readable evidence for a tool-effect batch plan.
+#[must_use]
+pub fn tool_effect_batch_plan_evidence(
+    effects: &[ToolEffects],
+    parallelism_cap: usize,
+) -> ToolEffectBatchPlanEvidence {
+    let batches = plan_tool_effect_batches(effects)
+        .into_iter()
+        .map(|batch| {
+            let combined_effects = effects
+                .get(batch.start..batch.end)
+                .and_then(combined_tool_effects)
+                .unwrap_or_else(ToolEffects::read);
+            ToolEffectBatchEvidence {
+                start: batch.start,
+                end: batch.end,
+                len: batch.end.saturating_sub(batch.start),
+                combined_effects: combined_effects.labels(),
+                parallel_safe: combined_effects.parallel_safe(),
+                barrier_reason: tool_effect_barrier_reason(combined_effects),
+            }
+        })
+        .collect();
+
+    ToolEffectBatchPlanEvidence {
+        schema: TOOL_EFFECT_BATCH_PLAN_SCHEMA_V1,
+        tool_count: effects.len(),
+        parallelism_cap,
+        batches,
+    }
 }
 
 // ============================================================================
@@ -3804,6 +3891,11 @@ mod tool_effect_batch_planning_tests {
             .collect()
     }
 
+    fn batch_plan_json(effects: &[ToolEffects], parallelism_cap: usize) -> serde_json::Value {
+        serde_json::to_value(tool_effect_batch_plan_evidence(effects, parallelism_cap))
+            .expect("tool-effect batch evidence should serialize")
+    }
+
     fn synthetic_tool_case(
         index: usize,
         name: impl Into<String>,
@@ -3953,6 +4045,37 @@ mod tool_effect_batch_planning_tests {
     }
 
     #[test]
+    fn evidence_records_64_plus_compatible_batch_with_parallelism_cap() {
+        let effects = (0..72)
+            .map(|index| {
+                if index % 3 == 0 {
+                    ToolEffects::network()
+                } else {
+                    ToolEffects::read()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            batch_plan_json(&effects, 64),
+            serde_json::json!({
+                "schema": TOOL_EFFECT_BATCH_PLAN_SCHEMA_V1,
+                "toolCount": 72,
+                "parallelismCap": 64,
+                "batches": [
+                    {
+                        "start": 0,
+                        "end": 72,
+                        "len": 72,
+                        "combinedEffects": ["read", "network"],
+                        "parallelSafe": true
+                    }
+                ]
+            })
+        );
+    }
+
+    #[test]
     fn write_effect_creates_deterministic_barrier() {
         let ranges = batch_ranges(&[
             ToolEffects::read(),
@@ -3985,6 +4108,76 @@ mod tool_effect_batch_planning_tests {
         ]);
 
         assert_eq!(ranges, vec![(0, 1), (1, 2), (2, 3)]);
+    }
+
+    #[test]
+    fn evidence_records_barrier_reasons_for_mixed_effects() {
+        let effects = [
+            ToolEffects::read(),
+            ToolEffects::network(),
+            ToolEffects::write(),
+            ToolEffects::append(),
+            ToolEffects::process(),
+            ToolEffects::read(),
+            ToolEffects::process().union(ToolEffects::write()),
+        ];
+
+        assert_eq!(
+            batch_plan_json(&effects, 32),
+            serde_json::json!({
+                "schema": TOOL_EFFECT_BATCH_PLAN_SCHEMA_V1,
+                "toolCount": 7,
+                "parallelismCap": 32,
+                "batches": [
+                    {
+                        "start": 0,
+                        "end": 2,
+                        "len": 2,
+                        "combinedEffects": ["read", "network"],
+                        "parallelSafe": true
+                    },
+                    {
+                        "start": 2,
+                        "end": 3,
+                        "len": 1,
+                        "combinedEffects": ["write"],
+                        "parallelSafe": false,
+                        "barrierReason": "write_barrier"
+                    },
+                    {
+                        "start": 3,
+                        "end": 4,
+                        "len": 1,
+                        "combinedEffects": ["append"],
+                        "parallelSafe": false,
+                        "barrierReason": "append_barrier"
+                    },
+                    {
+                        "start": 4,
+                        "end": 5,
+                        "len": 1,
+                        "combinedEffects": ["process"],
+                        "parallelSafe": false,
+                        "barrierReason": "process_barrier"
+                    },
+                    {
+                        "start": 5,
+                        "end": 6,
+                        "len": 1,
+                        "combinedEffects": ["read"],
+                        "parallelSafe": true
+                    },
+                    {
+                        "start": 6,
+                        "end": 7,
+                        "len": 1,
+                        "combinedEffects": ["write", "process"],
+                        "parallelSafe": false,
+                        "barrierReason": "write_process_barrier"
+                    }
+                ]
+            })
+        );
     }
 
     #[test]
@@ -4071,6 +4264,19 @@ mod tool_effect_batch_planning_tests {
                 (8, 9),
                 (9, 10)
             ]
+        );
+        let evidence = tool_effect_batch_plan_evidence(&effect_plan(&cases), 16);
+        assert_eq!(evidence.schema, TOOL_EFFECT_BATCH_PLAN_SCHEMA_V1);
+        assert_eq!(evidence.parallelism_cap, 16);
+        assert_eq!(evidence.batches.len(), 9);
+        assert!(evidence.batches.iter().any(|batch| {
+            batch.barrier_reason == Some("append_barrier") && batch.combined_effects == ["append"]
+        }));
+        assert!(
+            cases
+                .iter()
+                .any(|case| matches!(case.outcome, SyntheticOutcome::Error)),
+            "mixed-effect fixture must include failure cases"
         );
         assert_barrier_effects_are_singleton_batches(&cases);
 

@@ -89,6 +89,58 @@ impl ToolEffects {
         }
     }
 
+    /// Whether this declaration reads local state.
+    #[must_use]
+    pub const fn reads(self) -> bool {
+        self.bits & Self::READ != 0
+    }
+
+    /// Whether this declaration may mutate local state by replacing content.
+    #[must_use]
+    pub const fn writes(self) -> bool {
+        self.bits & Self::WRITE != 0
+    }
+
+    /// Whether this declaration may append to local state.
+    #[must_use]
+    pub const fn appends(self) -> bool {
+        self.bits & Self::APPEND != 0
+    }
+
+    /// Whether this declaration performs network I/O.
+    #[must_use]
+    pub const fn networks(self) -> bool {
+        self.bits & Self::NETWORK != 0
+    }
+
+    /// Whether this declaration starts or controls a local process.
+    #[must_use]
+    pub const fn processes(self) -> bool {
+        self.bits & Self::PROCESS != 0
+    }
+
+    /// Stable labels for machine-readable scheduling evidence.
+    #[must_use]
+    pub fn labels(self) -> Vec<&'static str> {
+        let mut labels = Vec::with_capacity(5);
+        if self.reads() {
+            labels.push("read");
+        }
+        if self.writes() {
+            labels.push("write");
+        }
+        if self.appends() {
+            labels.push("append");
+        }
+        if self.networks() {
+            labels.push("network");
+        }
+        if self.processes() {
+            labels.push("process");
+        }
+        labels
+    }
+
     /// Whether this effect set can run in a compatible concurrent batch.
     #[must_use]
     pub const fn parallel_safe(self) -> bool {
