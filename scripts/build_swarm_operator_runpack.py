@@ -635,6 +635,10 @@ RCH_DRIFT_CATEGORY_METADATA: dict[str, dict[str, str]] = {
         "drift_class": "code_regression",
         "remediation": "Fix the dependency/source preflight failure or pin the missing dependency before rerunning RCH validation.",
     },
+    "worker_workspace_shadow": {
+        "drift_class": "infrastructure_drift",
+        "remediation": "Fix the RCH worker checkout/workdir so cargo resolves pi_agent_rust directly; do not treat parent-workspace manifest failures as local code regressions.",
+    },
     "artifact_retrieval_warning_after_success": {
         "drift_class": "evidence_retrieval_drift",
         "remediation": "Treat the remote command as inconclusive for evidence until artifact retrieval is clean or the expected artifacts are regenerated locally.",
@@ -774,6 +778,41 @@ FAILURE_ACTION_RULES: tuple[dict[str, Any], ...] = (
             ),
         ),
         "escalation": RCH_DRIFT_CATEGORY_METADATA["remote_dependency_preflight_blocked"]["remediation"],
+    },
+    {
+        "id": "FAIL-RCH-WORKER-WORKSPACE-SHADOW",
+        "category": "rch",
+        "confidence": "high",
+        "drift_category_id": "worker_workspace_shadow",
+        "drift_class": RCH_DRIFT_CATEGORY_METADATA["worker_workspace_shadow"]["drift_class"],
+        "remediation": RCH_DRIFT_CATEGORY_METADATA["worker_workspace_shadow"]["remediation"],
+        "terms": (
+            "failed to load manifest for workspace member",
+            "referenced by workspace at",
+            "failed to read",
+        ),
+        "secondary_terms": (
+            "cargo.toml",
+            "/data/projects/cargo.toml",
+            "/data/toon_rust/cargo.toml",
+            "/data/projects/crates/",
+        ),
+        "title": "RCH worker cargo resolved a stale parent workspace",
+        "explanation": (
+            "Cargo failed before compiling pi_agent_rust because the RCH worker "
+            "resolved a parent or sibling workspace that is outside this repo. "
+            "Treat this as worker/workdir drift, not as proof of a local Rust "
+            "regression."
+        ),
+        "safe_commands": (
+            ("Inspect RCH jobs and workers", "rch status --workers --jobs"),
+            ("Inspect RCH queue", "rch queue"),
+            (
+                "Retry after worker workspace repair with explicit manifest scope",
+                "env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/${USER:-agent}/target TMPDIR=/data/tmp/pi_agent_rust_cargo/${USER:-agent}/tmp rch exec -- cargo check --manifest-path /data/projects/pi_agent_rust/Cargo.toml --all-targets",
+            ),
+        ),
+        "escalation": RCH_DRIFT_CATEGORY_METADATA["worker_workspace_shadow"]["remediation"],
     },
     {
         "id": "FAIL-RCH-ARTIFACT-RETRIEVAL-WARNING-AFTER-SUCCESS",
@@ -14767,6 +14806,29 @@ def run_self_test() -> int:
             remote_dependency_plan,
             "FAIL-RCH-REMOTE-DEPENDENCY-PREFLIGHT-BLOCKED",
             "remote_dependency_preflight_blocked",
+        )
+
+        worker_workspace_shadow_plan = build_failure_fixture_plan(
+            "failure-rch-worker-workspace-shadow",
+            commands=[
+                {
+                    "id": "cargo_check",
+                    "command": "rch exec -- cargo check --all-targets",
+                    "status": "failed",
+                    "exit_code": 101,
+                    "issue": (
+                        "error: failed to load manifest for workspace member "
+                        "`/data/projects/crates/fwc` referenced by workspace at "
+                        "`/data/projects/Cargo.toml`; caused by failed to read "
+                        "`/data/toon_rust/Cargo.toml`"
+                    ),
+                }
+            ],
+        )
+        require_rch_drift_action(
+            worker_workspace_shadow_plan,
+            "FAIL-RCH-WORKER-WORKSPACE-SHADOW",
+            "worker_workspace_shadow",
         )
 
         post_success_warning_plan = build_failure_fixture_plan(

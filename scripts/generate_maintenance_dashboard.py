@@ -56,6 +56,12 @@ RCH_DRIFT_CATEGORIES: dict[str, dict[str, Any]] = {
         "release_blocking": True,
         "remediation": "Fix the dependency/source preflight failure or pin the missing dependency before rerunning RCH validation.",
     },
+    "worker_workspace_shadow": {
+        "drift_class": "infrastructure_drift",
+        "blocks": "release_gate_until_worker_workspace_fixed",
+        "release_blocking": True,
+        "remediation": "Fix the RCH worker checkout/workdir so cargo resolves pi_agent_rust directly; do not treat parent-workspace manifest failures as local code regressions.",
+    },
     "artifact_retrieval_warning_after_success": {
         "drift_class": "evidence_retrieval_drift",
         "blocks": "specific_evidence_refresh",
@@ -317,6 +323,16 @@ def classify_rch_drift_line(line: str, saw_success: bool) -> str | None:
         )
     ):
         return "remote_dependency_preflight_blocked"
+    if (
+        ("failed to load manifest for workspace member" in lowered)
+        or ("referenced by workspace at" in lowered and "cargo.toml" in lowered)
+        or (
+            "failed to read" in lowered
+            and "cargo.toml" in lowered
+            and any(path in lowered for path in ("/data/toon_rust", "/data/projects/crates/"))
+        )
+    ):
+        return "worker_workspace_shadow"
     if (
         "artifact retrieval warning" in lowered
         or "no artifacts retrieved" in lowered
@@ -589,6 +605,8 @@ def run_self_test() -> int:
                     "rsync: mkstemp \"/tmp/out/.artifact.tmp\" failed: No such file or directory (2)",
                     "error: No space left on device while retrieving artifacts",
                     "remote dependency preflight blocked: failed to load source for dependency `asupersync`",
+                    "error: failed to load manifest for workspace member `/data/projects/crates/fwc` referenced by workspace at `/data/projects/Cargo.toml`",
+                    "Caused by: failed to read `/data/toon_rust/Cargo.toml`",
                     "WARN rch::transfer: No artifacts retrieved before remote success",
                     "Remote command finished: exit=0 in 100ms",
                     "WARN rch::transfer: No artifacts retrieved from worker - build may have failed or artifact patterns may be misconfigured",
@@ -615,14 +633,22 @@ def run_self_test() -> int:
         if drift["by_drift_class"] != {
             "code_regression": 1,
             "evidence_retrieval_drift": 2,
-            "infrastructure_drift": 2,
+            "infrastructure_drift": 4,
         }:
             print(json.dumps(drift, indent=2, sort_keys=True))
             print("SELF-TEST FAIL: drift classes should distinguish code, infra, and retrieval drift")
             return 2
-        if set(drift["release_blocking_categories"]) != {"disk_pressure", "remote_dependency_preflight_blocked"}:
+        if set(drift["release_blocking_categories"]) != {
+            "disk_pressure",
+            "remote_dependency_preflight_blocked",
+            "worker_workspace_shadow",
+        }:
             print(json.dumps(drift, indent=2, sort_keys=True))
             print("SELF-TEST FAIL: release-blocking categories are wrong")
+            return 2
+        if drift["categories"]["worker_workspace_shadow"]["count"] != 2:
+            print(json.dumps(drift, indent=2, sort_keys=True))
+            print("SELF-TEST FAIL: worker workspace shadow lines should be classified")
             return 2
         if drift["categories"]["artifact_retrieval_warning_after_success"]["count"] != 1:
             print(json.dumps(drift, indent=2, sort_keys=True))
