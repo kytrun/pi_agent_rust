@@ -125,9 +125,7 @@ All P0 modules (path, fs, os, child_process) have real implementations.
 - `node:crypto` - external shim, coverage unclear
 
 ### P2 Gaps
-- `fs.watch` (9 calls) - stub, no real file watching
-- `fs.createReadStream` / `fs.createWriteStream` - stubs
-- `fs.readlink` (7 calls) - stub
+- `fs.watch` (9 calls) - path-checking no-op watcher, no real file watching
 - `glob` npm package - partial VFS-backed glob/globSync subset
 - `ws` npm package - stubbed WebSocket facade, no real network I/O
 - `axios` npm package - stubbed HTTP client facade, no real network I/O
@@ -137,7 +135,7 @@ All P0 modules (path, fs, os, child_process) have real implementations.
 - `node:net` (7 ext) - stubbed sockets (no network I/O)
 - `node:test` (7 ext) - partial runner (test/describe/it + hooks + run); reporters/concurrency not supported
 - `node:assert/strict` (7 ext) - strict assert facade backed by `node:assert`
-- 6 modules with 1 ext each: tty, zlib (gzip/gunzip subset only), v8, perf_hooks, vm, stream/web
+- Low-volume builtins: tty/v8/perf_hooks/vm are stubs; zlib, stream/web, and readline/promises expose partial facades
 
 ## Criticality Scoring Methodology
 

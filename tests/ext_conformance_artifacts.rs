@@ -398,6 +398,42 @@ fn test_api_usage_matrix_npm_virtual_module_contract() {
 }
 
 #[test]
+fn test_api_usage_matrix_markdown_fs_gap_narrative_matches_json() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let matrix_path = repo_root.join("tests/ext_conformance/api_usage_matrix.json");
+    let markdown_path = repo_root.join("tests/ext_conformance/API_USAGE_MATRIX.md");
+    let bytes = fs::read(&matrix_path).expect("read api_usage_matrix.json");
+    let matrix: ApiUsageMatrix =
+        serde_json::from_slice(&bytes).expect("parse api_usage_matrix.json");
+    let markdown = fs::read_to_string(&markdown_path).expect("read API_USAGE_MATRIX.md");
+
+    let fs_module = matrix
+        .node_modules
+        .iter()
+        .find(|entry| entry.module == "node:fs")
+        .expect("node:fs entry missing from api_usage_matrix.json");
+
+    for api_name in ["createReadStream", "createWriteStream", "readlink"] {
+        let api_status = api_shim_status(fs_module, api_name);
+        assert_eq!(
+            api_status,
+            Some("real"),
+            "node:fs.{api_name} should stay real in api_usage_matrix.json"
+        );
+    }
+
+    for stale_phrase in [
+        "`fs.createReadStream` / `fs.createWriteStream` - stubs",
+        "`fs.readlink` (7 calls) - stub",
+    ] {
+        assert!(
+            !markdown.contains(stale_phrase),
+            "API_USAGE_MATRIX.md should not keep stale gap text: {stale_phrase}"
+        );
+    }
+}
+
+#[test]
 fn test_api_usage_matrix_readline_shim_contract() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let matrix_path = repo_root.join("tests/ext_conformance/api_usage_matrix.json");
