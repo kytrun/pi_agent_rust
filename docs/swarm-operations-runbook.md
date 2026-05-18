@@ -31,18 +31,25 @@ export AGENT_NAME="${AGENT_NAME:-$(whoami)}"
 export PI_CARGO_AGENT_SUFFIX="$AGENT_NAME"
 export CARGO_TARGET_DIR="/data/tmp/pi_agent_rust_cargo/${AGENT_NAME}/target"
 export TMPDIR="/data/tmp/pi_agent_rust_cargo/${AGENT_NAME}/tmp"
-mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR"
+capture_dir="${PI_SWARM_CAPTURE_DIR:-/data/tmp/pi_swarm_runpack/${AGENT_NAME}}"
+mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR" "$capture_dir"
 
 git status --short --branch
 br ready --json
 bv --recipe actionable --robot-plan
+if curl -fsS http://127.0.0.1:8765/health > "$capture_dir/agent-mail-health.json"; then
+  agent_mail_arg=(--agent-mail-health-json "$capture_dir/agent-mail-health.json")
+else
+  agent_mail_arg=()
+fi
 python3 scripts/report_empty_queue_convergence.py --json \
-  --beads-jsonl .beads/issues.jsonl
+  --beads-jsonl .beads/issues.jsonl \
+  "${agent_mail_arg[@]}"
 # When available, add:
 #   --validation-broker-json <validation-broker-status-or-plan.json>
-pi doctor --only swarm --format json > /data/tmp/pi_swarm_runpack/doctor.json
+pi doctor --only swarm --format json > "$capture_dir/doctor.json"
 scripts/cargo_headroom.sh --runner rch --admit-only check --all-targets \
-  --decision-json /data/tmp/pi_swarm_runpack/cargo-admission.json
+  --decision-json "$capture_dir/cargo-admission.json"
 rch status
 rch queue
 ```
@@ -61,6 +68,11 @@ Green startup means:
   posture, malformed JSON, and duplicate expensive cargo gate opportunities
   appear as advisory operator context. Malformed supplied broker JSON fails
   closed with a warning; missing broker JSON remains optional.
+- If Agent Mail health JSON is supplied, degraded or schema-corrupt Agent Mail
+  appears as an explicit `use_beads_fallback` action with the exact recovery
+  action, while ready Beads work remains visible. If health capture fails, keep
+  the report's `agent_mail_status=unavailable` warning and use the Beads claim
+  as the soft lock.
 - `pi doctor --only swarm --format json` has no red finding that says new swarm work must stop.
 - `scripts/cargo_headroom.sh --runner rch --admit-only ...` returns
   `decision=allow` with `admission_action=allow`. `admission_action=defer`
