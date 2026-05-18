@@ -26,7 +26,7 @@ Generated: 2026-02-13
 
 This crosswalk maps every user-visible provider name (including upstream aliases from opencode and models.dev) to the Pi canonical ID, accepted aliases, auth env vars, and default endpoint. Use this when a user reports "missing provider" or confusion about which name to use.
 
-**Total**: 88 canonical providers, 41 aliases, 100% upstream coverage.
+**Total**: 91 canonical providers, 43 aliases, 100% upstream coverage.
 
 ### Native providers (dedicated adapter)
 
@@ -34,7 +34,10 @@ This crosswalk maps every user-visible provider name (including upstream aliases
 |---|---|---|---|---|
 | `anthropic` | — | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/messages` | anthropic-messages |
 | `openai` | — | `OPENAI_API_KEY` | `https://api.openai.com/v1` | openai-responses |
+| `openai-codex` | `codex`, `chatgpt-codex` | _(none; use `/login openai-codex`)_ | `https://chatgpt.com/backend-api/codex/responses` | openai-codex-responses |
 | `google` | `gemini` | `GOOGLE_API_KEY`, `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta` | google-generative-ai |
+| `google-gemini-cli` | `gemini-cli` | _(none; use `/login google-gemini-cli`)_ | _(project-scoped Code Assist endpoint)_ | google-gemini-cli |
+| `google-antigravity` | `antigravity` | _(none; use `/login google-antigravity`)_ | _(project-scoped Antigravity endpoint)_ | google-gemini-cli |
 | `cohere` | — | `COHERE_API_KEY` | `https://api.cohere.com/v2` | cohere-chat |
 | `google-vertex` | `vertexai`, `google-vertex-anthropic` | `GOOGLE_CLOUD_API_KEY`, `VERTEX_API_KEY` | _(per-project URL)_ | google-vertex |
 | `amazon-bedrock` | `bedrock` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK` | _(per-region URL)_ | bedrock-converse-stream |
@@ -68,6 +71,7 @@ This crosswalk maps every user-visible provider name (including upstream aliases
 | Canonical ID | Aliases | Auth env vars | Default endpoint |
 |---|---|---|---|
 | `alibaba-cn` | — | `DASHSCOPE_API_KEY` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `alibaba-us` | — | `DASHSCOPE_API_KEY`, `QWEN_API_KEY` | `https://dashscope-us.aliyuncs.com/compatible-mode/v1` |
 | `moonshotai-cn` | — | `MOONSHOT_API_KEY` | `https://api.moonshot.cn/v1` |
 | `siliconflow` | `silicon-flow` | `SILICONFLOW_API_KEY` | `https://api.siliconflow.com/v1` |
 | `siliconflow-cn` | — | `SILICONFLOW_CN_API_KEY` | `https://api.siliconflow.cn/v1` |
@@ -87,7 +91,7 @@ This crosswalk maps every user-visible provider name (including upstream aliases
 
 | Canonical ID | Aliases | Auth env vars | Default endpoint |
 |---|---|---|---|
-| `kimi-for-coding` | — | `KIMI_API_KEY` | `https://api.kimi.com/coding/v1/messages` |
+| `kimi-for-coding` | `kimi-coding`, `kimi-code` | `KIMI_API_KEY` | `https://api.kimi.com/coding/v1/messages` |
 | `minimax` | — | `MINIMAX_API_KEY` | `https://api.minimax.io/anthropic/v1/messages` |
 | `minimax-cn` | — | `MINIMAX_CN_API_KEY` | `https://api.minimaxi.com/anthropic/v1/messages` |
 | `minimax-coding-plan` | — | `MINIMAX_API_KEY` | `https://api.minimax.io/anthropic/v1/messages` |
@@ -147,6 +151,9 @@ If a user types any of these aliases (left), Pi resolves to the canonical ID (ri
 | User input | Resolves to |
 |------------|------------|
 | `gemini` | `google` |
+| `codex`, `chatgpt-codex` | `openai-codex` |
+| `gemini-cli` | `google-gemini-cli` |
+| `antigravity` | `google-antigravity` |
 | `open-router` | `openrouter` |
 | `moonshot`, `kimi` | `moonshotai` |
 | `dashscope`, `qwen` | `alibaba` |
@@ -170,6 +177,7 @@ If a user types any of these aliases (left), Pi resolves to the canonical ID (ri
 | `nanogpt` | `nano-gpt` |
 | `novita` | `novita-ai` |
 | `lm-studio` | `lmstudio` |
+| `kimi-coding`, `kimi-code` | `kimi-for-coding` |
 
 ### Shared env-key families
 

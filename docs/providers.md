@@ -68,6 +68,7 @@ Current artifact coverage (`docs/provider-implementation-modes.json`):
 - Provider streaming contract suites: [`tests/provider_streaming.rs`](../tests/provider_streaming.rs)
 - Live parity smoke lane: [`tests/e2e_cross_provider_parity.rs`](../tests/e2e_cross_provider_parity.rs)
 - Live provider integration lane: [`tests/e2e_live.rs`](../tests/e2e_live.rs)
+- Discrepancy-ledger freshness gate: `python3 scripts/check_provider_discrepancy_ledger.py --compact`
 
 ## Wave A Parity Verification (`bd-3uqg.4.4`)
 
@@ -258,7 +259,10 @@ Wave C execution status:
 |--------------|---------|------------------|------------|-------------------|-----------|------|----------------|------------------------------------|
 | `anthropic` | - | text + image + thinking + tool-calls | `anthropic-messages` | `https://api.anthropic.com/v1/messages` | `x-api-key` (`ANTHROPIC_API_KEY`) or `auth.json` OAuth/API key | `native-implemented` | Implemented and dispatchable | [unit](../tests/provider_streaming/anthropic.rs), [contract](../tests/provider_backward_lock.rs), [e2e](../tests/e2e_provider_streaming.rs), [cassette](../tests/fixtures/vcr/anthropic_simple_text.json) |
 | `openai` | - | text + image + reasoning + tool-calls | `openai-responses` (default), `openai-completions` (compat) | `https://api.openai.com/v1` (normalized to `/responses` or `/chat/completions`) | `Authorization: Bearer` (`OPENAI_API_KEY`) | `native-implemented` | Implemented and dispatchable | [unit](../tests/provider_streaming/openai.rs), [responses](../tests/provider_streaming/openai_responses.rs), [contract](../tests/provider_backward_lock.rs), [e2e](../tests/e2e_cross_provider_parity.rs), [cassette](../tests/fixtures/vcr/openai_simple_text.json) |
+| `openai-codex` | `codex`, `chatgpt-codex` | text + reasoning | `openai-codex-responses` | `https://chatgpt.com/backend-api/codex/responses` | ChatGPT/Codex OAuth via `/login openai-codex` | `native-adapter-required` | Dispatchable through the Codex Responses path | [responses](../src/providers/openai_responses.rs), [models](../src/models.rs), [metadata](../tests/provider_metadata_comprehensive.rs) |
 | `google` | `gemini` | text + image + reasoning + tool-calls | `google-generative-ai` | `https://generativelanguage.googleapis.com/v1beta` | query key (`GOOGLE_API_KEY`, fallback `GEMINI_API_KEY`) | `native-implemented` | Implemented and dispatchable | [unit](../tests/provider_streaming/gemini.rs), [contract](../tests/provider_backward_lock.rs), [e2e](../tests/e2e_cross_provider_parity.rs), [cassette](../tests/fixtures/vcr/gemini_simple_text.json) |
+| `google-gemini-cli` | `gemini-cli` | text + image + reasoning | `google-gemini-cli` | Project-scoped Code Assist endpoint | Google OAuth via `/login google-gemini-cli` plus project ID | `native-adapter-required` | Dispatchable through the Gemini CLI path | [gemini](../src/providers/gemini.rs), [models](../src/models.rs), [metadata](../tests/provider_metadata_comprehensive.rs) |
+| `google-antigravity` | `antigravity` | text + image + reasoning | `google-gemini-cli` | Project-scoped Antigravity endpoint | Google OAuth via `/login google-antigravity` plus project ID | `native-adapter-required` | Dispatchable through the Gemini CLI path with Antigravity routing | [gemini](../src/providers/gemini.rs), [models](../src/models.rs), [metadata](../tests/provider_metadata_comprehensive.rs) |
 | `google-vertex` | `vertexai` | text + image + reasoning + tool-calls | `google-vertex` | `https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/{publisher}/models/{model}` | `Authorization: Bearer` (`GOOGLE_CLOUD_API_KEY`, alt `VERTEX_API_KEY`) | `native-implemented` | Implemented and dispatchable; supports Google (Gemini) and Anthropic publishers | [unit](../src/providers/vertex.rs), [factory](../src/providers/mod.rs), [metadata](../tests/provider_metadata_comprehensive.rs) |
 | `cohere` | - | text + tool-calls | `cohere-chat` | `https://api.cohere.com/v2` (normalized to `/chat`) | `Authorization: Bearer` (`COHERE_API_KEY`) | `native-implemented` | Implemented and dispatchable | [unit](../tests/provider_streaming/cohere.rs), [contract](../tests/provider_backward_lock.rs), [cassette](../tests/fixtures/vcr/cohere_simple_text.json), e2e expansion tracked in `bd-3uqg.8.4` |
 | `azure-openai` | `azure`, `azure-cognitive-services` | text + tool-calls | Azure chat/completions path | `https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}` or `https://{resource}.cognitiveservices.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}` | `api-key` header (`AZURE_OPENAI_API_KEY`) | `native-implemented` | Dispatchable through provider factory with deterministic resource/deployment/api-version resolution from env + model/base_url | [unit](../tests/provider_streaming/azure.rs), [contract](../tests/provider_backward_lock.rs), [e2e](../tests/e2e_live.rs), [cassette](../tests/fixtures/vcr/azure_simple_text.json) |
@@ -412,7 +416,7 @@ When new VCR fixtures are added in `tests/fixtures/vcr/verify_*.json`:
 | Provider metadata (canonical IDs, aliases, env keys, routing) | `src/provider_metadata.rs` | Authoritative provider registry |
 | Provider factory (route selection, dispatch) | `src/providers/mod.rs` | Runtime provider creation |
 | API key resolution | `src/app.rs`, `src/auth.rs`, `src/models.rs` | Credential resolution precedence |
-| Metadata invariant tests | `tests/provider_metadata_comprehensive.rs` | 112 assertions covering all 85 IDs |
+| Metadata invariant tests | `tests/provider_metadata_comprehensive.rs` | Canonical ID, alias, routing, and onboarding invariants |
 | Factory routing tests | `tests/provider_factory.rs` | 144 assertions covering factory dispatch |
 | Native verify harness (VCR) | `tests/provider_native_verify.rs` | 206 offline streaming/error replay tests |
 | Parity report | `docs/provider-native-parity-report.json` | Consolidated per-provider pass/fail matrix |
@@ -427,7 +431,7 @@ This section documents all alias-to-canonical-ID mappings with migration guidanc
 
 All aliases resolve transparently to their canonical ID at provider-selection time. This means:
 - Config files using an alias (`"provider": "gemini"`) continue to work identically to the canonical form (`"provider": "google"`).
-- Auth env vars are shared: the alias and canonical ID use the same env key(s).
+- Auth env vars or account-backed credentials are shared: the alias and canonical ID use the same auth source.
 - API routing is identical: both resolve to the same base URL, API family, and streaming behavior.
 - No deprecation warnings are emitted for alias usage.
 
@@ -436,6 +440,10 @@ All aliases resolve transparently to their canonical ID at provider-selection ti
 | Alias | Canonical ID | API Family | Shared Auth Env Key(s) | Notes |
 |-------|-------------|------------|----------------------|-------|
 | `gemini` | `google` | `google-generative-ai` | `GOOGLE_API_KEY`, `GEMINI_API_KEY` | Gemini is the model family; `google` is the canonical provider ID. |
+| `codex` | `openai-codex` | `openai-codex-responses` | `/login openai-codex` | Short form for the ChatGPT/Codex account bridge. |
+| `chatgpt-codex` | `openai-codex` | `openai-codex-responses` | `/login openai-codex` | Explicit ChatGPT/Codex naming; routes to the same account-backed provider. |
+| `gemini-cli` | `google-gemini-cli` | `google-gemini-cli` | `/login google-gemini-cli` | Google Cloud Code Assist account-backed provider. |
+| `antigravity` | `google-antigravity` | `google-gemini-cli` | `/login google-antigravity` | Google Antigravity account-backed provider using the Gemini CLI API family. |
 | `moonshot` | `moonshotai` | `openai-completions` | `MOONSHOT_API_KEY`, `KIMI_API_KEY` | `moonshot` was the original ID; `moonshotai` is canonical per upstream. |
 | `kimi` | `moonshotai` | `openai-completions` | `MOONSHOT_API_KEY`, `KIMI_API_KEY` | Kimi is the product name; routes to same endpoint as `moonshotai`. Note: `kimi-for-coding` is a **distinct** canonical ID with its own Anthropic-compatible route. |
 | `dashscope` | `alibaba` | `openai-completions` | `DASHSCOPE_API_KEY`, `QWEN_API_KEY` | DashScope is the API platform name; `alibaba` is canonical. Note: `alibaba-cn` is a **distinct** canonical ID with a separate CN base URL. |

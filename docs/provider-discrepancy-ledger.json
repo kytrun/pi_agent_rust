@@ -3,9 +3,9 @@
   "bead": "bd-3uqg.12.1.1",
   "generated_at": "2026-02-14T00:40:00Z",
   "generated_by": "CopperBrook (Claude Opus 4.6)",
-  "last_reviewed_at": "2026-05-18T08:55:00Z",
+  "last_reviewed_at": "2026-05-18T09:12:00Z",
   "reviewed_by": "SilentReef (Codex)",
-  "review_bead": "bd-ryg6j.1",
+  "review_bead": "bd-ryg6j.2",
   "methodology": {
     "description": "Normalized discrepancy ledger synthesized from 4 upstream audit beads. Each finding is classified by root-cause and user-impact severity.",
     "source_beads": [
@@ -109,7 +109,7 @@
       "user_impact": "Users typing common provider names (together, grok, hf, nim, pplx, etc.) got 'provider not found' errors despite the provider being fully implemented.",
       "evidence": "bd-3uqg.14.3.4 comments: Gap 1, src/provider_metadata.rs alias fields, docs/provider-auth-troubleshooting.md provider name crosswalk",
       "remediation_status": "partially_fixed",
-      "remediation_note": "Provider docs now report 88 canonical providers and 41 aliases, and src/provider_metadata.rs covers the high-traffic UX aliases from bd-tuh3g plus later aliases such as nanogpt, novita, zhipu, glm, lm-studio, vercel-ai-gateway, copilot, gitlab-duo, and Azure variants. Remaining work is a targeted review of no-alias/under-aliased longtail providers, tracked by bd-ryg6j.3.",
+      "remediation_note": "Provider docs now report 91 canonical providers and 43 aliases, and src/provider_metadata.rs covers the high-traffic UX aliases from bd-tuh3g plus later aliases such as nanogpt, novita, zhipu, glm, lm-studio, vercel-ai-gateway, copilot, gitlab-duo, and Azure variants. Remaining work is a targeted review of no-alias/under-aliased longtail providers, tracked by bd-ryg6j.3.",
       "remediation_beads": ["bd-tuh3g", "bd-ryg6j.3"],
       "affected_providers": ["togetherai", "xai", "huggingface", "nvidia", "lmstudio", "deepseek", "perplexity", "deepinfra", "mistral", "siliconflow"]
     },
@@ -122,7 +122,7 @@
       "user_impact": "Users had no way to discover available providers, their aliases, or required auth env keys from the CLI.",
       "evidence": "bd-3uqg.14.3.4 comments: Gap 3",
       "remediation_status": "fixed",
-      "remediation_note": "Implemented in bd-3gsk0 (CopperBrook). Displays table of all 88 providers with canonical ID, aliases, auth env keys, and API type.",
+      "remediation_note": "Implemented in bd-3gsk0 (CopperBrook). Displays table of all providers with canonical ID, aliases, auth env keys, and API type.",
       "remediation_beads": ["bd-3gsk0"],
       "affected_providers": ["all"]
     },
@@ -283,8 +283,8 @@
       "user_impact": "Users have no reference table showing canonical IDs, aliases, common brand names, and auth env keys in one place.",
       "evidence": "docs/providers.md canonical provider matrix and alias migration table; docs/provider-auth-troubleshooting.md provider name crosswalk with canonical IDs, aliases, auth env vars, and endpoints",
       "remediation_status": "fixed",
-      "remediation_note": "--list-providers remains the runtime discovery surface, and static docs now provide the requested provider-name crosswalk. docs/providers.md records source-of-truth references and docs/provider-auth-troubleshooting.md reports 88 canonical providers, 41 aliases, and env-key/endpoint mappings.",
-      "remediation_beads": ["bd-3gsk0", "bd-8t27h.7", "bd-ryg6j.1"],
+      "remediation_note": "--list-providers remains the runtime discovery surface, and static docs now provide the requested provider-name crosswalk. docs/providers.md records source-of-truth references and docs/provider-auth-troubleshooting.md reports 91 canonical providers, 43 aliases, and env-key/endpoint mappings.",
+      "remediation_beads": ["bd-3gsk0", "bd-8t27h.7", "bd-ryg6j.1", "bd-ryg6j.2"],
       "affected_providers": ["all"]
     },
     {
