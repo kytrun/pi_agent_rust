@@ -6,6 +6,39 @@
 #[path = "dropin_slash_differential/mod.rs"]
 mod dropin_slash_differential;
 use dropin_slash_differential::*;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+
+fn repo_path(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+}
+
+fn load_repo_json(relative: &str) -> Result<Value, String> {
+    let path = repo_path(relative);
+    let content = std::fs::read_to_string(&path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    serde_json::from_str(&content)
+        .map_err(|err| format!("failed to parse {}: {err}", path.display()))
+}
+
+fn string_field<'a>(value: &'a Value, field: &str, label: &str) -> Result<&'a str, String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{label} must contain string field {field}"))
+}
+
+fn find_json_entry<'a>(
+    entries: &'a [Value],
+    field: &str,
+    expected: &str,
+    label: &str,
+) -> Result<&'a Value, String> {
+    entries
+        .iter()
+        .find(|entry| entry.get(field).and_then(Value::as_str) == Some(expected))
+        .ok_or_else(|| format!("{label} must contain {field}={expected}"))
+}
 
 fn assert_runner_not_implemented(scenario: &SlashCommandScenario, result: &TestResult) {
     assert!(
@@ -55,6 +88,107 @@ fn test_slash_command_differential_harness_fails_closed() {
         unexpected_successes.is_empty(),
         "slash differential harness reported synthetic success for: {unexpected_successes:?}"
     );
+}
+
+/// Release evidence must not certify slash-command parity while the runner is fail-closed.
+#[test]
+fn test_certification_artifacts_fail_closed_while_runner_unimplemented() -> Result<(), String> {
+    let tester = DifferentialTester::new()
+        .map_err(|err| format!("failed to create differential tester: {err:?}"))?;
+    let results = tester.run_all_scenarios();
+    if results.is_empty() {
+        return Err("expected slash command scenarios".to_owned());
+    }
+
+    let all_results_fail_closed = results.values().all(|result| {
+        !result.success
+            && result
+                .differences
+                .iter()
+                .any(|diff| diff.contains("not implemented"))
+    });
+    let runner_source_path = repo_path("tests/dropin_slash_differential/mod.rs");
+    let runner_source = std::fs::read_to_string(&runner_source_path)
+        .map_err(|err| format!("failed to read {}: {err}", runner_source_path.display()))?;
+    let runner_not_implemented = runner_source.contains("DIFFERENTIAL_RUNNER_NOT_IMPLEMENTED");
+
+    if !runner_not_implemented && !all_results_fail_closed {
+        return Ok(());
+    }
+
+    let suite = load_repo_json("docs/evidence/dropin-differential-evidence-suite.json")?;
+    let suite_status = string_field(&suite, "overall_status", "differential suite")?;
+    if suite_status == "pass" {
+        return Err(
+            "G10 evidence suite must not pass while slash differential runner is fail-closed"
+                .to_owned(),
+        );
+    }
+    let components = suite
+        .get("component_evidence")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "differential suite must contain component_evidence".to_owned())?;
+    let slash_component = find_json_entry(
+        components,
+        "component",
+        "slash_command_differential",
+        "G04 evidence",
+    )?;
+    let slash_component_status = string_field(slash_component, "status", "slash component")?;
+    if slash_component_status == "pass" {
+        return Err(
+            "G04 slash_command_differential must not pass while runner is fail-closed".to_owned(),
+        );
+    }
+
+    let ledger = load_repo_json("docs/evidence/dropin-parity-gap-ledger.json")?;
+    let ledger_entries = ledger
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "gap ledger must contain entries".to_owned())?;
+    let slash_gap = find_json_entry(
+        ledger_entries,
+        "gap_id",
+        "gap-cli-slash-command-surface",
+        "gap ledger",
+    )?;
+    let gap_status = string_field(slash_gap, "status", "slash gap")?;
+    if !matches!(gap_status, "open" | "in_progress") {
+        return Err(format!(
+            "slash gap must be active while runner is fail-closed, found status={gap_status}"
+        ));
+    }
+    let gap_severity = string_field(slash_gap, "severity", "slash gap")?;
+    if !matches!(gap_severity, "critical" | "high") {
+        return Err(format!(
+            "slash gap must block release claims while runner is fail-closed, found severity={gap_severity}"
+        ));
+    }
+
+    let verdict = load_repo_json("docs/evidence/dropin-certification-verdict.json")?;
+    let overall_verdict = string_field(&verdict, "overall_verdict", "drop-in verdict")?;
+    if overall_verdict == "CERTIFIED" {
+        return Err(
+            "strict drop-in verdict must not be CERTIFIED while slash differential runner is fail-closed"
+                .to_owned(),
+        );
+    }
+    let blocking_reasons = verdict
+        .get("blocking_reasons")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "drop-in verdict must contain blocking_reasons".to_owned())?;
+    if !blocking_reasons.iter().any(|reason| {
+        reason
+            .as_str()
+            .is_some_and(|text| text.contains("gap-cli-slash-command-surface"))
+    }) {
+        return Err(
+            "drop-in verdict must name gap-cli-slash-command-surface as a blocking reason"
+                .to_owned(),
+        );
+    }
+
+    Ok(())
 }
 
 /// Test that basic slash command parsing works correctly.

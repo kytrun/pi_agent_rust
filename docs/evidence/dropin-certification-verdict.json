@@ -1,8 +1,8 @@
 {
   "schema": "pi.dropin.certification_verdict.v1",
-  "git_commit": "7ea3298ba1a97cc2b3689b64ed8dd786308da5a3",
-  "generated_at_utc": "2026-05-01T06:01:22Z",
-  "overall_verdict": "CERTIFIED",
+  "git_commit": "4d9da104545a86e3927f0d2cbf5012c697d3cc45",
+  "generated_at_utc": "2026-05-18T10:07:45Z",
+  "overall_verdict": "NOT_CERTIFIED",
   "hard_gate_results": [
     {
       "gate_id": "non_mock_unit",
@@ -163,9 +163,28 @@
       "detail": null,
       "artifact_path": "tests/full_suite_gate/waiver_audit.json",
       "bead": "bd-1f42.8.8.1"
+    },
+    {
+      "gate_id": "G04-cli-parity",
+      "status": "fail",
+      "blocking": true,
+      "detail": "gap-cli-slash-command-surface reopened: tests/dropin_slash_differential.rs is fail-closed and the runner returns DIFFERENTIAL_RUNNER_NOT_IMPLEMENTED.",
+      "artifact_path": "docs/evidence/dropin-differential-evidence-suite.json",
+      "bead": "bd-jgnx0"
+    },
+    {
+      "gate_id": "G10-differential-evidence-suite",
+      "status": "fail",
+      "blocking": true,
+      "detail": "dropin-differential-evidence-suite cannot pass while slash_command_differential is fail_closed.",
+      "artifact_path": "docs/evidence/dropin-differential-evidence-suite.json",
+      "bead": "bd-jgnx0"
     }
   ],
-  "blocking_reasons": [],
+  "blocking_reasons": [
+    "gap-cli-slash-command-surface blocks G04-cli-parity because the slash-command differential runner returns DIFFERENTIAL_RUNNER_NOT_IMPLEMENTED.",
+    "gap-cli-slash-command-surface blocks G10-differential-evidence-suite because slash_command_differential is fail_closed."
+  ],
   "evidence_index": [
     {
       "path": "docs/non-mock-rubric.json",
@@ -246,11 +265,20 @@
     {
       "path": "tests/full_suite_gate/waiver_audit.json",
       "exists": true
+    },
+    {
+      "path": "docs/evidence/dropin-differential-evidence-suite.json",
+      "exists": true
+    },
+    {
+      "path": "docs/evidence/dropin-parity-gap-ledger.json",
+      "exists": true
     }
   ],
   "source": {
     "certification_lane_artifact": "tests/full_suite_gate/certification_verdict.json",
     "lane_verdict": "pass",
-    "lane_generated_at": "2026-05-01T06:00:46.624Z"
+    "lane_generated_at": "2026-05-01T06:00:46.624Z",
+    "claim_integrity_override": "bd-jgnx0 reopened gap-cli-slash-command-surface after detecting that slash_command_differential pass evidence was backed by a fail-closed unimplemented runner."
   }
 }

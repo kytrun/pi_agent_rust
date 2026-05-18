@@ -2,19 +2,20 @@
   "schema": "pi.dropin.differential_evidence_suite.v1",
   "bead_id": "bd-lnmtp.4.4",
   "gate_id": "G10-differential-evidence-suite",
-  "generated_at_utc": "2026-04-23T05:52:00Z",
-  "overall_status": "pass",
-  "description": "Unified evidence bundle aggregating all differential test harnesses from G04, G05, G08, and G09 gate completions.",
+  "generated_at_utc": "2026-05-18T10:07:45Z",
+  "overall_status": "fail_closed",
+  "description": "Unified evidence bundle aggregating differential test harnesses from G04, G05, G08, and G09 gate completions. The suite fails closed until the G04 slash-command differential runner executes both Rust Pi and pi-mono.",
   "component_evidence": [
     {
       "gate_id": "G04-cli-parity",
       "component": "slash_command_differential",
-      "status": "pass",
+      "status": "fail_closed",
       "test_harness": "tests/dropin_slash_differential.rs",
-      "description": "Slash command verification through golden-output differential testing",
+      "description": "Slash command differential coverage is not certified: the harness currently fails closed because the real Rust Pi/pi-mono RPC runner is not implemented.",
       "evidence_artifacts": [
-        "tests/dropin_slash_differential.rs (test implementation)",
-        "Comprehensive CLI edge case coverage (tests/cli_edge_cases.rs)"
+        "tests/dropin_slash_differential.rs asserts that synthetic differential success is forbidden",
+        "tests/dropin_slash_differential/mod.rs returns success=false with DIFFERENTIAL_RUNNER_NOT_IMPLEMENTED for every scenario",
+        "Comprehensive CLI edge case coverage (tests/cli_edge_cases.rs) is supporting coverage only, not differential parity evidence"
       ]
     },
     {
@@ -57,7 +58,7 @@
   "aggregated_metrics": {
     "total_test_scenarios": 79,
     "surfaces_covered": [
-      "CLI slash commands",
+      "CLI slash commands (fail-closed: differential runner not implemented)",
       "RPC command semantics",
       "Session JSONL schema",
       "Error taxonomy",
@@ -68,7 +69,10 @@
       "Content truncation"
     ],
     "canonicalization_rules_count": 15,
-    "pass_rate_percentage": 97.5
+    "pass_rate_percentage": 77.5,
+    "blocking_components": [
+      "slash_command_differential"
+    ]
   },
   "verification_commands": [
     "cargo test --test dropin_slash_differential",
@@ -79,13 +83,13 @@
   "acceptance_evidence": [
     {
       "criterion": "All four differential gate evidence bundles present and valid",
-      "status": "pass",
-      "evidence": "G04, G05, G08, G09 evidence artifacts aggregated with consistent schemas"
+      "status": "fail_closed",
+      "evidence": "G04 slash_command_differential is present but explicitly fail-closed until the real Rust Pi/pi-mono runner is implemented"
     },
     {
       "criterion": "Differential test harnesses cover critical interaction surfaces",
-      "status": "pass",
-      "evidence": "79+ scenarios across CLI, RPC, session, error, and tool I/O surfaces"
+      "status": "fail_closed",
+      "evidence": "CLI slash-command scenarios return DIFFERENTIAL_RUNNER_NOT_IMPLEMENTED and cannot be counted as pass evidence"
     },
     {
       "criterion": "Canonicalization rules documented for cross-platform stability",
@@ -94,8 +98,8 @@
     },
     {
       "criterion": "G10 verdict flips to pass",
-      "status": "pending",
-      "evidence": "Requires verdict regeneration after this artifact creation"
+      "status": "fail_closed",
+      "evidence": "G10 remains blocked by gap-cli-slash-command-surface until slash_command_differential reports real mirrored execution"
     }
   ]
 }

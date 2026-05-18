@@ -1,40 +1,76 @@
 {
-  "generated_at_utc": "2026-05-15T18:09:21Z",
-  "git_commit": "a1f72fc5ab5031cf8a2e63e458bc809490331636",
+  "generated_at_utc": "2026-05-18T11:16:51Z",
+  "git_commit": "2cb6a13fc3534b937ba24aa9b55e89f741755e0c",
   "metrics": {
     "beads": {
       "by_status": {
-        "closed": 2569,
-        "deferred": 2,
+        "closed": 2666,
+        "deferred": 3,
+        "in_progress": 1,
         "open": 1,
         "tombstone": 10
       },
-      "in_progress_count": 0,
+      "in_progress_count": 1,
       "open_by_priority": {
-        "2": 1
+        "1": 1
       },
       "open_by_type": {
         "bug": 1
       },
       "open_count": 1,
-      "open_high_priority": [],
-      "total_count": 2582
+      "open_high_priority": [
+        {
+          "id": "bd-xcgh0",
+          "labels": [],
+          "priority": 1,
+          "title": "Restore runnable pinned legacy pi-mono RPC environment"
+        }
+      ],
+      "total_count": 2681
     },
     "hard_gates": {
-      "blocking_not_pass": [],
-      "generated_at_utc": "2026-05-01T06:01:22Z",
-      "git_commit": "7ea3298ba1a97cc2b3689b64ed8dd786308da5a3",
-      "hard_gate_count": 20,
+      "blocking_not_pass": [
+        {
+          "artifact_path": "docs/evidence/dropin-differential-evidence-suite.json",
+          "bead": "bd-jgnx0",
+          "detail": "gap-cli-slash-command-surface reopened: tests/dropin_slash_differential.rs is fail-closed and the runner returns DIFFERENTIAL_RUNNER_NOT_IMPLEMENTED.",
+          "gate_id": "G04-cli-parity",
+          "status": "fail"
+        },
+        {
+          "artifact_path": "docs/evidence/dropin-differential-evidence-suite.json",
+          "bead": "bd-jgnx0",
+          "detail": "dropin-differential-evidence-suite cannot pass while slash_command_differential is fail_closed.",
+          "gate_id": "G10-differential-evidence-suite",
+          "status": "fail"
+        }
+      ],
+      "generated_at_utc": "2026-05-18T10:07:45Z",
+      "git_commit": "4d9da104545a86e3927f0d2cbf5012c697d3cc45",
+      "hard_gate_count": 22,
       "hard_gate_status_counts": {
+        "fail": 2,
         "pass": 20
       },
-      "overall_verdict": "CERTIFIED"
+      "overall_verdict": "NOT_CERTIFIED"
     },
     "ledger": {
-      "open_by_area": {},
-      "open_by_severity": {},
-      "open_critical_high_count": 0,
-      "open_gaps": []
+      "open_by_area": {
+        "cli": 1
+      },
+      "open_by_severity": {
+        "high": 1
+      },
+      "open_critical_high_count": 1,
+      "open_gaps": [
+        {
+          "area": "cli",
+          "gap_id": "gap-cli-slash-command-surface",
+          "owner_issue_primary": "bd-7derw",
+          "severity": "high",
+          "status": "open"
+        }
+      ]
     },
     "rch_artifact_retrieval_drift": {
       "by_drift_class": {
@@ -155,6 +191,17 @@
       "open_beads": 1,
       "open_critical_high_ledger_gaps": 0,
       "overall_verdict": "CERTIFIED"
+    },
+    {
+      "date_utc": "2026-05-18",
+      "hard_gate_status_counts": {
+        "fail": 2,
+        "pass": 20
+      },
+      "in_progress_beads": 1,
+      "open_beads": 1,
+      "open_critical_high_ledger_gaps": 1,
+      "overall_verdict": "NOT_CERTIFIED"
     }
   ]
 }
