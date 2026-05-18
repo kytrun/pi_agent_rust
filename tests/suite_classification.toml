@@ -29,6 +29,7 @@ files = [
     "config_precedence",
     "cooperative_priority_lane_evaluation",
     "cross_surface_parity",
+    "cross_surface_swarm_conformance_matrix",
     "cli_edge_cases",
     "dropin_config_differential",
     "dropin_session_error_parity",

@@ -1,0 +1,148 @@
+{
+  "schema": "pi.swarm.cross_surface_conformance_matrix.v1",
+  "bead": "bd-zeccr.2",
+  "status": "pass",
+  "producer": "tests/cross_surface_swarm_conformance_matrix.rs",
+  "summary": "Machine-readable cross-surface conformance matrix for swarm-facing invariants that span provider streaming, tool scheduling, RPC framing, session replay/indexing, extension policy denial, and TUI frame-budget behavior.",
+  "claim_boundary": "This artifact is specification-derived swarm conformance evidence only. It is not release certification, drop-in certification, live performance evidence, or permission to skip RCH, UBS, Beads, or repository quality gates.",
+  "required_surfaces": [
+    "provider_stream_ordering",
+    "tool_mutation_barriers",
+    "rpc_event_framing",
+    "session_replay_index_consistency",
+    "extension_policy_denial",
+    "tui_frame_budget_non_blocking"
+  ],
+  "rows": [
+    {
+      "requirement_id": "CSWARM-MUST-001",
+      "level": "must",
+      "source_surface": "provider_stream_ordering",
+      "invariant": "Provider streaming adapters preserve deterministic event order, partial-text accumulation, terminal usage metadata, and tool-call boundaries across native provider modules.",
+      "test_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo test --test provider_streaming -- --nocapture",
+      "status": "pass",
+      "known_divergence": null,
+      "cross_links_provider_specific_rows": true,
+      "evidence_refs": [
+        "tests/provider_streaming.rs",
+        "tests/provider_streaming/anthropic.rs",
+        "tests/provider_streaming/azure.rs",
+        "tests/provider_streaming/cohere.rs",
+        "tests/provider_streaming/gemini.rs",
+        "tests/provider_streaming/openai.rs",
+        "tests/provider_streaming/openai_responses.rs",
+        "src/sse.rs"
+      ]
+    },
+    {
+      "requirement_id": "CSWARM-MUST-002",
+      "level": "must",
+      "source_surface": "tool_mutation_barriers",
+      "invariant": "Tool calls that can mutate files, append state, or spawn processes are serialized into deterministic singleton batches while read/network-only calls may share compatible batches.",
+      "test_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo test --lib effect -- --nocapture",
+      "status": "pass",
+      "known_divergence": null,
+      "cross_links_provider_specific_rows": false,
+      "evidence_refs": [
+        "src/agent.rs"
+      ]
+    },
+    {
+      "requirement_id": "CSWARM-MUST-003",
+      "level": "must",
+      "source_surface": "rpc_event_framing",
+      "invariant": "RPC/stdin mode emits newline-delimited JSON responses and events without corrupting request IDs, command ordering, or event payload boundaries under rapid command sequences.",
+      "test_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo test --test rpc_edge_cases rpc_multiple_commands_preserve_id_ordering -- --nocapture",
+      "status": "pass",
+      "known_divergence": null,
+      "cross_links_provider_specific_rows": false,
+      "evidence_refs": [
+        "tests/rpc_edge_cases.rs",
+        "tests/e2e_rpc.rs",
+        "src/rpc.rs"
+      ]
+    },
+    {
+      "requirement_id": "CSWARM-MUST-004",
+      "level": "must",
+      "source_surface": "session_replay_index_consistency",
+      "invariant": "Session persistence, replay, branch metadata, and derived index updates remain consistent after saves, resumes, compaction-sensitive entries, and session-directory overrides.",
+      "test_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo test --test session_conformance save_updates_session_index_for_override_dir -- --nocapture",
+      "status": "pass",
+      "known_divergence": null,
+      "cross_links_provider_specific_rows": false,
+      "evidence_refs": [
+        "tests/session_conformance.rs",
+        "tests/session_index_tests.rs",
+        "tests/e2e_session_persistence.rs",
+        "src/session.rs",
+        "src/session_index.rs"
+      ]
+    },
+    {
+      "requirement_id": "CSWARM-MUST-005",
+      "level": "must",
+      "source_surface": "extension_policy_denial",
+      "invariant": "Extension hostcalls and runtime shims fail closed when policy denies filesystem, process, network, URL, or session capabilities.",
+      "test_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo test --test extensions_policy_negative -- --nocapture",
+      "status": "pass",
+      "known_divergence": null,
+      "cross_links_provider_specific_rows": false,
+      "evidence_refs": [
+        "tests/extensions_policy_negative.rs",
+        "tests/capability_denial_matrix.rs",
+        "src/extensions.rs",
+        "src/extensions_js.rs"
+      ]
+    },
+    {
+      "requirement_id": "CSWARM-SHOULD-006",
+      "level": "should",
+      "source_surface": "tui_frame_budget_non_blocking",
+      "invariant": "Large-session TUI rendering and state snapshots expose frame-budget pressure without blocking unrelated provider, RPC, session, or tool-event progress reporting.",
+      "test_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo test --test tui_state frame_budget -- --nocapture",
+      "status": "pass",
+      "known_divergence": null,
+      "cross_links_provider_specific_rows": false,
+      "evidence_refs": [
+        "tests/tui_state.rs",
+        "src/interactive.rs",
+        "src/interactive/perf.rs",
+        "docs/evidence/large-session-tui-frame-budget.json",
+        "docs/evidence/provider-rpc-tui-backpressure-budget-contract.json"
+      ]
+    }
+  ],
+  "negative_controls": [
+    {
+      "control_id": "CSWARM-NEG-001",
+      "description": "The validator rejects a matrix that omits one of the required swarm surfaces.",
+      "failure_mode": "missing_required_surface",
+      "test_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo test --test cross_surface_swarm_conformance_matrix cross_surface_swarm_matrix_negative_controls_fail_closed -- --nocapture",
+      "status": "pass"
+    },
+    {
+      "control_id": "CSWARM-NEG-002",
+      "description": "The validator rejects a row missing the required test_command field.",
+      "failure_mode": "missing_required_field",
+      "test_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo test --test cross_surface_swarm_conformance_matrix cross_surface_swarm_matrix_negative_controls_fail_closed -- --nocapture",
+      "status": "pass"
+    },
+    {
+      "control_id": "CSWARM-NEG-003",
+      "description": "The validator rejects a row with a status outside the machine-readable status vocabulary.",
+      "failure_mode": "invalid_status",
+      "test_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo test --test cross_surface_swarm_conformance_matrix cross_surface_swarm_matrix_negative_controls_fail_closed -- --nocapture",
+      "status": "pass"
+    }
+  ],
+  "validation_commands": [
+    "python3 -m json.tool docs/evidence/cross-surface-swarm-conformance-matrix.json",
+    "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo test --test cross_surface_swarm_conformance_matrix -- --nocapture",
+    "cargo fmt --check",
+    "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo check --all-targets",
+    "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/target TMPDIR=/data/tmp/pi_agent_rust_cargo/codex-cross-surface/tmp cargo clippy --all-targets -- -D warnings",
+    "timeout 60s ubs --staged --only=rust .",
+    "./scripts/reconcile_beads_ledger.sh"
+  ]
+}

@@ -454,6 +454,10 @@
           "justification": "Classified unit suite included in the bd-8t27h.3 traceability backfill so CI governance covers all registered tests."
         },
         {
+          "path": "tests/cross_surface_swarm_conformance_matrix.rs",
+          "justification": "Cross-surface swarm conformance matrix validator for provider stream ordering, tool mutation barriers, RPC event framing, session replay/index consistency, extension policy denial, TUI frame-budget behavior, and fail-closed negative controls."
+        },
+        {
           "path": "tests/cli_edge_cases.rs",
           "justification": "Classified unit suite included in the bd-8t27h.3 traceability backfill so CI governance covers all registered tests."
         },
