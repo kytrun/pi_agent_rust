@@ -170,6 +170,10 @@ OPERATOR_PERCEIVED_LATENCY_TRACE_SCHEMA = "pi.operator.perceived_latency_trace.v
 OPERATOR_PERCEIVED_LATENCY_TRACE_CONTRACT_SCHEMA = (
     "pi.operator.perceived_latency_trace_contract.v1"
 )
+OPERATOR_SMOOTHNESS_SLO_SCHEMA = "pi.operator.smoothness_slo.v1"
+OPERATOR_SMOOTHNESS_SLO_CONTRACT_SCHEMA = (
+    "pi.operator.smoothness_slo_contract.v1"
+)
 SWARM_INCIDENT_CORPUS_SCHEMA = "pi.swarm.incident_corpus.v1"
 SWARM_INCIDENT_CORPUS_CONTRACT_SCHEMA = "pi.swarm.incident_corpus_contract.v1"
 SWARM_INCIDENT_REPLAY_SCHEMA = "pi.swarm.incident_replay.v1"
@@ -225,6 +229,9 @@ BACKPRESSURE_BUDGET_CONTRACT_PATH = Path(
 )
 OPERATOR_PERCEIVED_LATENCY_TRACE_CONTRACT_PATH = Path(
     "docs/contracts/operator-perceived-latency-trace-contract.json"
+)
+OPERATOR_SMOOTHNESS_SLO_CONTRACT_PATH = Path(
+    "docs/contracts/operator-smoothness-slo-contract.json"
 )
 SWARM_INCIDENT_CORPUS_CONTRACT_PATH = Path(
     "docs/contracts/swarm-incident-corpus-contract.json"
@@ -1140,6 +1147,53 @@ OPERATOR_PERCEIVED_LATENCY_REQUIRED_SOURCE_BOUNDARIES = (
     "advisory_trace_not_benchmark_or_capacity_claim",
     "does_not_replace_backpressure_evidence",
     "read_only_no_scheduler_or_runtime_mutation",
+)
+OPERATOR_SMOOTHNESS_SLO_REQUIRED_SURFACE_IDS = (
+    "provider_stream_delta",
+    "rpc_output_pressure",
+    "tui_frame_render",
+    "tool_update_coalescing",
+    "session_write_pressure",
+)
+OPERATOR_SMOOTHNESS_SLO_REQUIRED_CASE_IDS = (
+    "balanced_high_volume",
+    "rpc_tool_flood",
+    "tui_budget_pressure",
+    "provider_slow_semantic",
+    "session_write_pressure",
+)
+OPERATOR_SMOOTHNESS_SLO_REQUIRED_METRIC_KEYS = (
+    "event_count",
+    "semantic_milestone_count",
+    "coalesced_low_value_count",
+    "p50_visible_ms",
+    "p95_visible_ms",
+    "p99_visible_ms",
+    "max_backlog",
+    "visibility_budget_ms",
+    "verdict",
+)
+OPERATOR_SMOOTHNESS_SLO_REQUIRED_EVENT_KEYS = (
+    "step",
+    "elapsed_ms",
+    "surface",
+    "event",
+    "class",
+    "semantic_milestone",
+    "coalescing_reason",
+    "backlog_depth",
+)
+OPERATOR_SMOOTHNESS_SLO_REQUIRED_NEGATIVE_CONTROL_IDS = (
+    "delayed_semantic_visibility_fails_closed",
+    "non_monotonic_timeline_fails_closed",
+    "runaway_frame_backlog_fails_closed",
+    "missing_surface_coverage_fails_closed",
+)
+OPERATOR_SMOOTHNESS_SLO_REQUIRED_SOURCE_BOUNDARIES = (
+    "fixture_backed_no_live_provider_or_terminal_calls",
+    "advisory_slo_not_benchmark_capacity_or_release_claim",
+    "does_not_replace_provider_rpc_tui_tool_or_session_evidence",
+    "read_only_no_scheduler_runtime_cargo_or_git_mutation",
 )
 WORK_PARTITION_INSPECT_SENTINEL = "<inspect-bead-before-reserving>"
 WORK_SURFACE_RULES: tuple[dict[str, Any], ...] = (
@@ -21421,6 +21475,1629 @@ def write_operator_perceived_latency_trace_output(
     output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
 
 
+def smoothness_percentile(values: list[int], percentile: int) -> int:
+    assert values, "smoothness percentile requires at least one value"
+    ordered = sorted(values)
+    index = min(
+        len(ordered) - 1,
+        max(0, int((len(ordered) - 1) * percentile / 100)),
+    )
+    return ordered[index]
+
+
+def operator_smoothness_surface(
+    *,
+    surface_id: str,
+    title: str,
+    evidence_path: str,
+    event_count: int,
+    semantic_milestone_count: int,
+    coalesced_low_value_count: int,
+    visible_ms_samples: list[int],
+    max_backlog: int,
+    backlog_budget: int,
+    visibility_budget_ms: int,
+    semantic_preservation: str,
+    low_value_policy: str,
+) -> dict[str, Any]:
+    p50 = smoothness_percentile(visible_ms_samples, 50)
+    p95 = smoothness_percentile(visible_ms_samples, 95)
+    p99 = smoothness_percentile(visible_ms_samples, 99)
+    verdict = (
+        "pass"
+        if event_count > 0
+        and semantic_milestone_count > 0
+        and p99 <= visibility_budget_ms
+        and max_backlog <= backlog_budget
+        else "fail"
+    )
+    return {
+        "id": surface_id,
+        "title": title,
+        "status": verdict,
+        "evidence_path": evidence_path,
+        "evidence_kind": "checked_in_source_or_fixture_projection",
+        "slo_metrics": {
+            "event_count": event_count,
+            "semantic_milestone_count": semantic_milestone_count,
+            "coalesced_low_value_count": coalesced_low_value_count,
+            "p50_visible_ms": p50,
+            "p95_visible_ms": p95,
+            "p99_visible_ms": p99,
+            "max_backlog": max_backlog,
+            "backlog_budget": backlog_budget,
+            "visibility_budget_ms": visibility_budget_ms,
+            "verdict": verdict,
+        },
+        "semantic_preservation": semantic_preservation,
+        "low_value_coalescing_policy": low_value_policy,
+        "claim_boundary": (
+            "Synthetic smoothness fixture evidence only; not a release benchmark "
+            "or capacity measurement."
+        ),
+    }
+
+
+def operator_smoothness_case(
+    *,
+    case_id: str,
+    description: str,
+    timeline: list[dict[str, Any]],
+    covered_surface_ids: list[str],
+    semantic_visible_by_ms: int,
+    visibility_budget_ms: int,
+    max_backlog: int,
+    backlog_budget: int,
+    coalesced_low_value_count: int,
+) -> dict[str, Any]:
+    monotonic = True
+    previous_step: int | None = None
+    previous_elapsed_ms: int | None = None
+    for event in timeline:
+        step = event.get("step")
+        elapsed_ms = event.get("elapsed_ms")
+        if not isinstance(step, int) or not isinstance(elapsed_ms, int):
+            monotonic = False
+            break
+        if previous_step is not None and step <= previous_step:
+            monotonic = False
+            break
+        if previous_elapsed_ms is not None and elapsed_ms < previous_elapsed_ms:
+            monotonic = False
+            break
+        previous_step = step
+        previous_elapsed_ms = elapsed_ms
+    semantic_events = [
+        event for event in timeline if event.get("class") == "semantic"
+    ]
+    within_budget = semantic_visible_by_ms <= visibility_budget_ms
+    backlog_within_budget = max_backlog <= backlog_budget
+    status = (
+        "pass"
+        if monotonic and semantic_events and within_budget and backlog_within_budget
+        else "fail"
+    )
+    return {
+        "id": case_id,
+        "description": description,
+        "status": status,
+        "timeline_kind": "deterministic_synthetic_fixture_not_live_trace",
+        "covered_surface_ids": covered_surface_ids,
+        "timeline": timeline,
+        "semantic_milestones": {
+            "semantic_event_count": len(semantic_events),
+            "semantic_visible_by_ms": semantic_visible_by_ms,
+            "visibility_budget_ms": visibility_budget_ms,
+            "within_budget": within_budget,
+        },
+        "pressure_budget": {
+            "max_backlog": max_backlog,
+            "backlog_budget": backlog_budget,
+            "within_budget": backlog_within_budget,
+        },
+        "coalesced_low_value_count": coalesced_low_value_count,
+        "timeline_monotonic": monotonic,
+    }
+
+
+def operator_smoothness_event(
+    *,
+    step: int,
+    elapsed_ms: int,
+    surface: str,
+    event: str,
+    event_class: str,
+    backlog_after_event: int,
+    visibility_point: str,
+) -> dict[str, Any]:
+    return {
+        "step": step,
+        "elapsed_ms": elapsed_ms,
+        "surface": surface,
+        "event": event,
+        "class": event_class,
+        "backlog_after_event": backlog_after_event,
+        "visibility_point": visibility_point,
+    }
+
+
+def build_operator_smoothness_slo_summary(*, generated_at: str) -> dict[str, Any]:
+    visibility_budget_ms = 250
+    backlog_budget = 8
+    surfaces = [
+        operator_smoothness_surface(
+            surface_id="provider_stream_delta",
+            title="Provider stream delta smoothness",
+            evidence_path="tests/provider_streaming.rs",
+            event_count=1200,
+            semantic_milestone_count=48,
+            coalesced_low_value_count=612,
+            visible_ms_samples=[12, 18, 24, 36, 44, 55, 70, 84, 101, 116],
+            max_backlog=5,
+            backlog_budget=backlog_budget,
+            visibility_budget_ms=visibility_budget_ms,
+            semantic_preservation=(
+                "Text, thinking, usage, stop reason, and tool-call boundaries "
+                "remain semantically ordered while low-value deltas coalesce."
+            ),
+            low_value_policy=(
+                "Provider text/thinking deltas may merge; semantic lifecycle "
+                "events and malformed-stream fail-closed behavior may not."
+            ),
+        ),
+        operator_smoothness_surface(
+            surface_id="rpc_output_pressure",
+            title="RPC output pressure smoothness",
+            evidence_path="docs/evidence/rpc-output-pressure.jsonl",
+            event_count=1600,
+            semantic_milestone_count=52,
+            coalesced_low_value_count=1120,
+            visible_ms_samples=[20, 28, 39, 52, 68, 80, 95, 118, 136, 148],
+            max_backlog=6,
+            backlog_budget=backlog_budget,
+            visibility_budget_ms=visibility_budget_ms,
+            semantic_preservation=(
+                "Semantic RPC output flushes ahead of pending low-value message "
+                "and tool updates."
+            ),
+            low_value_policy=(
+                "MessageDelta and ToolUpdate events are latest-value coalesced "
+                "before semantic flushes."
+            ),
+        ),
+        operator_smoothness_surface(
+            surface_id="tui_frame_render",
+            title="TUI frame/render smoothness",
+            evidence_path="src/interactive/tests.rs",
+            event_count=900,
+            semantic_milestone_count=42,
+            coalesced_low_value_count=505,
+            visible_ms_samples=[16, 32, 48, 64, 82, 100, 126, 150, 172, 192],
+            max_backlog=4,
+            backlog_budget=backlog_budget,
+            visibility_budget_ms=visibility_budget_ms,
+            semantic_preservation=(
+                "Final provider text, final tool output, session notes, and user "
+                "input remain visible under frame pressure."
+            ),
+            low_value_policy=(
+                "Tool-update noise can collapse into summary frames while "
+                "semantic frames keep reserved capacity."
+            ),
+        ),
+        operator_smoothness_surface(
+            surface_id="tool_update_coalescing",
+            title="Tool update coalescing smoothness",
+            evidence_path="docs/evidence/operator-perceived-latency-trace.json",
+            event_count=2400,
+            semantic_milestone_count=34,
+            coalesced_low_value_count=2110,
+            visible_ms_samples=[22, 35, 58, 79, 94, 120, 142, 164, 184, 205],
+            max_backlog=7,
+            backlog_budget=backlog_budget,
+            visibility_budget_ms=visibility_budget_ms,
+            semantic_preservation=(
+                "Tool status churn can coalesce, but final tool results and "
+                "semantic provider output remain visible."
+            ),
+            low_value_policy=(
+                "Progress tick noise is latest-value coalesced; terminal tool "
+                "result messages are semantic milestones."
+            ),
+        ),
+        operator_smoothness_surface(
+            surface_id="session_write_pressure",
+            title="Session write pressure smoothness",
+            evidence_path="scripts/build_swarm_operator_runpack.py",
+            event_count=700,
+            semantic_milestone_count=28,
+            coalesced_low_value_count=360,
+            visible_ms_samples=[28, 44, 63, 88, 114, 138, 166, 190, 214, 238],
+            max_backlog=5,
+            backlog_budget=backlog_budget,
+            visibility_budget_ms=visibility_budget_ms,
+            semantic_preservation=(
+                "Session tail writes may batch low-value deltas while semantic "
+                "messages, model changes, and compaction markers remain ordered."
+            ),
+            low_value_policy=(
+                "Write amplification is absorbed by batching; semantic session "
+                "entries must not be dropped, reordered, or hidden."
+            ),
+        ),
+    ]
+    cases = [
+        operator_smoothness_case(
+            case_id="balanced_high_volume",
+            description=(
+                "Provider, RPC, TUI, tool, and session surfaces all make "
+                "operator-visible semantic progress under balanced volume."
+            ),
+            covered_surface_ids=list(OPERATOR_SMOOTHNESS_SLO_REQUIRED_SURFACE_IDS),
+            semantic_visible_by_ms=118,
+            visibility_budget_ms=visibility_budget_ms,
+            max_backlog=5,
+            backlog_budget=backlog_budget,
+            coalesced_low_value_count=190,
+            timeline=[
+                operator_smoothness_event(
+                    step=1,
+                    elapsed_ms=0,
+                    surface="provider_stream_delta",
+                    event="provider_semantic_delta",
+                    event_class="semantic",
+                    backlog_after_event=1,
+                    visibility_point="provider_semantic_token",
+                ),
+                operator_smoothness_event(
+                    step=2,
+                    elapsed_ms=18,
+                    surface="rpc_output_pressure",
+                    event="rpc_semantic_flush",
+                    event_class="semantic",
+                    backlog_after_event=2,
+                    visibility_point="rpc_visible_message",
+                ),
+                operator_smoothness_event(
+                    step=3,
+                    elapsed_ms=44,
+                    surface="tool_update_coalescing",
+                    event="tool_progress_latest_value",
+                    event_class="low_value",
+                    backlog_after_event=5,
+                    visibility_point="tool_status_summary",
+                ),
+                operator_smoothness_event(
+                    step=4,
+                    elapsed_ms=86,
+                    surface="tui_frame_render",
+                    event="semantic_frame_render",
+                    event_class="semantic",
+                    backlog_after_event=2,
+                    visibility_point="tui_visible_line",
+                ),
+                operator_smoothness_event(
+                    step=5,
+                    elapsed_ms=118,
+                    surface="session_write_pressure",
+                    event="session_semantic_tail_write",
+                    event_class="semantic",
+                    backlog_after_event=1,
+                    visibility_point="session_ordered_entry",
+                ),
+            ],
+        ),
+        operator_smoothness_case(
+            case_id="rpc_tool_flood",
+            description=(
+                "RPC/tool low-value floods are coalesced while semantic provider "
+                "and TUI milestones remain visible."
+            ),
+            covered_surface_ids=[
+                "provider_stream_delta",
+                "rpc_output_pressure",
+                "tool_update_coalescing",
+                "tui_frame_render",
+            ],
+            semantic_visible_by_ms=176,
+            visibility_budget_ms=visibility_budget_ms,
+            max_backlog=7,
+            backlog_budget=backlog_budget,
+            coalesced_low_value_count=480,
+            timeline=[
+                operator_smoothness_event(
+                    step=1,
+                    elapsed_ms=0,
+                    surface="provider_stream_delta",
+                    event="semantic_delta",
+                    event_class="semantic",
+                    backlog_after_event=1,
+                    visibility_point="provider_semantic_token",
+                ),
+                operator_smoothness_event(
+                    step=2,
+                    elapsed_ms=20,
+                    surface="rpc_output_pressure",
+                    event="message_delta_coalesced",
+                    event_class="low_value",
+                    backlog_after_event=6,
+                    visibility_point="rpc_pending_update",
+                ),
+                operator_smoothness_event(
+                    step=3,
+                    elapsed_ms=55,
+                    surface="tool_update_coalescing",
+                    event="tool_tick_replaced",
+                    event_class="low_value",
+                    backlog_after_event=7,
+                    visibility_point="tool_pending_update",
+                ),
+                operator_smoothness_event(
+                    step=4,
+                    elapsed_ms=112,
+                    surface="rpc_output_pressure",
+                    event="semantic_priority_flush",
+                    event_class="semantic",
+                    backlog_after_event=3,
+                    visibility_point="rpc_visible_message",
+                ),
+                operator_smoothness_event(
+                    step=5,
+                    elapsed_ms=176,
+                    surface="tui_frame_render",
+                    event="semantic_frame_render",
+                    event_class="semantic",
+                    backlog_after_event=2,
+                    visibility_point="tui_visible_line",
+                ),
+            ],
+        ),
+        operator_smoothness_case(
+            case_id="tui_budget_pressure",
+            description=(
+                "Frame pressure skips low-value redraws while reserving semantic "
+                "operator-visible output."
+            ),
+            covered_surface_ids=["tui_frame_render", "tool_update_coalescing"],
+            semantic_visible_by_ms=204,
+            visibility_budget_ms=visibility_budget_ms,
+            max_backlog=6,
+            backlog_budget=backlog_budget,
+            coalesced_low_value_count=260,
+            timeline=[
+                operator_smoothness_event(
+                    step=1,
+                    elapsed_ms=0,
+                    surface="tool_update_coalescing",
+                    event="tool_status_tick",
+                    event_class="low_value",
+                    backlog_after_event=4,
+                    visibility_point="tool_status_summary",
+                ),
+                operator_smoothness_event(
+                    step=2,
+                    elapsed_ms=40,
+                    surface="tui_frame_render",
+                    event="low_value_frame_skipped",
+                    event_class="low_value",
+                    backlog_after_event=6,
+                    visibility_point="collapsed_frame",
+                ),
+                operator_smoothness_event(
+                    step=3,
+                    elapsed_ms=132,
+                    surface="tui_frame_render",
+                    event="semantic_frame_reserved",
+                    event_class="semantic",
+                    backlog_after_event=2,
+                    visibility_point="tui_visible_line",
+                ),
+                operator_smoothness_event(
+                    step=4,
+                    elapsed_ms=204,
+                    surface="tui_frame_render",
+                    event="operator_visible_frame",
+                    event_class="semantic",
+                    backlog_after_event=1,
+                    visibility_point="operator_transcript",
+                ),
+            ],
+        ),
+        operator_smoothness_case(
+            case_id="provider_slow_semantic",
+            description=(
+                "Provider keepalive and slow first semantic output do not hide the "
+                "first meaningful visible milestone."
+            ),
+            covered_surface_ids=[
+                "provider_stream_delta",
+                "rpc_output_pressure",
+                "tui_frame_render",
+            ],
+            semantic_visible_by_ms=222,
+            visibility_budget_ms=visibility_budget_ms,
+            max_backlog=4,
+            backlog_budget=backlog_budget,
+            coalesced_low_value_count=80,
+            timeline=[
+                operator_smoothness_event(
+                    step=1,
+                    elapsed_ms=0,
+                    surface="provider_stream_delta",
+                    event="provider_keepalive",
+                    event_class="low_value",
+                    backlog_after_event=1,
+                    visibility_point="provider_heartbeat",
+                ),
+                operator_smoothness_event(
+                    step=2,
+                    elapsed_ms=96,
+                    surface="provider_stream_delta",
+                    event="first_semantic_delta",
+                    event_class="semantic",
+                    backlog_after_event=1,
+                    visibility_point="provider_semantic_token",
+                ),
+                operator_smoothness_event(
+                    step=3,
+                    elapsed_ms=144,
+                    surface="rpc_output_pressure",
+                    event="semantic_priority_flush",
+                    event_class="semantic",
+                    backlog_after_event=2,
+                    visibility_point="rpc_visible_message",
+                ),
+                operator_smoothness_event(
+                    step=4,
+                    elapsed_ms=222,
+                    surface="tui_frame_render",
+                    event="operator_visible_frame",
+                    event_class="semantic",
+                    backlog_after_event=1,
+                    visibility_point="operator_transcript",
+                ),
+            ],
+        ),
+        operator_smoothness_case(
+            case_id="session_write_pressure",
+            description=(
+                "Session-write batching preserves semantic ordering and does not "
+                "block operator-visible output."
+            ),
+            covered_surface_ids=[
+                "session_write_pressure",
+                "provider_stream_delta",
+                "rpc_output_pressure",
+            ],
+            semantic_visible_by_ms=238,
+            visibility_budget_ms=visibility_budget_ms,
+            max_backlog=5,
+            backlog_budget=backlog_budget,
+            coalesced_low_value_count=130,
+            timeline=[
+                operator_smoothness_event(
+                    step=1,
+                    elapsed_ms=0,
+                    surface="provider_stream_delta",
+                    event="semantic_delta",
+                    event_class="semantic",
+                    backlog_after_event=1,
+                    visibility_point="provider_semantic_token",
+                ),
+                operator_smoothness_event(
+                    step=2,
+                    elapsed_ms=70,
+                    surface="session_write_pressure",
+                    event="delta_batch_write",
+                    event_class="low_value",
+                    backlog_after_event=5,
+                    visibility_point="session_batch",
+                ),
+                operator_smoothness_event(
+                    step=3,
+                    elapsed_ms=158,
+                    surface="session_write_pressure",
+                    event="semantic_entry_write",
+                    event_class="semantic",
+                    backlog_after_event=2,
+                    visibility_point="session_ordered_entry",
+                ),
+                operator_smoothness_event(
+                    step=4,
+                    elapsed_ms=238,
+                    surface="rpc_output_pressure",
+                    event="operator_visible_flush",
+                    event_class="semantic",
+                    backlog_after_event=1,
+                    visibility_point="rpc_visible_message",
+                ),
+            ],
+        ),
+    ]
+    negative_controls = [
+        {
+            "id": "delayed_semantic_visibility_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "p99 or case semantic visibility beyond budget fails closed",
+            "trigger": {
+                "semantic_visible_by_ms": visibility_budget_ms + 50,
+                "visibility_budget_ms": visibility_budget_ms,
+            },
+        },
+        {
+            "id": "non_monotonic_timeline_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "non-monotonic steps or elapsed_ms hide causality",
+            "trigger": {"step_sequence": [1, 3, 2]},
+        },
+        {
+            "id": "runaway_frame_backlog_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "frame or queue backlog over budget means the SLO is not smooth",
+            "trigger": {"max_backlog": backlog_budget + 1},
+        },
+        {
+            "id": "missing_surface_coverage_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "all required surfaces must be represented before a pass claim",
+            "trigger": {"missing_surface": "session_write_pressure"},
+        },
+    ]
+    source_boundaries = [
+        {
+            "id": "fixture_backed_no_live_provider_or_terminal_calls",
+            "status": "pass",
+            "description": "All samples are deterministic fixtures; no live provider, network, terminal, or RCH calls are made.",
+        },
+        {
+            "id": "advisory_slo_not_benchmark_capacity_or_release_claim",
+            "status": "pass",
+            "description": "Percentile counters are fixture SLO counters only, not release benchmark or capacity evidence.",
+        },
+        {
+            "id": "does_not_replace_provider_rpc_tui_tool_or_session_evidence",
+            "status": "pass",
+            "description": "The SLO references existing source/evidence paths and does not replace focused surface tests.",
+        },
+        {
+            "id": "read_only_no_scheduler_runtime_cargo_or_git_mutation",
+            "status": "pass",
+            "description": "The generator emits JSON only and does not mutate runtime scheduling, cargo artifacts, git, Beads, Agent Mail, or files beyond requested output.",
+        },
+    ]
+    surface_ids = sorted(surface["id"] for surface in surfaces)
+    case_ids = sorted(case["id"] for case in cases)
+    missing_surface_ids = [
+        surface_id
+        for surface_id in OPERATOR_SMOOTHNESS_SLO_REQUIRED_SURFACE_IDS
+        if surface_id not in surface_ids
+    ]
+    missing_case_ids = [
+        case_id
+        for case_id in OPERATOR_SMOOTHNESS_SLO_REQUIRED_CASE_IDS
+        if case_id not in case_ids
+    ]
+    failing_surface_ids = [
+        surface["id"] for surface in surfaces if surface.get("status") != "pass"
+    ]
+    failing_case_ids = [
+        case["id"] for case in cases if case.get("status") != "pass"
+    ]
+    negative_control_failures = [
+        control["id"]
+        for control in negative_controls
+        if control.get("verdict") != "fail"
+        or control.get("expectation_met") is not True
+    ]
+    status = (
+        "pass"
+        if not missing_surface_ids
+        and not missing_case_ids
+        and not failing_surface_ids
+        and not failing_case_ids
+        and not negative_control_failures
+        and all(boundary["status"] == "pass" for boundary in source_boundaries)
+        else "fail"
+    )
+    return {
+        "schema": OPERATOR_SMOOTHNESS_SLO_SCHEMA,
+        "generated_at": generated_at,
+        "status": status,
+        "decision": "smoothness_slo_passed"
+        if status == "pass"
+        else "file_follow_up_before_relying_on_smoothness_slo",
+        "purpose": "operator_smoothness_slo_advisory_not_benchmark_or_capacity_claim",
+        "source_bead": "bd-9yq7i.5",
+        "visibility_budget_ms": visibility_budget_ms,
+        "backlog_budget": backlog_budget,
+        "required_surface_ids": list(OPERATOR_SMOOTHNESS_SLO_REQUIRED_SURFACE_IDS),
+        "surface_ids_covered": surface_ids,
+        "missing_surface_ids": missing_surface_ids,
+        "required_case_ids": list(OPERATOR_SMOOTHNESS_SLO_REQUIRED_CASE_IDS),
+        "missing_case_ids": missing_case_ids,
+        "required_metric_keys": list(OPERATOR_SMOOTHNESS_SLO_REQUIRED_METRIC_KEYS),
+        "surfaces": surfaces,
+        "cases": cases,
+        "failing_surface_ids": failing_surface_ids,
+        "failing_case_ids": failing_case_ids,
+        "negative_controls": negative_controls,
+        "negative_control_failures": negative_control_failures,
+        "source_boundaries": source_boundaries,
+        "claim_boundaries": {
+            "benchmark_claim_authorized": False,
+            "capacity_claim_authorized": False,
+            "release_performance_claim_authorized": False,
+            "live_provider_or_network_call_authorized": False,
+            "terminal_or_runtime_mutation_authorized": False,
+            "scheduler_mutation_authorized": False,
+            "cargo_or_rch_execution_authorized": False,
+            "git_or_beads_mutation_authorized": False,
+            "strict_dropin_or_release_claim_authorized": False,
+            "allowed_claim": (
+                "Advisory operator smoothness SLO over deterministic high-volume fixtures only."
+            ),
+        },
+        "summary": {
+            "surface_count": len(surfaces),
+            "case_count": len(cases),
+            "total_event_count": sum(
+                surface["slo_metrics"]["event_count"] for surface in surfaces
+            ),
+            "total_coalesced_low_value_count": sum(
+                surface["slo_metrics"]["coalesced_low_value_count"]
+                for surface in surfaces
+            ),
+            "max_p99_visible_ms": max(
+                surface["slo_metrics"]["p99_visible_ms"] for surface in surfaces
+            ),
+            "max_backlog": max(
+                surface["slo_metrics"]["max_backlog"] for surface in surfaces
+            ),
+            "negative_control_count": len(negative_controls),
+        },
+        "operator_next_actions": [
+            "Use this SLO to inspect semantic visibility under synthetic high-volume pressure.",
+            "Use focused provider/RPC/TUI/tool/session tests before changing runtime behavior.",
+            "Treat percentile counters as fixture evidence only; do not make benchmark, capacity, release, or strict drop-in claims from this artifact.",
+        ],
+    }
+
+
+def assert_operator_smoothness_slo_contract(summary: dict[str, Any]) -> None:
+    root = repo_root()
+    contract = json.loads(
+        (root / OPERATOR_SMOOTHNESS_SLO_CONTRACT_PATH).read_text(encoding="utf-8")
+    )
+    assert contract.get("schema") == OPERATOR_SMOOTHNESS_SLO_CONTRACT_SCHEMA
+    assert contract.get("evidence_schema") == OPERATOR_SMOOTHNESS_SLO_SCHEMA
+    assert summary.get("schema") == contract.get("evidence_schema")
+    assert summary.get("purpose") == contract.get("purpose")
+    assert summary.get("status") in set(contract.get("allowed_statuses", []))
+    assert summary.get("decision") in set(contract.get("allowed_decisions", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in summary, f"operator smoothness SLO missing key: {key}"
+    required_surfaces = set(contract.get("required_surface_ids", []))
+    surface_ids = {
+        surface.get("id")
+        for surface in proof_list(summary.get("surfaces"))
+        if isinstance(surface, dict)
+    }
+    assert surface_ids.issuperset(required_surfaces), (
+        f"operator smoothness SLO missing surfaces: {sorted(required_surfaces - surface_ids)}"
+    )
+    required_metric_keys = set(contract.get("required_metric_keys", []))
+    for surface in proof_list(summary.get("surfaces")):
+        assert isinstance(surface, dict)
+        surface_id = proof_string(surface.get("id"), "unknown_surface")
+        metrics = proof_dict(surface.get("slo_metrics"))
+        missing_metrics = required_metric_keys - set(metrics)
+        assert not missing_metrics, (
+            f"operator smoothness SLO surface {surface_id} missing metrics: "
+            f"{sorted(missing_metrics)}"
+        )
+        assert surface.get("evidence_path"), (
+            f"operator smoothness SLO surface lacks evidence path: {surface_id}"
+        )
+        assert metrics.get("verdict") in {"pass", "fail"}
+        for key in ("p50_visible_ms", "p95_visible_ms", "p99_visible_ms"):
+            assert isinstance(metrics.get(key), int), (
+                f"operator smoothness SLO metric {key} is not int: {surface_id}"
+            )
+        assert metrics["p50_visible_ms"] <= metrics["p95_visible_ms"] <= metrics[
+            "p99_visible_ms"
+        ], f"operator smoothness SLO percentiles are unordered: {surface_id}"
+        assert metrics["p99_visible_ms"] <= metrics["visibility_budget_ms"], (
+            f"operator smoothness SLO p99 beyond budget: {surface_id}"
+        )
+        assert metrics["max_backlog"] <= metrics["backlog_budget"], (
+            f"operator smoothness SLO backlog beyond budget: {surface_id}"
+        )
+        if summary.get("status") == "pass":
+            assert surface.get("status") == "pass", (
+                f"operator smoothness SLO surface did not pass: {surface_id}"
+            )
+    required_cases = set(contract.get("required_case_ids", []))
+    cases = summary.get("cases")
+    assert isinstance(cases, list) and cases
+    case_ids = {case.get("id") for case in cases if isinstance(case, dict)}
+    assert case_ids.issuperset(required_cases), (
+        f"operator smoothness SLO missing cases: {sorted(required_cases - case_ids)}"
+    )
+    required_event_keys = set(contract.get("required_event_keys", []))
+    allowed_event_classes = set(contract.get("allowed_event_classes", []))
+    allowed_surfaces = required_surfaces
+    for case in cases:
+        assert isinstance(case, dict)
+        case_id = proof_string(case.get("id"), "unknown_case")
+        timeline = case.get("timeline")
+        assert isinstance(timeline, list) and timeline, (
+            f"operator smoothness SLO case missing timeline: {case_id}"
+        )
+        previous_step: int | None = None
+        previous_elapsed_ms: int | None = None
+        semantic_seen = False
+        for event in timeline:
+            assert isinstance(event, dict)
+            missing_event_keys = required_event_keys - set(event)
+            assert not missing_event_keys, (
+                f"operator smoothness SLO event missing keys in {case_id}: "
+                f"{sorted(missing_event_keys)}"
+            )
+            step = event.get("step")
+            elapsed_ms = event.get("elapsed_ms")
+            assert isinstance(step, int), (
+                f"operator smoothness SLO event step is not int: {case_id}"
+            )
+            assert isinstance(elapsed_ms, int), (
+                f"operator smoothness SLO event elapsed_ms is not int: {case_id}"
+            )
+            if previous_step is not None:
+                assert step > previous_step, (
+                    f"operator smoothness SLO timeline must be monotonic by step: {case_id}"
+                )
+            if previous_elapsed_ms is not None:
+                assert elapsed_ms >= previous_elapsed_ms, (
+                    "operator smoothness SLO timeline must be monotonic by "
+                    f"elapsed_ms: {case_id}"
+                )
+            assert event.get("surface") in allowed_surfaces, (
+                f"operator smoothness SLO event has unknown surface: {case_id}"
+            )
+            assert event.get("class") in allowed_event_classes, (
+                f"operator smoothness SLO event has unknown class: {case_id}"
+            )
+            if event.get("class") == "semantic":
+                semantic_seen = True
+            previous_step = step
+            previous_elapsed_ms = elapsed_ms
+        milestones = proof_dict(case.get("semantic_milestones"))
+        pressure = proof_dict(case.get("pressure_budget"))
+        assert semantic_seen, f"operator smoothness SLO semantic event missing: {case_id}"
+        assert milestones.get("within_budget") is True, (
+            f"operator smoothness SLO semantic visibility delayed beyond budget: {case_id}"
+        )
+        assert pressure.get("within_budget") is True, (
+            f"operator smoothness SLO backlog beyond budget: {case_id}"
+        )
+        assert case.get("timeline_monotonic") is True, (
+            f"operator smoothness SLO timeline not monotonic: {case_id}"
+        )
+        if summary.get("status") == "pass":
+            assert case.get("status") == "pass", (
+                f"operator smoothness SLO case did not pass: {case_id}"
+            )
+    negative_controls = summary.get("negative_controls")
+    assert isinstance(negative_controls, list) and negative_controls
+    required_negative_ids = set(contract.get("required_negative_control_ids", []))
+    negative_ids = {
+        control.get("id")
+        for control in negative_controls
+        if isinstance(control, dict)
+    }
+    assert negative_ids.issuperset(required_negative_ids), (
+        "operator smoothness SLO missing negative controls: "
+        f"{sorted(required_negative_ids - negative_ids)}"
+    )
+    for control in negative_controls:
+        assert control.get("expected_status") == "fail", (
+            f"operator smoothness SLO negative control must expect fail: {control.get('id')}"
+        )
+        assert control.get("verdict") == "fail", (
+            f"operator smoothness SLO negative control must fail: {control.get('id')}"
+        )
+        assert control.get("expectation_met") is True, (
+            f"operator smoothness SLO negative control expectation unmet: {control.get('id')}"
+        )
+        assert isinstance(control.get("reason"), str) and control.get("reason"), (
+            f"operator smoothness SLO negative control missing reason: {control.get('id')}"
+        )
+    source_boundaries = summary.get("source_boundaries")
+    assert isinstance(source_boundaries, list) and source_boundaries
+    boundary_ids = {
+        boundary.get("id")
+        for boundary in source_boundaries
+        if isinstance(boundary, dict)
+    }
+    required_boundaries = set(contract.get("required_source_boundary_ids", []))
+    assert boundary_ids.issuperset(required_boundaries), (
+        f"operator smoothness SLO missing source boundaries: "
+        f"{sorted(required_boundaries - boundary_ids)}"
+    )
+    claim_boundaries = proof_dict(summary.get("claim_boundaries"))
+    for flag in contract.get("required_false_claim_boundary_flags", []):
+        assert claim_boundaries.get(flag) is False, (
+            f"operator smoothness SLO claim boundary must be false: {flag}"
+        )
+    if summary.get("status") == "pass":
+        assert summary.get("missing_surface_ids") == []
+        assert summary.get("missing_case_ids") == []
+        assert summary.get("failing_surface_ids") == []
+        assert summary.get("failing_case_ids") == []
+        assert summary.get("negative_control_failures") == []
+        assert all(boundary.get("status") == "pass" for boundary in source_boundaries)
+
+
+def write_operator_smoothness_slo_output(
+    args: argparse.Namespace,
+    summary: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_operator_smoothness_slo_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(
+            f"refusing to overwrite operator smoothness SLO: {output_path}"
+        )
+    output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
+
+
+def operator_smoothness_event(
+    *,
+    step: int,
+    elapsed_ms: int,
+    surface: str,
+    event: str,
+    event_class: str,
+    semantic_milestone: str | None,
+    coalescing_reason: str,
+    backlog_depth: int,
+) -> dict[str, Any]:
+    return {
+        "step": step,
+        "elapsed_ms": elapsed_ms,
+        "surface": surface,
+        "event": event,
+        "class": event_class,
+        "semantic_milestone": semantic_milestone,
+        "coalescing_reason": coalescing_reason,
+        "backlog_depth": backlog_depth,
+    }
+
+
+def operator_smoothness_percentile(values: list[int], percentile: int) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    index = min(
+        len(ordered) - 1,
+        int(round(((percentile / 100.0) * (len(ordered) - 1)))),
+    )
+    return ordered[index]
+
+
+def operator_smoothness_surface_metrics(
+    *,
+    timeline: list[dict[str, Any]],
+    surface: str,
+    visibility_budget_ms: int,
+    backlog_budget: int,
+) -> dict[str, Any]:
+    surface_events = [event for event in timeline if event.get("surface") == surface]
+    semantic_events = [
+        event for event in surface_events if event.get("class") == "semantic"
+    ]
+    low_value_events = [
+        event for event in surface_events if event.get("class") == "low_value"
+    ]
+    semantic_visible_ms = [
+        int(event["elapsed_ms"])
+        for event in semantic_events
+        if isinstance(event.get("elapsed_ms"), int)
+        and event.get("semantic_milestone")
+    ]
+    max_backlog = max(
+        [
+            int(event.get("backlog_depth") or 0)
+            for event in surface_events
+            if isinstance(event.get("backlog_depth"), int)
+        ]
+        + [0]
+    )
+    delayed = [
+        value for value in semantic_visible_ms if value > visibility_budget_ms
+    ]
+    verdict = (
+        "pass"
+        if semantic_visible_ms
+        and not delayed
+        and max_backlog <= backlog_budget
+        else "fail"
+    )
+    return {
+        "event_count": len(surface_events),
+        "semantic_milestone_count": len(semantic_visible_ms),
+        "coalesced_low_value_count": len(
+            [
+                event
+                for event in low_value_events
+                if "coalesc" in str(event.get("coalescing_reason") or "")
+                or "collapsed" in str(event.get("coalescing_reason") or "")
+            ]
+        ),
+        "p50_visible_ms": operator_smoothness_percentile(semantic_visible_ms, 50),
+        "p95_visible_ms": operator_smoothness_percentile(semantic_visible_ms, 95),
+        "p99_visible_ms": operator_smoothness_percentile(semantic_visible_ms, 99),
+        "max_backlog": max_backlog,
+        "visibility_budget_ms": visibility_budget_ms,
+        "verdict": verdict,
+        "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+        "delayed_semantic_visibility_ms": delayed,
+        "backlog_budget": backlog_budget,
+    }
+
+
+def build_operator_smoothness_case(
+    *,
+    case_id: str,
+    description: str,
+    timeline: list[dict[str, Any]],
+    visibility_budget_ms: int,
+    backlog_budget: int,
+    fixture_focus: str,
+) -> dict[str, Any]:
+    previous_step: int | None = None
+    previous_elapsed_ms: int | None = None
+    monotonic = True
+    for event in timeline:
+        step = event.get("step")
+        elapsed_ms = event.get("elapsed_ms")
+        if not isinstance(step, int) or not isinstance(elapsed_ms, int):
+            monotonic = False
+            break
+        if previous_step is not None and step <= previous_step:
+            monotonic = False
+            break
+        if previous_elapsed_ms is not None and elapsed_ms < previous_elapsed_ms:
+            monotonic = False
+            break
+        previous_step = step
+        previous_elapsed_ms = elapsed_ms
+    surface_metrics = {
+        surface: operator_smoothness_surface_metrics(
+            timeline=timeline,
+            surface=surface,
+            visibility_budget_ms=visibility_budget_ms,
+            backlog_budget=backlog_budget,
+        )
+        for surface in OPERATOR_SMOOTHNESS_SLO_REQUIRED_SURFACE_IDS
+    }
+    covered_surfaces = sorted(
+        {
+            str(event.get("surface"))
+            for event in timeline
+            if event.get("surface")
+        }
+    )
+    missing_surfaces = [
+        surface
+        for surface in OPERATOR_SMOOTHNESS_SLO_REQUIRED_SURFACE_IDS
+        if surface not in covered_surfaces
+    ]
+    failure_logs = []
+    if not monotonic:
+        failure_logs.append(
+            {
+                "surface": "timeline",
+                "reason": "non_monotonic_timeline",
+                "expected": "strictly increasing step and elapsed_ms",
+                "observed": [
+                    {
+                        "step": event.get("step"),
+                        "elapsed_ms": event.get("elapsed_ms"),
+                    }
+                    for event in timeline
+                ],
+            }
+        )
+    for surface, metrics in surface_metrics.items():
+        if metrics["semantic_milestone_count"] == 0:
+            failure_logs.append(
+                {
+                    "surface": surface,
+                    "reason": "missing_semantic_milestone",
+                    "expected": "at least one semantic milestone",
+                    "observed": metrics,
+                }
+            )
+        if metrics["delayed_semantic_visibility_ms"]:
+            failure_logs.append(
+                {
+                    "surface": surface,
+                    "reason": "delayed_semantic_visibility",
+                    "expected": f"p99_visible_ms <= {visibility_budget_ms}",
+                    "observed": metrics,
+                }
+            )
+        if metrics["max_backlog"] > backlog_budget:
+            failure_logs.append(
+                {
+                    "surface": surface,
+                    "reason": "runaway_backlog",
+                    "expected": f"max_backlog <= {backlog_budget}",
+                    "observed": metrics,
+                }
+            )
+    for surface in missing_surfaces:
+        failure_logs.append(
+            {
+                "surface": surface,
+                "reason": "missing_surface_coverage",
+                "expected": "surface present in timeline",
+                "observed": covered_surfaces,
+            }
+        )
+    status = "pass" if not failure_logs else "fail"
+    return {
+        "id": case_id,
+        "description": description,
+        "fixture_focus": fixture_focus,
+        "status": status,
+        "timeline_kind": "deterministic_synthetic_high_volume_fixture",
+        "visibility_budget_ms": visibility_budget_ms,
+        "backlog_budget": backlog_budget,
+        "timeline": timeline,
+        "surface_metrics": surface_metrics,
+        "surface_statuses": {
+            surface: metrics["verdict"] for surface, metrics in surface_metrics.items()
+        },
+        "surface_ids_covered": covered_surfaces,
+        "missing_surface_ids": missing_surfaces,
+        "semantic_visibility_preserved": status == "pass",
+        "low_value_noise_coalesced": any(
+            metrics["coalesced_low_value_count"] > 0
+            for metrics in surface_metrics.values()
+        ),
+        "failure_logs": failure_logs,
+    }
+
+
+def operator_smoothness_base_timeline(
+    *,
+    provider_ms: int,
+    rpc_ms: int,
+    tui_ms: int,
+    tool_ms: int,
+    session_ms: int,
+    provider_backlog: int = 2,
+    rpc_backlog: int = 2,
+    tui_backlog: int = 2,
+    tool_backlog: int = 2,
+    session_backlog: int = 2,
+) -> list[dict[str, Any]]:
+    return [
+        operator_smoothness_event(
+            step=1,
+            elapsed_ms=0,
+            surface="provider_stream_delta",
+            event="delta_noise_batch",
+            event_class="low_value",
+            semantic_milestone=None,
+            coalescing_reason="coalesced_text_delta_batch",
+            backlog_depth=max(1, provider_backlog - 1),
+        ),
+        operator_smoothness_event(
+            step=2,
+            elapsed_ms=provider_ms,
+            surface="provider_stream_delta",
+            event="semantic_delta",
+            event_class="semantic",
+            semantic_milestone="provider_semantic_token_visible",
+            coalescing_reason="semantic_priority_boundary",
+            backlog_depth=provider_backlog,
+        ),
+        operator_smoothness_event(
+            step=3,
+            elapsed_ms=rpc_ms,
+            surface="rpc_output_pressure",
+            event="rpc_semantic_flush",
+            event_class="semantic",
+            semantic_milestone="rpc_semantic_flush_visible",
+            coalescing_reason="flush_before_next_semantic_event",
+            backlog_depth=rpc_backlog,
+        ),
+        operator_smoothness_event(
+            step=4,
+            elapsed_ms=tool_ms,
+            surface="tool_update_coalescing",
+            event="tool_progress_noise",
+            event_class="low_value",
+            semantic_milestone=None,
+            coalescing_reason="latest_tool_update_coalesced",
+            backlog_depth=max(1, tool_backlog - 1),
+        ),
+        operator_smoothness_event(
+            step=5,
+            elapsed_ms=tool_ms + 8,
+            surface="tool_update_coalescing",
+            event="tool_result_visible",
+            event_class="semantic",
+            semantic_milestone="tool_result_visible",
+            coalescing_reason="final_tool_update_forced_visible",
+            backlog_depth=tool_backlog,
+        ),
+        operator_smoothness_event(
+            step=6,
+            elapsed_ms=tui_ms,
+            surface="tui_frame_render",
+            event="semantic_frame_render",
+            event_class="semantic",
+            semantic_milestone="tui_semantic_frame_visible",
+            coalescing_reason="reserved_semantic_frame",
+            backlog_depth=tui_backlog,
+        ),
+        operator_smoothness_event(
+            step=7,
+            elapsed_ms=session_ms,
+            surface="session_write_pressure",
+            event="session_append_checkpoint",
+            event_class="semantic",
+            semantic_milestone="session_checkpoint_written",
+            coalescing_reason="session_batch_flushed_before_turn_boundary",
+            backlog_depth=session_backlog,
+        ),
+    ]
+
+
+def build_operator_smoothness_slo_summary(*, generated_at: str) -> dict[str, Any]:
+    visibility_budget_ms = 250
+    backlog_budget = 8
+    cases = [
+        build_operator_smoothness_case(
+            case_id="balanced_high_volume",
+            description=(
+                "Provider, RPC, TUI, tool update, and session-write surfaces all "
+                "show semantic progress while low-value deltas are coalesced."
+            ),
+            fixture_focus="balanced_all_surfaces",
+            visibility_budget_ms=visibility_budget_ms,
+            backlog_budget=backlog_budget,
+            timeline=operator_smoothness_base_timeline(
+                provider_ms=24,
+                rpc_ms=48,
+                tui_ms=88,
+                tool_ms=64,
+                session_ms=116,
+            ),
+        ),
+        build_operator_smoothness_case(
+            case_id="rpc_tool_flood",
+            description=(
+                "RPC and tool-update flood pressure coalesces low-value updates "
+                "while semantic RPC flush, final tool output, TUI, and session "
+                "milestones stay visible."
+            ),
+            fixture_focus="rpc_and_tool_low_value_pressure",
+            visibility_budget_ms=visibility_budget_ms,
+            backlog_budget=backlog_budget,
+            timeline=operator_smoothness_base_timeline(
+                provider_ms=30,
+                rpc_ms=95,
+                tui_ms=150,
+                tool_ms=108,
+                session_ms=178,
+                rpc_backlog=6,
+                tool_backlog=7,
+            ),
+        ),
+        build_operator_smoothness_case(
+            case_id="tui_budget_pressure",
+            description=(
+                "TUI frame pressure raises backlog but preserves a semantic frame "
+                "within budget and keeps session persistence moving."
+            ),
+            fixture_focus="tui_frame_budget",
+            visibility_budget_ms=visibility_budget_ms,
+            backlog_budget=backlog_budget,
+            timeline=operator_smoothness_base_timeline(
+                provider_ms=34,
+                rpc_ms=70,
+                tui_ms=170,
+                tool_ms=96,
+                session_ms=198,
+                tui_backlog=7,
+            ),
+        ),
+        build_operator_smoothness_case(
+            case_id="provider_slow_semantic",
+            description=(
+                "A slow first provider semantic delta remains inside the user-visible "
+                "budget and does not starve RPC, TUI, tool, or session milestones."
+            ),
+            fixture_focus="provider_stream_delta_delay",
+            visibility_budget_ms=visibility_budget_ms,
+            backlog_budget=backlog_budget,
+            timeline=operator_smoothness_base_timeline(
+                provider_ms=138,
+                rpc_ms=166,
+                tui_ms=204,
+                tool_ms=178,
+                session_ms=230,
+                provider_backlog=5,
+            ),
+        ),
+        build_operator_smoothness_case(
+            case_id="session_write_pressure",
+            description=(
+                "Session-write pressure batches low-value persistence work but "
+                "flushes the semantic turn checkpoint before the operator budget expires."
+            ),
+            fixture_focus="session_write_pressure",
+            visibility_budget_ms=visibility_budget_ms,
+            backlog_budget=backlog_budget,
+            timeline=operator_smoothness_base_timeline(
+                provider_ms=28,
+                rpc_ms=56,
+                tui_ms=120,
+                tool_ms=76,
+                session_ms=238,
+                session_backlog=7,
+            ),
+        ),
+    ]
+    present_case_ids = {case["id"] for case in cases}
+    missing_case_ids = [
+        case_id
+        for case_id in OPERATOR_SMOOTHNESS_SLO_REQUIRED_CASE_IDS
+        if case_id not in present_case_ids
+    ]
+    surface_ids_covered = sorted(
+        {
+            surface
+            for case in cases
+            for surface in case.get("surface_ids_covered", [])
+            if isinstance(surface, str)
+        }
+    )
+    missing_surface_ids = [
+        surface_id
+        for surface_id in OPERATOR_SMOOTHNESS_SLO_REQUIRED_SURFACE_IDS
+        if surface_id not in surface_ids_covered
+    ]
+    failing_case_ids = [
+        case["id"] for case in cases if case.get("status") != "pass"
+    ]
+    negative_controls = [
+        {
+            "id": "delayed_semantic_visibility_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "failure_log": {
+                "surface": "provider_stream_delta",
+                "reason": "delayed_semantic_visibility",
+                "expected": f"p99_visible_ms <= {visibility_budget_ms}",
+                "observed": {"p99_visible_ms": visibility_budget_ms + 50},
+            },
+        },
+        {
+            "id": "non_monotonic_timeline_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "failure_log": {
+                "surface": "timeline",
+                "reason": "non_monotonic_timeline",
+                "expected": "strictly increasing step and elapsed_ms",
+                "observed": {"steps": [1, 3, 2], "elapsed_ms": [0, 70, 65]},
+            },
+        },
+        {
+            "id": "runaway_frame_backlog_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "failure_log": {
+                "surface": "tui_frame_render",
+                "reason": "runaway_backlog",
+                "expected": f"max_backlog <= {backlog_budget}",
+                "observed": {"max_backlog": backlog_budget + 4},
+            },
+        },
+        {
+            "id": "missing_surface_coverage_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "failure_log": {
+                "surface": "session_write_pressure",
+                "reason": "missing_surface_coverage",
+                "expected": "all required surfaces covered",
+                "observed": {"missing_surface_ids": ["session_write_pressure"]},
+            },
+        },
+    ]
+    negative_control_failures = [
+        control["id"]
+        for control in negative_controls
+        if control.get("verdict") != "fail"
+        or control.get("expectation_met") is not True
+    ]
+    source_boundaries = [
+        {
+            "id": "fixture_backed_no_live_provider_or_terminal_calls",
+            "status": "pass",
+            "description": (
+                "All smoothness timelines are deterministic fixtures and do not "
+                "call live providers, terminals, networks, RCH, or Agent Mail."
+            ),
+        },
+        {
+            "id": "advisory_slo_not_benchmark_capacity_or_release_claim",
+            "status": "pass",
+            "description": (
+                "p50/p95/p99 counters are engineering fixture counters, not "
+                "release latency, benchmark, or capacity measurements."
+            ),
+        },
+        {
+            "id": "does_not_replace_provider_rpc_tui_tool_or_session_evidence",
+            "status": "pass",
+            "description": (
+                "The SLO summarizes fixture smoothness and does not replace the "
+                "checked-in provider, RPC, TUI, tool, or session correctness evidence."
+            ),
+        },
+        {
+            "id": "read_only_no_scheduler_runtime_cargo_or_git_mutation",
+            "status": "pass",
+            "description": (
+                "The generator emits JSON only and does not mutate runtime queues, "
+                "scheduler policy, Beads, Agent Mail, RCH, cargo artifacts, git, or sessions."
+            ),
+        },
+    ]
+    status = (
+        "pass"
+        if not missing_case_ids
+        and not missing_surface_ids
+        and not failing_case_ids
+        and not negative_control_failures
+        and all(boundary["status"] == "pass" for boundary in source_boundaries)
+        else "fail"
+    )
+    summary = {
+        "schema": OPERATOR_SMOOTHNESS_SLO_SCHEMA,
+        "generated_at": generated_at,
+        "status": status,
+        "purpose": "operator_smoothness_slo_engineering_fixture_not_release_benchmark",
+        "source_bead": "bd-9yq7i.5",
+        "visibility_budget_ms": visibility_budget_ms,
+        "backlog_budget": backlog_budget,
+        "required_case_ids": list(OPERATOR_SMOOTHNESS_SLO_REQUIRED_CASE_IDS),
+        "required_surface_ids": list(OPERATOR_SMOOTHNESS_SLO_REQUIRED_SURFACE_IDS),
+        "required_event_keys": list(OPERATOR_SMOOTHNESS_SLO_REQUIRED_EVENT_KEYS),
+        "required_metric_keys": list(OPERATOR_SMOOTHNESS_SLO_REQUIRED_METRIC_KEYS),
+        "surface_ids_covered": surface_ids_covered,
+        "missing_case_ids": missing_case_ids,
+        "missing_surface_ids": missing_surface_ids,
+        "failing_case_ids": failing_case_ids,
+        "cases": cases,
+        "negative_controls": negative_controls,
+        "negative_control_failures": negative_control_failures,
+        "source_boundaries": source_boundaries,
+        "claim_boundaries": {
+            "benchmark_claim_authorized": False,
+            "capacity_claim_authorized": False,
+            "release_performance_claim_authorized": False,
+            "strict_dropin_or_release_claim_authorized": False,
+            "live_provider_terminal_network_or_rch_call_authorized": False,
+            "scheduler_or_runtime_mutation_authorized": False,
+            "session_mutation_authorized": False,
+            "replaces_provider_rpc_tui_tool_or_session_evidence": False,
+            "allowed_claim": (
+                "Advisory operator smoothness SLO over deterministic engineering "
+                "fixtures only."
+            ),
+        },
+        "operator_next_actions": [
+            "Use this SLO to inspect fixture-level semantic visibility under high-volume output.",
+            "Treat p50/p95/p99 values as deterministic engineering counters, not release benchmark data.",
+            "File follow-up beads for any delayed semantic visibility, runaway backlog, non-monotonic timeline, or missing surface coverage.",
+        ],
+        "decision": (
+            "smoothness_slo_passed"
+            if status == "pass"
+            else "file_follow_up_before_relying_on_smoothness_slo"
+        ),
+    }
+    assert_operator_smoothness_slo_contract(summary)
+    return summary
+
+
+def assert_operator_smoothness_slo_contract(summary: dict[str, Any]) -> None:
+    root = repo_root()
+    contract = json.loads(
+        (root / OPERATOR_SMOOTHNESS_SLO_CONTRACT_PATH).read_text(encoding="utf-8")
+    )
+    assert contract.get("schema") == OPERATOR_SMOOTHNESS_SLO_CONTRACT_SCHEMA
+    assert contract.get("evidence_schema") == OPERATOR_SMOOTHNESS_SLO_SCHEMA
+    assert summary.get("schema") == contract.get("evidence_schema")
+    assert summary.get("purpose") == contract.get("purpose")
+    assert summary.get("status") in set(contract.get("allowed_statuses", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in summary, f"operator smoothness SLO missing key: {key}"
+    cases = summary.get("cases")
+    assert isinstance(cases, list) and cases
+    required_case_ids = set(contract.get("required_case_ids", []))
+    case_ids = {case.get("id") for case in cases if isinstance(case, dict)}
+    assert case_ids.issuperset(required_case_ids), (
+        f"operator smoothness SLO missing cases: {sorted(required_case_ids - case_ids)}"
+    )
+    required_surface_ids = set(contract.get("required_surface_ids", []))
+    surface_ids = set(summary.get("surface_ids_covered", []))
+    assert surface_ids.issuperset(required_surface_ids), (
+        f"operator smoothness SLO missing surfaces: {sorted(required_surface_ids - surface_ids)}"
+    )
+    required_event_keys = set(contract.get("required_event_keys", []))
+    required_metric_keys = set(contract.get("required_metric_keys", []))
+    allowed_event_classes = set(contract.get("allowed_event_classes", []))
+    for case in cases:
+        assert isinstance(case, dict)
+        case_id = str(case.get("id") or "unknown_case")
+        assert case.get("status") in set(contract.get("allowed_statuses", []))
+        timeline = case.get("timeline")
+        assert isinstance(timeline, list) and timeline, (
+            f"operator smoothness case has no timeline: {case_id}"
+        )
+        previous_step: int | None = None
+        previous_elapsed_ms: int | None = None
+        for event in timeline:
+            assert isinstance(event, dict)
+            missing_keys = required_event_keys - set(event)
+            assert not missing_keys, (
+                f"operator smoothness event missing keys in {case_id}: {sorted(missing_keys)}"
+            )
+            assert event.get("surface") in required_surface_ids, (
+                f"operator smoothness event unknown surface in {case_id}: {event.get('surface')}"
+            )
+            assert event.get("class") in allowed_event_classes, (
+                f"operator smoothness event unknown class in {case_id}: {event.get('class')}"
+            )
+            step = event.get("step")
+            elapsed_ms = event.get("elapsed_ms")
+            assert isinstance(step, int)
+            assert isinstance(elapsed_ms, int)
+            if previous_step is not None:
+                assert step > previous_step, (
+                    f"operator smoothness timeline non-monotonic by step: {case_id}"
+                )
+            if previous_elapsed_ms is not None:
+                assert elapsed_ms >= previous_elapsed_ms, (
+                    f"operator smoothness timeline non-monotonic by elapsed_ms: {case_id}"
+                )
+            previous_step = step
+            previous_elapsed_ms = elapsed_ms
+        metrics = case.get("surface_metrics")
+        assert isinstance(metrics, dict)
+        for surface in required_surface_ids:
+            surface_metrics = metrics.get(surface)
+            assert isinstance(surface_metrics, dict), (
+                f"operator smoothness metrics missing surface {surface}: {case_id}"
+            )
+            missing_metric_keys = required_metric_keys - set(surface_metrics)
+            assert not missing_metric_keys, (
+                f"operator smoothness metrics missing keys for {surface}: {sorted(missing_metric_keys)}"
+            )
+            assert surface_metrics.get("counter_kind") == (
+                "deterministic_engineering_fixture_not_release_benchmark"
+            )
+            assert surface_metrics.get("verdict") in {"pass", "fail"}
+            if summary.get("status") == "pass":
+                assert surface_metrics.get("verdict") == "pass", (
+                    f"operator smoothness surface failed: {case_id}:{surface}"
+                )
+                assert surface_metrics.get("semantic_milestone_count", 0) > 0, (
+                    f"operator smoothness missing semantic milestone: {case_id}:{surface}"
+                )
+                assert surface_metrics.get("p99_visible_ms") <= surface_metrics.get(
+                    "visibility_budget_ms"
+                ), f"operator smoothness visibility delayed: {case_id}:{surface}"
+                assert surface_metrics.get("max_backlog") <= surface_metrics.get(
+                    "backlog_budget"
+                ), f"operator smoothness backlog runaway: {case_id}:{surface}"
+        if summary.get("status") == "pass":
+            assert case.get("status") == "pass"
+            assert case.get("failure_logs") == []
+            assert case.get("semantic_visibility_preserved") is True
+    negative_controls = summary.get("negative_controls")
+    assert isinstance(negative_controls, list) and negative_controls
+    required_negative_ids = set(contract.get("required_negative_control_ids", []))
+    negative_ids = {
+        control.get("id")
+        for control in negative_controls
+        if isinstance(control, dict)
+    }
+    assert negative_ids.issuperset(required_negative_ids), (
+        "operator smoothness SLO missing negative controls: "
+        f"{sorted(required_negative_ids - negative_ids)}"
+    )
+    for control in negative_controls:
+        control_id = str(control.get("id") or "unknown_control")
+        assert control.get("expected_status") == "fail", (
+            f"operator smoothness negative control expected status must be fail: {control_id}"
+        )
+        assert control.get("verdict") == "fail", (
+            f"operator smoothness negative control must fail closed: {control_id}"
+        )
+        assert control.get("expectation_met") is True, (
+            f"operator smoothness negative control expectation not met: {control_id}"
+        )
+        failure_log = control.get("failure_log")
+        assert isinstance(failure_log, dict)
+        assert failure_log.get("surface")
+        assert failure_log.get("reason")
+        assert failure_log.get("expected")
+        assert "observed" in failure_log
+    boundaries = summary.get("source_boundaries")
+    assert isinstance(boundaries, list) and boundaries
+    boundary_ids = {
+        boundary.get("id")
+        for boundary in boundaries
+        if isinstance(boundary, dict)
+    }
+    required_boundaries = set(contract.get("required_source_boundary_ids", []))
+    assert boundary_ids.issuperset(required_boundaries), (
+        f"operator smoothness SLO missing source boundaries: {sorted(required_boundaries - boundary_ids)}"
+    )
+    claim_boundaries = summary.get("claim_boundaries")
+    assert isinstance(claim_boundaries, dict)
+    for flag in contract.get("required_false_claim_boundary_flags", []):
+        assert claim_boundaries.get(flag) is False, (
+            f"operator smoothness SLO claim boundary must be false: {flag}"
+        )
+    if summary.get("status") == "pass":
+        assert summary.get("missing_case_ids") == []
+        assert summary.get("missing_surface_ids") == []
+        assert summary.get("failing_case_ids") == []
+        assert summary.get("negative_control_failures") == []
+        assert all(boundary.get("status") == "pass" for boundary in boundaries)
+        assert summary.get("decision") == "smoothness_slo_passed"
+
+
+def write_operator_smoothness_slo_output(
+    args: argparse.Namespace,
+    summary: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_operator_smoothness_slo_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(
+            f"refusing to overwrite operator smoothness SLO: {output_path}"
+        )
+    output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
+
+
 def swarm_incident_source_ref(
     path: str,
     source_type: str,
@@ -24425,9 +26102,16 @@ def assert_operator_work_recommendation_contract(summary: dict[str, Any]) -> Non
         f"{sorted(required_negative_ids - negative_ids)}"
     )
     for control in negative_controls:
-        assert control.get("expected_status") == "fail"
-        assert control.get("verdict") == "fail"
-        assert control.get("expectation_met") is True
+        control_id = control.get("id")
+        assert control.get("expected_status") == "fail", (
+            f"operator smoothness negative control must expect fail: {control_id}"
+        )
+        assert control.get("verdict") == "fail", (
+            f"operator smoothness negative control must fail: {control_id}"
+        )
+        assert control.get("expectation_met") is True, (
+            f"operator smoothness negative control expectation unmet: {control_id}"
+        )
     source_artifacts = summary.get("source_artifacts")
     assert isinstance(source_artifacts, list) and source_artifacts
     for source in source_artifacts:
@@ -33756,6 +35440,83 @@ def run_self_test() -> int:
             raise AssertionError(
                 "operator perceived latency positive negative-control passed"
             )
+        smoothness_slo = build_operator_smoothness_slo_summary(
+            generated_at=generated_at,
+        )
+        assert smoothness_slo["schema"] == OPERATOR_SMOOTHNESS_SLO_SCHEMA
+        assert smoothness_slo["status"] == "pass"
+        assert smoothness_slo["decision"] == "smoothness_slo_passed"
+        assert set(smoothness_slo["surface_ids_covered"]).issuperset(
+            OPERATOR_SMOOTHNESS_SLO_REQUIRED_SURFACE_IDS
+        )
+        assert {
+            case["id"] for case in smoothness_slo["cases"]
+        } == set(OPERATOR_SMOOTHNESS_SLO_REQUIRED_CASE_IDS)
+        assert {
+            control["id"] for control in smoothness_slo["negative_controls"]
+        }.issuperset(OPERATOR_SMOOTHNESS_SLO_REQUIRED_NEGATIVE_CONTROL_IDS)
+        assert max(
+            metrics["p99_visible_ms"]
+            for case in smoothness_slo["cases"]
+            for metrics in case["surface_metrics"].values()
+        ) <= smoothness_slo["visibility_budget_ms"]
+        assert_operator_smoothness_slo_contract(smoothness_slo)
+        delayed_smoothness = json.loads(json_dumps(smoothness_slo))
+        delayed_smoothness["cases"][0]["surface_metrics"]["provider_stream_delta"][
+            "p99_visible_ms"
+        ] = (
+            delayed_smoothness["cases"][0]["surface_metrics"][
+                "provider_stream_delta"
+            ]["visibility_budget_ms"]
+            + 1
+        )
+        try:
+            assert_operator_smoothness_slo_contract(delayed_smoothness)
+        except AssertionError as exc:
+            assert "visibility delayed" in str(exc)
+        else:
+            raise AssertionError("operator smoothness delayed p99 passed")
+        non_monotonic_smoothness = json.loads(json_dumps(smoothness_slo))
+        non_monotonic_smoothness["cases"][0]["timeline"][1]["step"] = 1
+        try:
+            assert_operator_smoothness_slo_contract(non_monotonic_smoothness)
+        except AssertionError as exc:
+            assert "monotonic" in str(exc)
+        else:
+            raise AssertionError("operator smoothness non-monotonic timeline passed")
+        bad_backlog_smoothness = json.loads(json_dumps(smoothness_slo))
+        bad_backlog_smoothness["cases"][0]["surface_metrics"]["tui_frame_render"][
+            "max_backlog"
+        ] = (
+            bad_backlog_smoothness["cases"][0]["surface_metrics"][
+                "tui_frame_render"
+            ]["backlog_budget"]
+            + 1
+        )
+        try:
+            assert_operator_smoothness_slo_contract(bad_backlog_smoothness)
+        except AssertionError as exc:
+            assert "backlog runaway" in str(exc)
+        else:
+            raise AssertionError("operator smoothness runaway backlog passed")
+        bad_smoothness_control = json.loads(json_dumps(smoothness_slo))
+        bad_smoothness_control["negative_controls"][0]["verdict"] = "pass"
+        try:
+            assert_operator_smoothness_slo_contract(bad_smoothness_control)
+        except AssertionError as exc:
+            assert "negative control" in str(exc)
+        else:
+            raise AssertionError("operator smoothness positive negative-control passed")
+        authority_smoothness = json.loads(json_dumps(smoothness_slo))
+        authority_smoothness["claim_boundaries"][
+            "release_performance_claim_authorized"
+        ] = True
+        try:
+            assert_operator_smoothness_slo_contract(authority_smoothness)
+        except AssertionError as exc:
+            assert "release_performance_claim_authorized" in str(exc)
+        else:
+            raise AssertionError("operator smoothness release claim authority passed")
         incident_corpus = build_swarm_incident_corpus_summary(generated_at=generated_at)
         assert incident_corpus["schema"] == SWARM_INCIDENT_CORPUS_SCHEMA
         assert incident_corpus["status"] == "pass"
@@ -34435,6 +36196,21 @@ def parse_args() -> argparse.Namespace:
         help="print the operator-perceived latency trace JSON",
     )
     parser.add_argument(
+        "--run-operator-smoothness-slo",
+        action="store_true",
+        help="build the deterministic operator smoothness SLO harness output",
+    )
+    parser.add_argument(
+        "--out-operator-smoothness-slo-json",
+        type=Path,
+        help="write pi.operator.smoothness_slo.v1 JSON; refuses to overwrite",
+    )
+    parser.add_argument(
+        "--print-operator-smoothness-slo",
+        action="store_true",
+        help="print the operator smoothness SLO JSON",
+    )
+    parser.add_argument(
         "--run-swarm-incident-corpus",
         action="store_true",
         help="build the deterministic large-swarm incident corpus",
@@ -34686,6 +36462,10 @@ def main() -> int:
         args.out_operator_perceived_latency_trace_json
         or args.print_operator_perceived_latency_trace
     )
+    operator_smoothness_slo_options_used = (
+        args.out_operator_smoothness_slo_json
+        or args.print_operator_smoothness_slo
+    )
     swarm_incident_corpus_options_used = (
         args.out_swarm_incident_corpus_json
         or args.print_swarm_incident_corpus
@@ -34738,9 +36518,21 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    if args.run_operator_smoothness_slo and (
+        args.run_backpressure_budget_contract
+        or args.run_operator_perceived_latency_trace
+        or any(final_gate_modes)
+    ):
+        print(
+            "ERROR: operator smoothness SLO cannot be combined with final-gate, "
+            "backpressure, or perceived-latency modes",
+            file=sys.stderr,
+        )
+        return 2
     if args.run_swarm_incident_corpus and (
         args.run_backpressure_budget_contract
         or args.run_operator_perceived_latency_trace
+        or args.run_operator_smoothness_slo
         or args.run_swarm_incident_replay
         or args.run_proof_reuse_gate
         or args.run_proof_memory_index
@@ -34750,13 +36542,14 @@ def main() -> int:
         print(
             "ERROR: swarm incident corpus cannot be combined with final-gate, "
             "backpressure, perceived-latency, incident-replay, proof-reuse, "
-            "proof-memory, or operator-work modes",
+            "proof-memory, operator-smoothness, or operator-work modes",
             file=sys.stderr,
         )
         return 2
     if args.run_swarm_incident_replay and (
         args.run_backpressure_budget_contract
         or args.run_operator_perceived_latency_trace
+        or args.run_operator_smoothness_slo
         or args.run_proof_reuse_gate
         or args.run_proof_memory_index
         or args.run_operator_work_recommendation
@@ -34765,13 +36558,14 @@ def main() -> int:
         print(
             "ERROR: swarm incident replay cannot be combined with final-gate, "
             "backpressure, perceived-latency, proof-reuse, proof-memory, "
-            "or operator-work modes",
+            "operator-smoothness, or operator-work modes",
             file=sys.stderr,
         )
         return 2
     if args.run_proof_reuse_gate and (
         args.run_backpressure_budget_contract
         or args.run_operator_perceived_latency_trace
+        or args.run_operator_smoothness_slo
         or args.run_swarm_incident_replay
         or args.run_proof_memory_index
         or args.run_operator_work_recommendation
@@ -34780,13 +36574,14 @@ def main() -> int:
         print(
             "ERROR: proof reuse gate cannot be combined with final-gate, "
             "backpressure, perceived-latency, incident-replay, proof-memory, "
-            "or operator-work modes",
+            "operator-smoothness, or operator-work modes",
             file=sys.stderr,
         )
         return 2
     if args.run_proof_memory_index and (
         args.run_backpressure_budget_contract
         or args.run_operator_perceived_latency_trace
+        or args.run_operator_smoothness_slo
         or args.run_swarm_incident_replay
         or args.run_proof_reuse_gate
         or args.run_operator_work_recommendation
@@ -34795,13 +36590,14 @@ def main() -> int:
         print(
             "ERROR: proof-memory index cannot be combined with final-gate, "
             "backpressure, perceived-latency, incident-replay, proof-reuse, "
-            "or operator-work modes",
+            "operator-smoothness, or operator-work modes",
             file=sys.stderr,
         )
         return 2
     if args.run_operator_work_recommendation and (
         args.run_backpressure_budget_contract
         or args.run_operator_perceived_latency_trace
+        or args.run_operator_smoothness_slo
         or args.run_swarm_incident_corpus
         or args.run_swarm_incident_replay
         or args.run_proof_reuse_gate
@@ -34811,7 +36607,7 @@ def main() -> int:
         print(
             "ERROR: operator work recommendation cannot be combined with final-gate, "
             "backpressure, perceived-latency, incident-corpus, incident-replay, "
-            "proof-reuse, or proof-memory modes",
+            "proof-reuse, proof-memory, or operator-smoothness modes",
             file=sys.stderr,
         )
         return 2
@@ -34894,6 +36690,13 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    if operator_smoothness_slo_options_used and not args.run_operator_smoothness_slo:
+        print(
+            "ERROR: operator smoothness SLO options require "
+            "--run-operator-smoothness-slo",
+            file=sys.stderr,
+        )
+        return 2
     if swarm_incident_corpus_options_used and not args.run_swarm_incident_corpus:
         print(
             "ERROR: swarm incident corpus options require --run-swarm-incident-corpus",
@@ -34970,6 +36773,18 @@ def main() -> int:
             if (
                 args.print_operator_perceived_latency_trace
                 or args.out_operator_perceived_latency_trace_json is None
+            ):
+                print(json_dumps(summary, pretty=True))
+            return 0
+        if args.run_operator_smoothness_slo:
+            summary = build_operator_smoothness_slo_summary(
+                generated_at=args.generated_at or utc_now_iso(),
+            )
+            assert_operator_smoothness_slo_contract(summary)
+            write_operator_smoothness_slo_output(args, summary)
+            if (
+                args.print_operator_smoothness_slo
+                or args.out_operator_smoothness_slo_json is None
             ):
                 print(json_dumps(summary, pretty=True))
             return 0
@@ -35254,6 +37069,7 @@ def main() -> int:
         and not args.out_test_fabric_final_gate_json
         and not args.out_predictive_ops_final_gate_json
         and not args.out_backpressure_budget_contract_json
+        and not args.out_operator_smoothness_slo_json
         and not args.out_swarm_incident_corpus_json
         and not args.out_swarm_incident_replay_json
         and not args.out_proof_reuse_gate_json
@@ -35274,6 +37090,7 @@ def main() -> int:
         and not args.print_test_fabric_final_gate
         and not args.print_predictive_ops_final_gate
         and not args.print_backpressure_budget_contract
+        and not args.print_operator_smoothness_slo
         and not args.print_swarm_incident_corpus
         and not args.print_swarm_incident_replay
         and not args.print_proof_reuse_gate

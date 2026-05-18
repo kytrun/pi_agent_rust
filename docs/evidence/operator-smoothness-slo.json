@@ -1,0 +1,1020 @@
+{
+  "backlog_budget": 8,
+  "cases": [
+    {
+      "backlog_budget": 8,
+      "description": "Provider, RPC, TUI, tool update, and session-write surfaces all show semantic progress while low-value deltas are coalesced.",
+      "failure_logs": [],
+      "fixture_focus": "balanced_all_surfaces",
+      "id": "balanced_high_volume",
+      "low_value_noise_coalesced": true,
+      "missing_surface_ids": [],
+      "semantic_visibility_preserved": true,
+      "status": "pass",
+      "surface_ids_covered": [
+        "provider_stream_delta",
+        "rpc_output_pressure",
+        "session_write_pressure",
+        "tool_update_coalescing",
+        "tui_frame_render"
+      ],
+      "surface_metrics": {
+        "provider_stream_delta": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 1,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 2,
+          "max_backlog": 2,
+          "p50_visible_ms": 24,
+          "p95_visible_ms": 24,
+          "p99_visible_ms": 24,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "rpc_output_pressure": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 48,
+          "p95_visible_ms": 48,
+          "p99_visible_ms": 48,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "session_write_pressure": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 116,
+          "p95_visible_ms": 116,
+          "p99_visible_ms": 116,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "tool_update_coalescing": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 1,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 2,
+          "max_backlog": 2,
+          "p50_visible_ms": 72,
+          "p95_visible_ms": 72,
+          "p99_visible_ms": 72,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "tui_frame_render": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 88,
+          "p95_visible_ms": 88,
+          "p99_visible_ms": 88,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        }
+      },
+      "surface_statuses": {
+        "provider_stream_delta": "pass",
+        "rpc_output_pressure": "pass",
+        "session_write_pressure": "pass",
+        "tool_update_coalescing": "pass",
+        "tui_frame_render": "pass"
+      },
+      "timeline": [
+        {
+          "backlog_depth": 1,
+          "class": "low_value",
+          "coalescing_reason": "coalesced_text_delta_batch",
+          "elapsed_ms": 0,
+          "event": "delta_noise_batch",
+          "semantic_milestone": null,
+          "step": 1,
+          "surface": "provider_stream_delta"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "semantic_priority_boundary",
+          "elapsed_ms": 24,
+          "event": "semantic_delta",
+          "semantic_milestone": "provider_semantic_token_visible",
+          "step": 2,
+          "surface": "provider_stream_delta"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "flush_before_next_semantic_event",
+          "elapsed_ms": 48,
+          "event": "rpc_semantic_flush",
+          "semantic_milestone": "rpc_semantic_flush_visible",
+          "step": 3,
+          "surface": "rpc_output_pressure"
+        },
+        {
+          "backlog_depth": 1,
+          "class": "low_value",
+          "coalescing_reason": "latest_tool_update_coalesced",
+          "elapsed_ms": 64,
+          "event": "tool_progress_noise",
+          "semantic_milestone": null,
+          "step": 4,
+          "surface": "tool_update_coalescing"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "final_tool_update_forced_visible",
+          "elapsed_ms": 72,
+          "event": "tool_result_visible",
+          "semantic_milestone": "tool_result_visible",
+          "step": 5,
+          "surface": "tool_update_coalescing"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "reserved_semantic_frame",
+          "elapsed_ms": 88,
+          "event": "semantic_frame_render",
+          "semantic_milestone": "tui_semantic_frame_visible",
+          "step": 6,
+          "surface": "tui_frame_render"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "session_batch_flushed_before_turn_boundary",
+          "elapsed_ms": 116,
+          "event": "session_append_checkpoint",
+          "semantic_milestone": "session_checkpoint_written",
+          "step": 7,
+          "surface": "session_write_pressure"
+        }
+      ],
+      "timeline_kind": "deterministic_synthetic_high_volume_fixture",
+      "visibility_budget_ms": 250
+    },
+    {
+      "backlog_budget": 8,
+      "description": "RPC and tool-update flood pressure coalesces low-value updates while semantic RPC flush, final tool output, TUI, and session milestones stay visible.",
+      "failure_logs": [],
+      "fixture_focus": "rpc_and_tool_low_value_pressure",
+      "id": "rpc_tool_flood",
+      "low_value_noise_coalesced": true,
+      "missing_surface_ids": [],
+      "semantic_visibility_preserved": true,
+      "status": "pass",
+      "surface_ids_covered": [
+        "provider_stream_delta",
+        "rpc_output_pressure",
+        "session_write_pressure",
+        "tool_update_coalescing",
+        "tui_frame_render"
+      ],
+      "surface_metrics": {
+        "provider_stream_delta": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 1,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 2,
+          "max_backlog": 2,
+          "p50_visible_ms": 30,
+          "p95_visible_ms": 30,
+          "p99_visible_ms": 30,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "rpc_output_pressure": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 6,
+          "p50_visible_ms": 95,
+          "p95_visible_ms": 95,
+          "p99_visible_ms": 95,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "session_write_pressure": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 178,
+          "p95_visible_ms": 178,
+          "p99_visible_ms": 178,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "tool_update_coalescing": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 1,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 2,
+          "max_backlog": 7,
+          "p50_visible_ms": 116,
+          "p95_visible_ms": 116,
+          "p99_visible_ms": 116,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "tui_frame_render": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 150,
+          "p95_visible_ms": 150,
+          "p99_visible_ms": 150,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        }
+      },
+      "surface_statuses": {
+        "provider_stream_delta": "pass",
+        "rpc_output_pressure": "pass",
+        "session_write_pressure": "pass",
+        "tool_update_coalescing": "pass",
+        "tui_frame_render": "pass"
+      },
+      "timeline": [
+        {
+          "backlog_depth": 1,
+          "class": "low_value",
+          "coalescing_reason": "coalesced_text_delta_batch",
+          "elapsed_ms": 0,
+          "event": "delta_noise_batch",
+          "semantic_milestone": null,
+          "step": 1,
+          "surface": "provider_stream_delta"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "semantic_priority_boundary",
+          "elapsed_ms": 30,
+          "event": "semantic_delta",
+          "semantic_milestone": "provider_semantic_token_visible",
+          "step": 2,
+          "surface": "provider_stream_delta"
+        },
+        {
+          "backlog_depth": 6,
+          "class": "semantic",
+          "coalescing_reason": "flush_before_next_semantic_event",
+          "elapsed_ms": 95,
+          "event": "rpc_semantic_flush",
+          "semantic_milestone": "rpc_semantic_flush_visible",
+          "step": 3,
+          "surface": "rpc_output_pressure"
+        },
+        {
+          "backlog_depth": 6,
+          "class": "low_value",
+          "coalescing_reason": "latest_tool_update_coalesced",
+          "elapsed_ms": 108,
+          "event": "tool_progress_noise",
+          "semantic_milestone": null,
+          "step": 4,
+          "surface": "tool_update_coalescing"
+        },
+        {
+          "backlog_depth": 7,
+          "class": "semantic",
+          "coalescing_reason": "final_tool_update_forced_visible",
+          "elapsed_ms": 116,
+          "event": "tool_result_visible",
+          "semantic_milestone": "tool_result_visible",
+          "step": 5,
+          "surface": "tool_update_coalescing"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "reserved_semantic_frame",
+          "elapsed_ms": 150,
+          "event": "semantic_frame_render",
+          "semantic_milestone": "tui_semantic_frame_visible",
+          "step": 6,
+          "surface": "tui_frame_render"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "session_batch_flushed_before_turn_boundary",
+          "elapsed_ms": 178,
+          "event": "session_append_checkpoint",
+          "semantic_milestone": "session_checkpoint_written",
+          "step": 7,
+          "surface": "session_write_pressure"
+        }
+      ],
+      "timeline_kind": "deterministic_synthetic_high_volume_fixture",
+      "visibility_budget_ms": 250
+    },
+    {
+      "backlog_budget": 8,
+      "description": "TUI frame pressure raises backlog but preserves a semantic frame within budget and keeps session persistence moving.",
+      "failure_logs": [],
+      "fixture_focus": "tui_frame_budget",
+      "id": "tui_budget_pressure",
+      "low_value_noise_coalesced": true,
+      "missing_surface_ids": [],
+      "semantic_visibility_preserved": true,
+      "status": "pass",
+      "surface_ids_covered": [
+        "provider_stream_delta",
+        "rpc_output_pressure",
+        "session_write_pressure",
+        "tool_update_coalescing",
+        "tui_frame_render"
+      ],
+      "surface_metrics": {
+        "provider_stream_delta": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 1,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 2,
+          "max_backlog": 2,
+          "p50_visible_ms": 34,
+          "p95_visible_ms": 34,
+          "p99_visible_ms": 34,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "rpc_output_pressure": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 70,
+          "p95_visible_ms": 70,
+          "p99_visible_ms": 70,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "session_write_pressure": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 198,
+          "p95_visible_ms": 198,
+          "p99_visible_ms": 198,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "tool_update_coalescing": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 1,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 2,
+          "max_backlog": 2,
+          "p50_visible_ms": 104,
+          "p95_visible_ms": 104,
+          "p99_visible_ms": 104,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "tui_frame_render": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 7,
+          "p50_visible_ms": 170,
+          "p95_visible_ms": 170,
+          "p99_visible_ms": 170,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        }
+      },
+      "surface_statuses": {
+        "provider_stream_delta": "pass",
+        "rpc_output_pressure": "pass",
+        "session_write_pressure": "pass",
+        "tool_update_coalescing": "pass",
+        "tui_frame_render": "pass"
+      },
+      "timeline": [
+        {
+          "backlog_depth": 1,
+          "class": "low_value",
+          "coalescing_reason": "coalesced_text_delta_batch",
+          "elapsed_ms": 0,
+          "event": "delta_noise_batch",
+          "semantic_milestone": null,
+          "step": 1,
+          "surface": "provider_stream_delta"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "semantic_priority_boundary",
+          "elapsed_ms": 34,
+          "event": "semantic_delta",
+          "semantic_milestone": "provider_semantic_token_visible",
+          "step": 2,
+          "surface": "provider_stream_delta"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "flush_before_next_semantic_event",
+          "elapsed_ms": 70,
+          "event": "rpc_semantic_flush",
+          "semantic_milestone": "rpc_semantic_flush_visible",
+          "step": 3,
+          "surface": "rpc_output_pressure"
+        },
+        {
+          "backlog_depth": 1,
+          "class": "low_value",
+          "coalescing_reason": "latest_tool_update_coalesced",
+          "elapsed_ms": 96,
+          "event": "tool_progress_noise",
+          "semantic_milestone": null,
+          "step": 4,
+          "surface": "tool_update_coalescing"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "final_tool_update_forced_visible",
+          "elapsed_ms": 104,
+          "event": "tool_result_visible",
+          "semantic_milestone": "tool_result_visible",
+          "step": 5,
+          "surface": "tool_update_coalescing"
+        },
+        {
+          "backlog_depth": 7,
+          "class": "semantic",
+          "coalescing_reason": "reserved_semantic_frame",
+          "elapsed_ms": 170,
+          "event": "semantic_frame_render",
+          "semantic_milestone": "tui_semantic_frame_visible",
+          "step": 6,
+          "surface": "tui_frame_render"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "session_batch_flushed_before_turn_boundary",
+          "elapsed_ms": 198,
+          "event": "session_append_checkpoint",
+          "semantic_milestone": "session_checkpoint_written",
+          "step": 7,
+          "surface": "session_write_pressure"
+        }
+      ],
+      "timeline_kind": "deterministic_synthetic_high_volume_fixture",
+      "visibility_budget_ms": 250
+    },
+    {
+      "backlog_budget": 8,
+      "description": "A slow first provider semantic delta remains inside the user-visible budget and does not starve RPC, TUI, tool, or session milestones.",
+      "failure_logs": [],
+      "fixture_focus": "provider_stream_delta_delay",
+      "id": "provider_slow_semantic",
+      "low_value_noise_coalesced": true,
+      "missing_surface_ids": [],
+      "semantic_visibility_preserved": true,
+      "status": "pass",
+      "surface_ids_covered": [
+        "provider_stream_delta",
+        "rpc_output_pressure",
+        "session_write_pressure",
+        "tool_update_coalescing",
+        "tui_frame_render"
+      ],
+      "surface_metrics": {
+        "provider_stream_delta": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 1,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 2,
+          "max_backlog": 5,
+          "p50_visible_ms": 138,
+          "p95_visible_ms": 138,
+          "p99_visible_ms": 138,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "rpc_output_pressure": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 166,
+          "p95_visible_ms": 166,
+          "p99_visible_ms": 166,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "session_write_pressure": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 230,
+          "p95_visible_ms": 230,
+          "p99_visible_ms": 230,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "tool_update_coalescing": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 1,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 2,
+          "max_backlog": 2,
+          "p50_visible_ms": 186,
+          "p95_visible_ms": 186,
+          "p99_visible_ms": 186,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "tui_frame_render": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 204,
+          "p95_visible_ms": 204,
+          "p99_visible_ms": 204,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        }
+      },
+      "surface_statuses": {
+        "provider_stream_delta": "pass",
+        "rpc_output_pressure": "pass",
+        "session_write_pressure": "pass",
+        "tool_update_coalescing": "pass",
+        "tui_frame_render": "pass"
+      },
+      "timeline": [
+        {
+          "backlog_depth": 4,
+          "class": "low_value",
+          "coalescing_reason": "coalesced_text_delta_batch",
+          "elapsed_ms": 0,
+          "event": "delta_noise_batch",
+          "semantic_milestone": null,
+          "step": 1,
+          "surface": "provider_stream_delta"
+        },
+        {
+          "backlog_depth": 5,
+          "class": "semantic",
+          "coalescing_reason": "semantic_priority_boundary",
+          "elapsed_ms": 138,
+          "event": "semantic_delta",
+          "semantic_milestone": "provider_semantic_token_visible",
+          "step": 2,
+          "surface": "provider_stream_delta"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "flush_before_next_semantic_event",
+          "elapsed_ms": 166,
+          "event": "rpc_semantic_flush",
+          "semantic_milestone": "rpc_semantic_flush_visible",
+          "step": 3,
+          "surface": "rpc_output_pressure"
+        },
+        {
+          "backlog_depth": 1,
+          "class": "low_value",
+          "coalescing_reason": "latest_tool_update_coalesced",
+          "elapsed_ms": 178,
+          "event": "tool_progress_noise",
+          "semantic_milestone": null,
+          "step": 4,
+          "surface": "tool_update_coalescing"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "final_tool_update_forced_visible",
+          "elapsed_ms": 186,
+          "event": "tool_result_visible",
+          "semantic_milestone": "tool_result_visible",
+          "step": 5,
+          "surface": "tool_update_coalescing"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "reserved_semantic_frame",
+          "elapsed_ms": 204,
+          "event": "semantic_frame_render",
+          "semantic_milestone": "tui_semantic_frame_visible",
+          "step": 6,
+          "surface": "tui_frame_render"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "session_batch_flushed_before_turn_boundary",
+          "elapsed_ms": 230,
+          "event": "session_append_checkpoint",
+          "semantic_milestone": "session_checkpoint_written",
+          "step": 7,
+          "surface": "session_write_pressure"
+        }
+      ],
+      "timeline_kind": "deterministic_synthetic_high_volume_fixture",
+      "visibility_budget_ms": 250
+    },
+    {
+      "backlog_budget": 8,
+      "description": "Session-write pressure batches low-value persistence work but flushes the semantic turn checkpoint before the operator budget expires.",
+      "failure_logs": [],
+      "fixture_focus": "session_write_pressure",
+      "id": "session_write_pressure",
+      "low_value_noise_coalesced": true,
+      "missing_surface_ids": [],
+      "semantic_visibility_preserved": true,
+      "status": "pass",
+      "surface_ids_covered": [
+        "provider_stream_delta",
+        "rpc_output_pressure",
+        "session_write_pressure",
+        "tool_update_coalescing",
+        "tui_frame_render"
+      ],
+      "surface_metrics": {
+        "provider_stream_delta": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 1,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 2,
+          "max_backlog": 2,
+          "p50_visible_ms": 28,
+          "p95_visible_ms": 28,
+          "p99_visible_ms": 28,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "rpc_output_pressure": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 56,
+          "p95_visible_ms": 56,
+          "p99_visible_ms": 56,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "session_write_pressure": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 7,
+          "p50_visible_ms": 238,
+          "p95_visible_ms": 238,
+          "p99_visible_ms": 238,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "tool_update_coalescing": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 1,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 2,
+          "max_backlog": 2,
+          "p50_visible_ms": 84,
+          "p95_visible_ms": 84,
+          "p99_visible_ms": 84,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        },
+        "tui_frame_render": {
+          "backlog_budget": 8,
+          "coalesced_low_value_count": 0,
+          "counter_kind": "deterministic_engineering_fixture_not_release_benchmark",
+          "delayed_semantic_visibility_ms": [],
+          "event_count": 1,
+          "max_backlog": 2,
+          "p50_visible_ms": 120,
+          "p95_visible_ms": 120,
+          "p99_visible_ms": 120,
+          "semantic_milestone_count": 1,
+          "verdict": "pass",
+          "visibility_budget_ms": 250
+        }
+      },
+      "surface_statuses": {
+        "provider_stream_delta": "pass",
+        "rpc_output_pressure": "pass",
+        "session_write_pressure": "pass",
+        "tool_update_coalescing": "pass",
+        "tui_frame_render": "pass"
+      },
+      "timeline": [
+        {
+          "backlog_depth": 1,
+          "class": "low_value",
+          "coalescing_reason": "coalesced_text_delta_batch",
+          "elapsed_ms": 0,
+          "event": "delta_noise_batch",
+          "semantic_milestone": null,
+          "step": 1,
+          "surface": "provider_stream_delta"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "semantic_priority_boundary",
+          "elapsed_ms": 28,
+          "event": "semantic_delta",
+          "semantic_milestone": "provider_semantic_token_visible",
+          "step": 2,
+          "surface": "provider_stream_delta"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "flush_before_next_semantic_event",
+          "elapsed_ms": 56,
+          "event": "rpc_semantic_flush",
+          "semantic_milestone": "rpc_semantic_flush_visible",
+          "step": 3,
+          "surface": "rpc_output_pressure"
+        },
+        {
+          "backlog_depth": 1,
+          "class": "low_value",
+          "coalescing_reason": "latest_tool_update_coalesced",
+          "elapsed_ms": 76,
+          "event": "tool_progress_noise",
+          "semantic_milestone": null,
+          "step": 4,
+          "surface": "tool_update_coalescing"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "final_tool_update_forced_visible",
+          "elapsed_ms": 84,
+          "event": "tool_result_visible",
+          "semantic_milestone": "tool_result_visible",
+          "step": 5,
+          "surface": "tool_update_coalescing"
+        },
+        {
+          "backlog_depth": 2,
+          "class": "semantic",
+          "coalescing_reason": "reserved_semantic_frame",
+          "elapsed_ms": 120,
+          "event": "semantic_frame_render",
+          "semantic_milestone": "tui_semantic_frame_visible",
+          "step": 6,
+          "surface": "tui_frame_render"
+        },
+        {
+          "backlog_depth": 7,
+          "class": "semantic",
+          "coalescing_reason": "session_batch_flushed_before_turn_boundary",
+          "elapsed_ms": 238,
+          "event": "session_append_checkpoint",
+          "semantic_milestone": "session_checkpoint_written",
+          "step": 7,
+          "surface": "session_write_pressure"
+        }
+      ],
+      "timeline_kind": "deterministic_synthetic_high_volume_fixture",
+      "visibility_budget_ms": 250
+    }
+  ],
+  "claim_boundaries": {
+    "allowed_claim": "Advisory operator smoothness SLO over deterministic engineering fixtures only.",
+    "benchmark_claim_authorized": false,
+    "capacity_claim_authorized": false,
+    "live_provider_terminal_network_or_rch_call_authorized": false,
+    "release_performance_claim_authorized": false,
+    "replaces_provider_rpc_tui_tool_or_session_evidence": false,
+    "scheduler_or_runtime_mutation_authorized": false,
+    "session_mutation_authorized": false,
+    "strict_dropin_or_release_claim_authorized": false
+  },
+  "decision": "smoothness_slo_passed",
+  "failing_case_ids": [],
+  "generated_at": "2026-05-18T06:45:00+00:00",
+  "missing_case_ids": [],
+  "missing_surface_ids": [],
+  "negative_control_failures": [],
+  "negative_controls": [
+    {
+      "expectation_met": true,
+      "expected_status": "fail",
+      "failure_log": {
+        "expected": "p99_visible_ms <= 250",
+        "observed": {
+          "p99_visible_ms": 300
+        },
+        "reason": "delayed_semantic_visibility",
+        "surface": "provider_stream_delta"
+      },
+      "id": "delayed_semantic_visibility_fails_closed",
+      "verdict": "fail"
+    },
+    {
+      "expectation_met": true,
+      "expected_status": "fail",
+      "failure_log": {
+        "expected": "strictly increasing step and elapsed_ms",
+        "observed": {
+          "elapsed_ms": [
+            0,
+            70,
+            65
+          ],
+          "steps": [
+            1,
+            3,
+            2
+          ]
+        },
+        "reason": "non_monotonic_timeline",
+        "surface": "timeline"
+      },
+      "id": "non_monotonic_timeline_fails_closed",
+      "verdict": "fail"
+    },
+    {
+      "expectation_met": true,
+      "expected_status": "fail",
+      "failure_log": {
+        "expected": "max_backlog <= 8",
+        "observed": {
+          "max_backlog": 12
+        },
+        "reason": "runaway_backlog",
+        "surface": "tui_frame_render"
+      },
+      "id": "runaway_frame_backlog_fails_closed",
+      "verdict": "fail"
+    },
+    {
+      "expectation_met": true,
+      "expected_status": "fail",
+      "failure_log": {
+        "expected": "all required surfaces covered",
+        "observed": {
+          "missing_surface_ids": [
+            "session_write_pressure"
+          ]
+        },
+        "reason": "missing_surface_coverage",
+        "surface": "session_write_pressure"
+      },
+      "id": "missing_surface_coverage_fails_closed",
+      "verdict": "fail"
+    }
+  ],
+  "operator_next_actions": [
+    "Use this SLO to inspect fixture-level semantic visibility under high-volume output.",
+    "Treat p50/p95/p99 values as deterministic engineering counters, not release benchmark data.",
+    "File follow-up beads for any delayed semantic visibility, runaway backlog, non-monotonic timeline, or missing surface coverage."
+  ],
+  "purpose": "operator_smoothness_slo_engineering_fixture_not_release_benchmark",
+  "required_case_ids": [
+    "balanced_high_volume",
+    "rpc_tool_flood",
+    "tui_budget_pressure",
+    "provider_slow_semantic",
+    "session_write_pressure"
+  ],
+  "required_event_keys": [
+    "step",
+    "elapsed_ms",
+    "surface",
+    "event",
+    "class",
+    "semantic_milestone",
+    "coalescing_reason",
+    "backlog_depth"
+  ],
+  "required_metric_keys": [
+    "event_count",
+    "semantic_milestone_count",
+    "coalesced_low_value_count",
+    "p50_visible_ms",
+    "p95_visible_ms",
+    "p99_visible_ms",
+    "max_backlog",
+    "visibility_budget_ms",
+    "verdict"
+  ],
+  "required_surface_ids": [
+    "provider_stream_delta",
+    "rpc_output_pressure",
+    "tui_frame_render",
+    "tool_update_coalescing",
+    "session_write_pressure"
+  ],
+  "schema": "pi.operator.smoothness_slo.v1",
+  "source_bead": "bd-9yq7i.5",
+  "source_boundaries": [
+    {
+      "description": "All smoothness timelines are deterministic fixtures and do not call live providers, terminals, networks, RCH, or Agent Mail.",
+      "id": "fixture_backed_no_live_provider_or_terminal_calls",
+      "status": "pass"
+    },
+    {
+      "description": "p50/p95/p99 counters are engineering fixture counters, not release latency, benchmark, or capacity measurements.",
+      "id": "advisory_slo_not_benchmark_capacity_or_release_claim",
+      "status": "pass"
+    },
+    {
+      "description": "The SLO summarizes fixture smoothness and does not replace the checked-in provider, RPC, TUI, tool, or session correctness evidence.",
+      "id": "does_not_replace_provider_rpc_tui_tool_or_session_evidence",
+      "status": "pass"
+    },
+    {
+      "description": "The generator emits JSON only and does not mutate runtime queues, scheduler policy, Beads, Agent Mail, RCH, cargo artifacts, git, or sessions.",
+      "id": "read_only_no_scheduler_runtime_cargo_or_git_mutation",
+      "status": "pass"
+    }
+  ],
+  "status": "pass",
+  "surface_ids_covered": [
+    "provider_stream_delta",
+    "rpc_output_pressure",
+    "session_write_pressure",
+    "tool_update_coalescing",
+    "tui_frame_render"
+  ],
+  "visibility_budget_ms": 250
+}

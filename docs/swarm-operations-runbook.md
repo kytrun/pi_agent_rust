@@ -269,6 +269,31 @@ reservations, launches RCH, runs cargo, mutates git, deletes files, or replaces
 source systems. Operators still execute any selected action through the normal
 Beads, Agent Mail, RCH, git, and validation workflows.
 
+### Operator Smoothness SLO
+
+The operator smoothness SLO is governed by
+`docs/contracts/operator-smoothness-slo-contract.json` and emits
+`pi.operator.smoothness_slo.v1`. It uses deterministic high-volume fixtures for
+provider stream deltas, RPC output pressure, TUI frame rendering, tool-update
+coalescing, and session-write pressure.
+
+Use it to inspect semantic visibility under synthetic swarm output pressure:
+
+```bash
+python3 scripts/build_swarm_operator_runpack.py \
+  --run-operator-smoothness-slo \
+  --print-operator-smoothness-slo
+```
+
+The current fixture artifact is `docs/evidence/operator-smoothness-slo.json`.
+Every case includes surface metrics with p50/p95/p99 visibility counters,
+semantic milestone counts, low-value coalescing counts, backlog budgets, and
+failure logs. Negative controls fail closed for delayed semantic visibility,
+non-monotonic timelines, runaway frame backlog, and missing surface coverage.
+The counters are engineering fixture evidence only; they do not authorize
+benchmark, capacity, release performance, strict drop-in, or runtime mutation
+claims.
+
 ## Temp Artifact Inventory
 
 Swarm runpacks include `temp_artifact_inventory` with schema
@@ -679,6 +704,7 @@ The runtime-intelligence closeout gate emits `pi.runtime_intelligence.closeout_g
 The proof-carrying swarm test-fabric closeout gate emits `pi.swarm.proof_carrying_test_fabric.closeout_gate.v1`, governed by `docs/contracts/proof-carrying-swarm-test-fabric-closeout-gate-contract.json`; the current artifact is `docs/evidence/proof-carrying-swarm-test-fabric-closeout-gate.json`. It maps each `bd-zeccr` implementation child bead to source paths, tests or fixtures, evidence artifacts, validation commands, close reasons, pushed commits, and negative controls; then it checks no-mock lifecycle E2E, cross-surface conformance, operator evidence goldens, structure-aware fuzz/property coverage, metamorphic replay equivalence, source boundaries, pushed refs, staged UBS, Beads ledger reconciliation, and RCH-backed quality gates. A passing proof-carrying test-fabric gate is closeout evidence only and does not replace Beads, git, RCH, Agent Mail, UBS, CI, claim-integrity gates, child evidence, or source files.
 The predictive-operations closeout gate emits `pi.swarm.predictive_operations.closeout_gate.v1`, governed by `docs/contracts/predictive-operations-closeout-gate-contract.json`; the current artifact is `docs/evidence/predictive-operations-closeout-gate.json`. It maps each `bd-63x3v.11` implementation child bead to source paths, tests or fixtures, evidence artifacts, validation commands, close reasons, pushed commits, and claim-boundary text; then it checks predictive telemetry fusion, validation scheduling, semantic compaction quality, hostcall cost attribution, operator-perceived latency, redundant-agent-work detection, source boundaries, pushed refs, staged UBS, Beads ledger reconciliation, and untracked follow-ups. A passing predictive-operations gate is closeout evidence only and does not replace Beads, git, RCH, Agent Mail, UBS, CI, claim-integrity gates, child evidence, generated target/perf outputs, or source files.
 The operator-perceived latency trace emits `pi.operator.perceived_latency_trace.v1`, governed by `docs/contracts/operator-perceived-latency-trace-contract.json`; the current fixture artifact is `docs/evidence/operator-perceived-latency-trace.json`. It joins provider-stream, RPC-output, TUI-frame, tool-update, and operator-visible semantic milestones while proving low-value coalescing does not hide semantic output. The trace is advisory fixture evidence only and does not replace provider/RPC/TUI backpressure evidence or authorize benchmark, capacity, release performance, or strict drop-in claims.
+The operator smoothness SLO emits `pi.operator.smoothness_slo.v1`, governed by `docs/contracts/operator-smoothness-slo-contract.json`; the current fixture artifact is `docs/evidence/operator-smoothness-slo.json`. It covers provider stream deltas, RPC output pressure, TUI frame rendering, tool-update coalescing, and session-write pressure with deterministic p50/p95/p99 visibility counters, semantic milestone counts, backlog budgets, failure logs, and fail-closed controls for delayed visibility, non-monotonic timelines, runaway frame backlog, and missing surface coverage. The SLO is advisory engineering fixture evidence only and does not replace focused surface tests or authorize benchmark, capacity, release performance, strict drop-in, runtime mutation, RCH, cargo, git, or Beads claims.
 The swarm incident corpus emits `pi.swarm.incident_corpus.v1`, governed by `docs/contracts/swarm-incident-corpus-contract.json`; the current fixture artifact is `docs/evidence/swarm-incident-corpus.json`. It captures deterministic operator incidents for Agent Mail schema corruption, RCH saturation/local-fallback denial, stale evidence, duplicate work risk, dirty worktree admission denial, malformed source artifacts, and deletion or live-mutation rejection, plus fail-closed negative controls for missing sources, unsafe unredacted bodies, contradictory status, and unsafe authorization attempts. The corpus is advisory fixture evidence only and does not replace release performance, drop-in certification, Agent Mail, RCH, Beads, git, source artifacts, or destructive-action authority.
 The swarm incident replay harness emits `pi.swarm.incident_replay.v1`, governed by `docs/contracts/swarm-incident-replay-contract.json`; the current fixture artifact is `docs/evidence/swarm-incident-replay.json`. It consumes the incident corpus and reconstructs source capture, Agent Mail degradation, RCH admission, Beads ownership, dirty worktree state, validation outcome, and final recommendation phases with per-step assertions and redacted excerpts. Negative controls fail closed for out-of-order events, missing sources, unredacted sensitive content, and replay output being treated as source-of-truth authority. Replay is advisory fixture evidence only and does not replace live Agent Mail, RCH, Beads, git, source artifacts, or destructive-action authority.
 The validation proof-memory index emits `pi.validation.proof_memory_index.v1`, governed by `docs/contracts/validation-proof-memory-index-contract.json`; the current fixture artifact is `docs/evidence/validation-proof-memory-index.json`. It classifies reusable, stale, missing-artifact, local-fallback, dirty-worktree mismatch, command-mismatch, path-coverage mismatch, and non-authoritative validation proof entries from checked remote-validation proof fixtures. Proof memory is advisory fixture evidence only and does not skip validation or replace RCH, Agent Mail, Beads, git, source artifacts, or claim-integrity gates.
