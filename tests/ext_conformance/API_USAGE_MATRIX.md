@@ -35,8 +35,8 @@ Generated: 2026-02-07 | Corpus: 1,167 files across 230 extensions
 | `node:http` | 6 | - | 1 | 5 | External | P2 |
 | `node:https` | 5 | - | - | 5 | External | P2 |
 | `node:events` | 3 | - | - | 3 | Real | P2 |
-| `node:stream` | 2 | - | - | 2 | Stub | P3 |
-| `node:stream/promises` | 2 | - | - | 2 | Stub | P3 |
+| `node:stream` | 2 | - | - | 2 | Partial | P3 |
+| `node:stream/promises` | 2 | - | - | 2 | Partial | P3 |
 | `node:buffer` | 1 | - | - | 1 | External | P2 |
 | `node:process` | 1 | - | - | 1 | Real | P1 |
 | `node:assert` | 1 | - | - | 1 | Real | P3 |
@@ -46,7 +46,7 @@ Generated: 2026-02-07 | Corpus: 1,167 files across 230 extensions
 | `node:v8` | 1 | - | - | 1 | **Missing** | P3 |
 | `node:perf_hooks` | 1 | - | - | 1 | **Missing** | P3 |
 | `node:vm` | 1 | - | - | 1 | **Missing** | P3 |
-| `node:stream/web` | 1 | - | - | 1 | **Missing** | P3 |
+| `node:stream/web` | 1 | - | - | 1 | Partial | P3 |
 | `node:readline/promises` | 1 | - | - | 1 | Partial | P3 |
 
 ## Top 20 Most-Called APIs

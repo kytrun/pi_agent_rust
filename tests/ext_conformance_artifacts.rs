@@ -403,6 +403,51 @@ fn test_api_usage_matrix_readline_shim_contract() {
 }
 
 #[test]
+fn test_api_usage_matrix_stream_shim_contract() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let matrix_path = repo_root.join("tests/ext_conformance/api_usage_matrix.json");
+    let bytes = fs::read(&matrix_path).expect("read api_usage_matrix.json");
+    let matrix: ApiUsageMatrix =
+        serde_json::from_slice(&bytes).expect("parse api_usage_matrix.json");
+
+    let stream = matrix
+        .node_modules
+        .iter()
+        .find(|entry| entry.module == "node:stream")
+        .expect("node:stream entry missing from api_usage_matrix.json");
+
+    assert_eq!(
+        stream.shim_status, "partial",
+        "node:stream should stay partial while the shipped constructors cover the corpus subset"
+    );
+    assert_eq!(matrix_api_status(stream, "Readable"), Some("real"));
+    assert_eq!(matrix_api_status(stream, "Writable"), Some("real"));
+    assert_eq!(matrix_api_status(stream, "Transform"), Some("real"));
+    assert_eq!(matrix_api_status(stream, "PassThrough"), Some("real"));
+
+    let stream_promises = matrix
+        .node_modules
+        .iter()
+        .find(|entry| entry.module == "node:stream/promises")
+        .expect("node:stream/promises entry missing from api_usage_matrix.json");
+
+    assert_eq!(stream_promises.shim_status, "partial");
+    assert_eq!(matrix_api_status(stream_promises, "pipeline"), Some("real"));
+    assert_eq!(matrix_api_status(stream_promises, "finished"), Some("real"));
+
+    let stream_web = matrix
+        .node_modules
+        .iter()
+        .find(|entry| entry.module == "node:stream/web")
+        .expect("node:stream/web entry missing from api_usage_matrix.json");
+
+    assert_eq!(
+        stream_web.shim_status, "partial",
+        "node:stream/web should not be reported as missing while the facade is registered"
+    );
+}
+
+#[test]
 fn test_ext_conformance_pinned_sample_compat_ledger_snapshot() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let manifest_path = repo_root.join("docs/extension-sample.json");
