@@ -1,0 +1,853 @@
+{
+  "checklist": [
+    {
+      "evidence": [
+        {
+          "child_statuses": {
+            "bd-63x3v.10.1": "closed",
+            "bd-63x3v.10.2": "closed",
+            "bd-63x3v.10.3": "closed",
+            "bd-63x3v.10.4": "closed",
+            "bd-63x3v.10.5": "closed",
+            "bd-63x3v.10.6": "closed",
+            "bd-63x3v.10.7": "closed"
+          },
+          "close_reasons": {
+            "bd-63x3v.10.1": "Completed deterministic effect-aware parallel tool batch evidence",
+            "bd-63x3v.10.2": "Completed fail-closed RCH validation proof reuse gate",
+            "bd-63x3v.10.3": "Completed advisory NUMA/cgroup swarm lane placement planner",
+            "bd-63x3v.10.4": "Added large-session replay acceleration correctness harness and fixed session index sidecar scanning",
+            "bd-63x3v.10.5": "Added provider/RPC/TUI fairness stress gate with checked-in evidence and fail-closed negative control",
+            "bd-63x3v.10.6": "Added read-only work-admission dry-run executor with contract/docs/self-test coverage",
+            "bd-63x3v.10.7": "Added extension hostcall QoS starvation regression evidence and claim-readiness safe-action guidance"
+          },
+          "path": ".beads/issues.jsonl"
+        }
+      ],
+      "id": "child_beads_closed",
+      "issue": null,
+      "requirement": "All seventh-wave runtime-autonomy child Beads are closed before closeout.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "artifact_paths_exist": true,
+          "child_artifact_map": [
+            {
+              "bead_id": "bd-63x3v.10.1",
+              "claim_boundary_text": "Effect-aware tool batch evidence is advisory/debug-only and does not make release-facing throughput or latency claims.",
+              "close_reason": "Completed deterministic effect-aware parallel tool batch evidence",
+              "code_paths": [
+                "src/agent.rs",
+                "src/tools.rs"
+              ],
+              "commit": "156cd358121c07dbc60ec919b0bac546a1632604",
+              "docs_or_evidence_paths": [
+                "src/agent.rs"
+              ],
+              "status": "closed",
+              "test_paths": [
+                "src/agent.rs"
+              ],
+              "title": "Expose deterministic effect-aware parallel tool batch evidence",
+              "validation_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo test compatible_tool_parallelism tool_effect",
+                "cargo fmt --check",
+                "ubs --staged --only=rust .",
+                "./scripts/reconcile_beads_ledger.sh"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.10.2",
+              "claim_boundary_text": "Validation proof reuse is fail-closed and cannot skip fresh RCH validation unless command, refs, staged paths, and toolchain inputs match.",
+              "close_reason": "Completed fail-closed RCH validation proof reuse gate",
+              "code_paths": [
+                "scripts/build_swarm_operator_runpack.py"
+              ],
+              "commit": "cfd1bb85cc40becfcd5142115d5604539cf1be33",
+              "docs_or_evidence_paths": [
+                "docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+                "docs/swarm-operations-runbook.md",
+                "README.md"
+              ],
+              "status": "closed",
+              "test_paths": [
+                "scripts/build_swarm_operator_runpack.py"
+              ],
+              "title": "Add fail-closed RCH validation proof reuse gate",
+              "validation_commands": [
+                "python3 scripts/build_swarm_operator_runpack.py --self-test",
+                "python3 -m json.tool docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+                "git diff --check",
+                "./scripts/reconcile_beads_ledger.sh"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.10.3",
+              "claim_boundary_text": "NUMA/cgroup lane placement is advisory only and does not pin processes, mutate OS state, or create capacity claims.",
+              "close_reason": "Completed advisory NUMA/cgroup swarm lane placement planner",
+              "code_paths": [
+                "src/doctor.rs"
+              ],
+              "commit": "051c4812de7fc34287546ac8e10f82d476f7fb1a",
+              "docs_or_evidence_paths": [
+                "README.md"
+              ],
+              "status": "closed",
+              "test_paths": [
+                "tests/doctor_swarm_temp_dir_json.rs",
+                "src/doctor.rs"
+              ],
+              "title": "Add advisory NUMA/cgroup swarm lane placement planner",
+              "validation_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo test swarm_resource_preflight numa",
+                "cargo fmt --check",
+                "ubs --staged --only=rust .",
+                "./scripts/reconcile_beads_ledger.sh"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.10.4",
+              "claim_boundary_text": "Large-session replay acceleration evidence proves correctness and bounded classifications without making release-facing speed claims.",
+              "close_reason": "Added large-session replay acceleration correctness harness and fixed session index sidecar scanning",
+              "code_paths": [
+                "src/session.rs",
+                "src/session_index.rs"
+              ],
+              "commit": "c82b0d14ef3b6c77cd1e59eb437b0ef20ff624d9",
+              "docs_or_evidence_paths": [
+                "src/session.rs",
+                "src/session_index.rs"
+              ],
+              "status": "closed",
+              "test_paths": [
+                "src/session.rs",
+                "src/session_index.rs"
+              ],
+              "title": "Add large-session replay acceleration correctness harness",
+              "validation_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo test session replay index",
+                "cargo fmt --check",
+                "ubs --staged --only=rust .",
+                "./scripts/reconcile_beads_ledger.sh"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.10.5",
+              "claim_boundary_text": "Provider/RPC/TUI fairness stress evidence is fixture-backed operator evidence and does not replace release perf gates.",
+              "close_reason": "Added provider/RPC/TUI fairness stress gate with checked-in evidence and fail-closed negative control",
+              "code_paths": [
+                "scripts/build_swarm_operator_runpack.py"
+              ],
+              "commit": "bc9ef42929c22c93d668af6c91dfd1b4e4e1d045",
+              "docs_or_evidence_paths": [
+                "docs/contracts/provider-rpc-tui-backpressure-budget-contract.json",
+                "docs/evidence/provider-rpc-tui-backpressure-budget-contract.json",
+                "README.md"
+              ],
+              "status": "closed",
+              "test_paths": [
+                "scripts/build_swarm_operator_runpack.py"
+              ],
+              "title": "Add provider RPC TUI fairness stress gate",
+              "validation_commands": [
+                "python3 -m py_compile scripts/build_swarm_operator_runpack.py",
+                "python3 scripts/build_swarm_operator_runpack.py --self-test",
+                "python3 scripts/build_swarm_operator_runpack.py --run-backpressure-budget-contract --print-backpressure-budget-contract",
+                "python3 -m json.tool docs/contracts/provider-rpc-tui-backpressure-budget-contract.json",
+                "python3 -m json.tool docs/evidence/provider-rpc-tui-backpressure-budget-contract.json",
+                "./scripts/reconcile_beads_ledger.sh"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.10.6",
+              "claim_boundary_text": "Work-admission dry-run executor is read-only and never claims beads, reserves files, mutates Agent Mail/RCH, runs Cargo, or deletes files.",
+              "close_reason": "Added read-only work-admission dry-run executor with contract/docs/self-test coverage",
+              "code_paths": [
+                "scripts/build_swarm_operator_runpack.py"
+              ],
+              "commit": "0f5617beaadf7033bbac1d3fadeca8c1a31ee800",
+              "docs_or_evidence_paths": [
+                "docs/contracts/swarm-work-admission-gate-contract.json",
+                "docs/swarm-operations-runbook.md",
+                "README.md"
+              ],
+              "status": "closed",
+              "test_paths": [
+                "scripts/build_swarm_operator_runpack.py"
+              ],
+              "title": "Add read-only swarm autopilot work-admission dry-run executor",
+              "validation_commands": [
+                "python3 scripts/build_swarm_operator_runpack.py --self-test",
+                "python3 -m json.tool docs/contracts/swarm-work-admission-gate-contract.json",
+                "git diff --check",
+                "./scripts/reconcile_beads_ledger.sh"
+              ]
+            },
+            {
+              "bead_id": "bd-63x3v.10.7",
+              "claim_boundary_text": "Hostcall QoS starvation evidence verifies fairness telemetry and safe-action guidance without relaxing extension policy boundaries.",
+              "close_reason": "Added extension hostcall QoS starvation regression evidence and claim-readiness safe-action guidance",
+              "code_paths": [
+                "tests/extensions_stress.rs",
+                "scripts/report_swarm_claim_readiness.py"
+              ],
+              "commit": "853b7cdae6dfa382e0b93ef6dfc3fc8783bebf64",
+              "docs_or_evidence_paths": [
+                "tests/extensions_stress.rs",
+                "scripts/report_swarm_claim_readiness.py"
+              ],
+              "status": "closed",
+              "test_paths": [
+                "tests/extensions_stress.rs",
+                "scripts/report_swarm_claim_readiness.py"
+              ],
+              "title": "Add extension hostcall QoS starvation regression evidence",
+              "validation_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo test --test extensions_stress hostcall_qos_starvation_projection_preserves_non_flooding_progress",
+                "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo test scheduler_fairness",
+                "python3 scripts/report_swarm_claim_readiness.py --self-test",
+                "cargo fmt --check",
+                "ubs --staged --only=rust .",
+                "./scripts/reconcile_beads_ledger.sh"
+              ]
+            }
+          ],
+          "commits_present": true,
+          "weak_child_rows": []
+        }
+      ],
+      "id": "child_artifact_mapping",
+      "issue": null,
+      "requirement": "Every seventh-wave child bead maps to pushed commits, source paths, tests or fixtures, evidence artifacts, validation commands, close reason, and claim-boundary text.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "src/agent.rs"
+        },
+        {
+          "path": "src/tools.rs"
+        }
+      ],
+      "id": "effect_aware_tool_batch_evidence",
+      "issue": null,
+      "requirement": "Effect-aware parallel tool batch evidence records deterministic barriers, fanout caps, and 64+ compatible-call coverage.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/contracts/remote-validation-proof-reuse-gate-contract.json"
+        }
+      ],
+      "id": "proof_reuse_gate",
+      "issue": null,
+      "requirement": "Remote validation proof reuse fails closed on dirty worktree, stale refs, missing RCH provenance, and toolchain or lockfile drift.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "src/doctor.rs"
+        },
+        {
+          "path": "tests/doctor_swarm_temp_dir_json.rs"
+        }
+      ],
+      "id": "lane_placement_planner",
+      "issue": null,
+      "requirement": "Doctor lane placement emits cgroup/NUMA-aware advisory lanes, temp roots, fanout budgets, caveats, and no-pinning boundaries.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "src/session.rs"
+        },
+        {
+          "path": "src/session_index.rs"
+        }
+      ],
+      "id": "replay_acceleration_harness",
+      "issue": null,
+      "requirement": "Large-session replay acceleration covers sidecar selection, stale fallback, index reuse, and correctness evidence.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "docs/contracts/provider-rpc-tui-backpressure-budget-contract.json"
+        },
+        {
+          "path": "docs/evidence/provider-rpc-tui-backpressure-budget-contract.json"
+        }
+      ],
+      "id": "fairness_stress_gate",
+      "issue": null,
+      "requirement": "Provider/RPC/TUI fairness stress gate covers balanced load, slow stream, output flood, and frame-budget pressure fixtures.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/contracts/swarm-work-admission-gate-contract.json"
+        }
+      ],
+      "id": "work_admission_dry_run_executor",
+      "issue": null,
+      "requirement": "Work-admission dry-run executor classifies would_execute, blocked, requires_operator, and never_execute actions without mutating source systems.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "tests/extensions_stress.rs"
+        },
+        {
+          "path": "scripts/report_swarm_claim_readiness.py"
+        }
+      ],
+      "id": "hostcall_qos_starvation_regression",
+      "issue": null,
+      "requirement": "Extension hostcall QoS regression evidence proves non-flooding progress, S3-FIFO fairness counters, safe fallback status, and BRAVO rollback visibility.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "boundary": "Beads issue state, dependencies, and close reasons remain the work ledger.",
+          "evidence": [
+            ".beads/issues.jsonl"
+          ],
+          "id": "beads_are_source_of_truth",
+          "status": "pass"
+        },
+        {
+          "boundary": "Agent Mail coordinates ownership but does not replace Beads, git, source inspection, or validation evidence; degraded Mail falls back to Beads soft locks.",
+          "evidence": [
+            "AGENTS.md"
+          ],
+          "id": "agent_mail_is_coordination_only",
+          "status": "pass"
+        },
+        {
+          "boundary": "The seventh-wave closeout gate summarizes existing evidence and does not mutate runtime sources or operator state.",
+          "evidence": [
+            "scripts/build_swarm_operator_runpack.py"
+          ],
+          "id": "read_only_gate",
+          "status": "pass"
+        },
+        {
+          "boundary": "Heavy Cargo validation evidence must prove RCH execution.",
+          "evidence": [
+            "AGENTS.md"
+          ],
+          "id": "rch_required_for_heavy_cargo",
+          "status": "pass"
+        },
+        {
+          "boundary": "Staged UBS remains mandatory before the closeout commit.",
+          "evidence": [
+            "AGENTS.md"
+          ],
+          "id": "staged_ubs_required",
+          "status": "pass"
+        },
+        {
+          "boundary": "Beads ledger reconciliation remains mandatory before closeout.",
+          "evidence": [
+            "scripts/reconcile_beads_ledger.sh"
+          ],
+          "id": "beads_ledger_required",
+          "status": "pass"
+        },
+        {
+          "boundary": "Seventh-wave runtime-autonomy closeout evidence is advisory and does not authorize release, benchmark, capacity, performance, or strict drop-in claims.",
+          "evidence": [
+            "docs/contracts/dropin-certification-contract.json",
+            "docs/evidence/dropin-certification-verdict.json",
+            "README.md"
+          ],
+          "id": "no_release_or_dropin_claims",
+          "status": "pass"
+        },
+        {
+          "boundary": "The gate must not mutate Agent Mail storage, RCH worker state, installed extensions, user config, runtime throttles, git refs, or temp artifacts.",
+          "evidence": [
+            "AGENTS.md",
+            "scripts/build_swarm_operator_runpack.py"
+          ],
+          "id": "no_mail_rch_or_runtime_mutation",
+          "status": "pass"
+        },
+        {
+          "boundary": "The seventh-wave gate may reference prior-wave authority boundaries but must not rewrite sixth-wave contracts or evidence.",
+          "evidence": [
+            "docs/evidence/sixth-wave-validation-hardening-closeout-gate.json"
+          ],
+          "id": "no_sixth_wave_rewrite",
+          "status": "pass"
+        },
+        {
+          "boundary": "The closeout gate summarizes child evidence and does not replace source tests, contracts, Beads, pushed commits, RCH, UBS, or CI.",
+          "evidence": [
+            "docs/evidence/seventh-wave-runtime-autonomy-closeout-gate.json"
+          ],
+          "id": "closeout_does_not_replace_child_artifacts",
+          "status": "pass"
+        }
+      ],
+      "id": "source_boundaries",
+      "issue": null,
+      "requirement": "Closeout source boundaries preserve Beads, Agent Mail, RCH, UBS, ledger, prior-wave, child-artifact, no-delete, and release-claim authorities.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "child_commits": [
+            "156cd358121c07dbc60ec919b0bac546a1632604",
+            "cfd1bb85cc40becfcd5142115d5604539cf1be33",
+            "051c4812de7fc34287546ac8e10f82d476f7fb1a",
+            "c82b0d14ef3b6c77cd1e59eb437b0ef20ff624d9",
+            "bc9ef42929c22c93d668af6c91dfd1b4e4e1d045",
+            "0f5617beaadf7033bbac1d3fadeca8c1a31ee800",
+            "853b7cdae6dfa382e0b93ef6dfc3fc8783bebf64"
+          ],
+          "head_before_closeout_commit": "853b7cdae6dfa382e0b93ef6dfc3fc8783bebf64",
+          "origin_legacy_mirror_before_closeout_commit": "853b7cdae6dfa382e0b93ef6dfc3fc8783bebf64",
+          "origin_main_before_closeout_commit": "853b7cdae6dfa382e0b93ef6dfc3fc8783bebf64",
+          "pushed_remote_refs_equal_head": true
+        }
+      ],
+      "id": "pushed_commits",
+      "issue": null,
+      "requirement": "All prerequisite child commits are pushed to origin/main and legacy origin/master before final closeout generation.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "heavy_cargo_required_for_closeout_script": false,
+          "provided_quality_gates": [
+            {
+              "command": "python3 -m py_compile scripts/build_swarm_operator_runpack.py",
+              "id": "py_compile",
+              "status": "pass"
+            },
+            {
+              "command": "python3 scripts/build_swarm_operator_runpack.py --self-test",
+              "id": "runpack_self_test",
+              "status": "pass"
+            },
+            {
+              "command": "python3 -m json.tool docs/contracts/seventh-wave-runtime-autonomy-closeout-gate-contract.json",
+              "id": "json_contracts",
+              "status": "pass"
+            },
+            {
+              "command": "git diff --check",
+              "id": "git_diff_check",
+              "status": "pass"
+            },
+            {
+              "command": "timeout 60s ubs --staged --only=rust .",
+              "id": "staged_ubs",
+              "status": "pass"
+            },
+            {
+              "command": "./scripts/reconcile_beads_ledger.sh",
+              "id": "beads_ledger_reconcile",
+              "status": "pass"
+            }
+          ],
+          "required_quality_gates": [
+            "py_compile",
+            "runpack_self_test",
+            "json_contracts",
+            "git_diff_check",
+            "staged_ubs",
+            "beads_ledger_reconcile"
+          ]
+        }
+      ],
+      "id": "quality_gates",
+      "issue": null,
+      "requirement": "Required closeout quality gates passed for script generation, JSON contracts, UBS, and Beads ledger.",
+      "status": "pass"
+    }
+  ],
+  "child_artifact_map": [
+    {
+      "bead_id": "bd-63x3v.10.1",
+      "claim_boundary_text": "Effect-aware tool batch evidence is advisory/debug-only and does not make release-facing throughput or latency claims.",
+      "close_reason": "Completed deterministic effect-aware parallel tool batch evidence",
+      "code_paths": [
+        "src/agent.rs",
+        "src/tools.rs"
+      ],
+      "commit": "156cd358121c07dbc60ec919b0bac546a1632604",
+      "docs_or_evidence_paths": [
+        "src/agent.rs"
+      ],
+      "status": "closed",
+      "test_paths": [
+        "src/agent.rs"
+      ],
+      "title": "Expose deterministic effect-aware parallel tool batch evidence",
+      "validation_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo test compatible_tool_parallelism tool_effect",
+        "cargo fmt --check",
+        "ubs --staged --only=rust .",
+        "./scripts/reconcile_beads_ledger.sh"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.10.2",
+      "claim_boundary_text": "Validation proof reuse is fail-closed and cannot skip fresh RCH validation unless command, refs, staged paths, and toolchain inputs match.",
+      "close_reason": "Completed fail-closed RCH validation proof reuse gate",
+      "code_paths": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "commit": "cfd1bb85cc40becfcd5142115d5604539cf1be33",
+      "docs_or_evidence_paths": [
+        "docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+        "docs/swarm-operations-runbook.md",
+        "README.md"
+      ],
+      "status": "closed",
+      "test_paths": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "title": "Add fail-closed RCH validation proof reuse gate",
+      "validation_commands": [
+        "python3 scripts/build_swarm_operator_runpack.py --self-test",
+        "python3 -m json.tool docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+        "git diff --check",
+        "./scripts/reconcile_beads_ledger.sh"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.10.3",
+      "claim_boundary_text": "NUMA/cgroup lane placement is advisory only and does not pin processes, mutate OS state, or create capacity claims.",
+      "close_reason": "Completed advisory NUMA/cgroup swarm lane placement planner",
+      "code_paths": [
+        "src/doctor.rs"
+      ],
+      "commit": "051c4812de7fc34287546ac8e10f82d476f7fb1a",
+      "docs_or_evidence_paths": [
+        "README.md"
+      ],
+      "status": "closed",
+      "test_paths": [
+        "tests/doctor_swarm_temp_dir_json.rs",
+        "src/doctor.rs"
+      ],
+      "title": "Add advisory NUMA/cgroup swarm lane placement planner",
+      "validation_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo test swarm_resource_preflight numa",
+        "cargo fmt --check",
+        "ubs --staged --only=rust .",
+        "./scripts/reconcile_beads_ledger.sh"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.10.4",
+      "claim_boundary_text": "Large-session replay acceleration evidence proves correctness and bounded classifications without making release-facing speed claims.",
+      "close_reason": "Added large-session replay acceleration correctness harness and fixed session index sidecar scanning",
+      "code_paths": [
+        "src/session.rs",
+        "src/session_index.rs"
+      ],
+      "commit": "c82b0d14ef3b6c77cd1e59eb437b0ef20ff624d9",
+      "docs_or_evidence_paths": [
+        "src/session.rs",
+        "src/session_index.rs"
+      ],
+      "status": "closed",
+      "test_paths": [
+        "src/session.rs",
+        "src/session_index.rs"
+      ],
+      "title": "Add large-session replay acceleration correctness harness",
+      "validation_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo test session replay index",
+        "cargo fmt --check",
+        "ubs --staged --only=rust .",
+        "./scripts/reconcile_beads_ledger.sh"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.10.5",
+      "claim_boundary_text": "Provider/RPC/TUI fairness stress evidence is fixture-backed operator evidence and does not replace release perf gates.",
+      "close_reason": "Added provider/RPC/TUI fairness stress gate with checked-in evidence and fail-closed negative control",
+      "code_paths": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "commit": "bc9ef42929c22c93d668af6c91dfd1b4e4e1d045",
+      "docs_or_evidence_paths": [
+        "docs/contracts/provider-rpc-tui-backpressure-budget-contract.json",
+        "docs/evidence/provider-rpc-tui-backpressure-budget-contract.json",
+        "README.md"
+      ],
+      "status": "closed",
+      "test_paths": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "title": "Add provider RPC TUI fairness stress gate",
+      "validation_commands": [
+        "python3 -m py_compile scripts/build_swarm_operator_runpack.py",
+        "python3 scripts/build_swarm_operator_runpack.py --self-test",
+        "python3 scripts/build_swarm_operator_runpack.py --run-backpressure-budget-contract --print-backpressure-budget-contract",
+        "python3 -m json.tool docs/contracts/provider-rpc-tui-backpressure-budget-contract.json",
+        "python3 -m json.tool docs/evidence/provider-rpc-tui-backpressure-budget-contract.json",
+        "./scripts/reconcile_beads_ledger.sh"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.10.6",
+      "claim_boundary_text": "Work-admission dry-run executor is read-only and never claims beads, reserves files, mutates Agent Mail/RCH, runs Cargo, or deletes files.",
+      "close_reason": "Added read-only work-admission dry-run executor with contract/docs/self-test coverage",
+      "code_paths": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "commit": "0f5617beaadf7033bbac1d3fadeca8c1a31ee800",
+      "docs_or_evidence_paths": [
+        "docs/contracts/swarm-work-admission-gate-contract.json",
+        "docs/swarm-operations-runbook.md",
+        "README.md"
+      ],
+      "status": "closed",
+      "test_paths": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "title": "Add read-only swarm autopilot work-admission dry-run executor",
+      "validation_commands": [
+        "python3 scripts/build_swarm_operator_runpack.py --self-test",
+        "python3 -m json.tool docs/contracts/swarm-work-admission-gate-contract.json",
+        "git diff --check",
+        "./scripts/reconcile_beads_ledger.sh"
+      ]
+    },
+    {
+      "bead_id": "bd-63x3v.10.7",
+      "claim_boundary_text": "Hostcall QoS starvation evidence verifies fairness telemetry and safe-action guidance without relaxing extension policy boundaries.",
+      "close_reason": "Added extension hostcall QoS starvation regression evidence and claim-readiness safe-action guidance",
+      "code_paths": [
+        "tests/extensions_stress.rs",
+        "scripts/report_swarm_claim_readiness.py"
+      ],
+      "commit": "853b7cdae6dfa382e0b93ef6dfc3fc8783bebf64",
+      "docs_or_evidence_paths": [
+        "tests/extensions_stress.rs",
+        "scripts/report_swarm_claim_readiness.py"
+      ],
+      "status": "closed",
+      "test_paths": [
+        "tests/extensions_stress.rs",
+        "scripts/report_swarm_claim_readiness.py"
+      ],
+      "title": "Add extension hostcall QoS starvation regression evidence",
+      "validation_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo test --test extensions_stress hostcall_qos_starvation_projection_preserves_non_flooding_progress",
+        "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo test scheduler_fairness",
+        "python3 scripts/report_swarm_claim_readiness.py --self-test",
+        "cargo fmt --check",
+        "ubs --staged --only=rust .",
+        "./scripts/reconcile_beads_ledger.sh"
+      ]
+    }
+  ],
+  "claim_boundaries": {
+    "allowed_claim": "advisory seventh-wave runtime autonomy closeout evidence only",
+    "closeout_authorizes_file_deletion": false,
+    "closeout_mutates_agent_mail_rch_or_runtime": false,
+    "closeout_mutates_sources": false,
+    "closeout_replaces_child_artifacts": false,
+    "closeout_rewrites_sixth_wave_artifacts": false,
+    "performance_or_capacity_claim_authorized": false,
+    "strict_dropin_or_release_claim_authorized": false
+  },
+  "decision": "close_final_gate_and_parent_epic",
+  "epic_can_close_after_this_commit": true,
+  "final_gate_bead": {
+    "assignee": "Codex",
+    "id": "bd-63x3v.10.8",
+    "status": "in_progress"
+  },
+  "follow_up_beads": [],
+  "follow_up_required": false,
+  "generated_at": "2026-05-18T01:08:42+00:00",
+  "known_limitations": [
+    "Seventh-wave runtime-autonomy closeout evidence is advisory operator evidence only.",
+    "RCH, Agent Mail, Beads, Doctor, runpack, claim-readiness proofs, and child tests remain their own sources of truth.",
+    "This closeout does not authorize release, benchmark, capacity, performance, or strict drop-in claims.",
+    "This gate references prior-wave boundaries but does not rewrite sixth-wave contracts or evidence."
+  ],
+  "missing_checks": [],
+  "operator_summary": {
+    "claim_boundary": "advisory seventh-wave runtime autonomy closeout evidence only",
+    "covered_child_beads": [
+      "bd-63x3v.10.1",
+      "bd-63x3v.10.2",
+      "bd-63x3v.10.3",
+      "bd-63x3v.10.4",
+      "bd-63x3v.10.5",
+      "bd-63x3v.10.6",
+      "bd-63x3v.10.7"
+    ],
+    "next_action": "close_final_gate_and_parent_epic",
+    "ready_to_close_parent_after_commit": true,
+    "verdict": "pass"
+  },
+  "parent_epic": {
+    "id": "bd-63x3v.10",
+    "status": "deferred",
+    "title": "Seventh-wave swarm runtime autonomy roadmap"
+  },
+  "purpose": "prompt_to_artifact_seventh_wave_runtime_autonomy_closeout_gate_not_source_of_truth",
+  "quality_gate_results": [
+    {
+      "command": "python3 -m py_compile scripts/build_swarm_operator_runpack.py",
+      "id": "py_compile",
+      "status": "pass"
+    },
+    {
+      "command": "python3 scripts/build_swarm_operator_runpack.py --self-test",
+      "id": "runpack_self_test",
+      "status": "pass"
+    },
+    {
+      "command": "python3 -m json.tool docs/contracts/seventh-wave-runtime-autonomy-closeout-gate-contract.json",
+      "id": "json_contracts",
+      "status": "pass"
+    },
+    {
+      "command": "git diff --check",
+      "id": "git_diff_check",
+      "status": "pass"
+    },
+    {
+      "command": "timeout 60s ubs --staged --only=rust .",
+      "id": "staged_ubs",
+      "status": "pass"
+    },
+    {
+      "command": "./scripts/reconcile_beads_ledger.sh",
+      "id": "beads_ledger_reconcile",
+      "status": "pass"
+    }
+  ],
+  "remaining_follow_ups": [],
+  "required_checks": [
+    "child_beads_closed",
+    "child_artifact_mapping",
+    "effect_aware_tool_batch_evidence",
+    "proof_reuse_gate",
+    "lane_placement_planner",
+    "replay_acceleration_harness",
+    "fairness_stress_gate",
+    "work_admission_dry_run_executor",
+    "hostcall_qos_starvation_regression",
+    "source_boundaries",
+    "pushed_commits",
+    "quality_gates"
+  ],
+  "schema": "pi.swarm.runtime_autonomy.closeout_gate.v1",
+  "source_boundary_checks": [
+    {
+      "boundary": "Beads issue state, dependencies, and close reasons remain the work ledger.",
+      "evidence": [
+        ".beads/issues.jsonl"
+      ],
+      "id": "beads_are_source_of_truth",
+      "status": "pass"
+    },
+    {
+      "boundary": "Agent Mail coordinates ownership but does not replace Beads, git, source inspection, or validation evidence; degraded Mail falls back to Beads soft locks.",
+      "evidence": [
+        "AGENTS.md"
+      ],
+      "id": "agent_mail_is_coordination_only",
+      "status": "pass"
+    },
+    {
+      "boundary": "The seventh-wave closeout gate summarizes existing evidence and does not mutate runtime sources or operator state.",
+      "evidence": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "id": "read_only_gate",
+      "status": "pass"
+    },
+    {
+      "boundary": "Heavy Cargo validation evidence must prove RCH execution.",
+      "evidence": [
+        "AGENTS.md"
+      ],
+      "id": "rch_required_for_heavy_cargo",
+      "status": "pass"
+    },
+    {
+      "boundary": "Staged UBS remains mandatory before the closeout commit.",
+      "evidence": [
+        "AGENTS.md"
+      ],
+      "id": "staged_ubs_required",
+      "status": "pass"
+    },
+    {
+      "boundary": "Beads ledger reconciliation remains mandatory before closeout.",
+      "evidence": [
+        "scripts/reconcile_beads_ledger.sh"
+      ],
+      "id": "beads_ledger_required",
+      "status": "pass"
+    },
+    {
+      "boundary": "Seventh-wave runtime-autonomy closeout evidence is advisory and does not authorize release, benchmark, capacity, performance, or strict drop-in claims.",
+      "evidence": [
+        "docs/contracts/dropin-certification-contract.json",
+        "docs/evidence/dropin-certification-verdict.json",
+        "README.md"
+      ],
+      "id": "no_release_or_dropin_claims",
+      "status": "pass"
+    },
+    {
+      "boundary": "The gate must not mutate Agent Mail storage, RCH worker state, installed extensions, user config, runtime throttles, git refs, or temp artifacts.",
+      "evidence": [
+        "AGENTS.md",
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "id": "no_mail_rch_or_runtime_mutation",
+      "status": "pass"
+    },
+    {
+      "boundary": "The seventh-wave gate may reference prior-wave authority boundaries but must not rewrite sixth-wave contracts or evidence.",
+      "evidence": [
+        "docs/evidence/sixth-wave-validation-hardening-closeout-gate.json"
+      ],
+      "id": "no_sixth_wave_rewrite",
+      "status": "pass"
+    },
+    {
+      "boundary": "The closeout gate summarizes child evidence and does not replace source tests, contracts, Beads, pushed commits, RCH, UBS, or CI.",
+      "evidence": [
+        "docs/evidence/seventh-wave-runtime-autonomy-closeout-gate.json"
+      ],
+      "id": "closeout_does_not_replace_child_artifacts",
+      "status": "pass"
+    }
+  ],
+  "status": "pass"
+}

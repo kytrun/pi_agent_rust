@@ -1,0 +1,108 @@
+{
+  "schema": "pi.swarm.runtime_autonomy.closeout_gate_contract.v1",
+  "decision_gate_schema": "pi.swarm.runtime_autonomy.closeout_gate.v1",
+  "purpose": "prompt_to_artifact_seventh_wave_runtime_autonomy_closeout_gate_not_source_of_truth",
+  "allowed_statuses": [
+    "pass",
+    "fail"
+  ],
+  "allowed_check_statuses": [
+    "pass",
+    "fail"
+  ],
+  "allowed_decisions": [
+    "close_final_gate_and_parent_epic",
+    "file_follow_up_beads_before_closing_epic"
+  ],
+  "required_top_level_keys": [
+    "schema",
+    "generated_at",
+    "status",
+    "purpose",
+    "parent_epic",
+    "final_gate_bead",
+    "operator_summary",
+    "required_checks",
+    "child_artifact_map",
+    "source_boundary_checks",
+    "quality_gate_results",
+    "checklist",
+    "missing_checks",
+    "remaining_follow_ups",
+    "known_limitations",
+    "claim_boundaries",
+    "follow_up_required",
+    "follow_up_beads",
+    "decision",
+    "epic_can_close_after_this_commit"
+  ],
+  "required_child_bead_ids": [
+    "bd-63x3v.10.1",
+    "bd-63x3v.10.2",
+    "bd-63x3v.10.3",
+    "bd-63x3v.10.4",
+    "bd-63x3v.10.5",
+    "bd-63x3v.10.6",
+    "bd-63x3v.10.7"
+  ],
+  "required_check_ids": [
+    "child_beads_closed",
+    "child_artifact_mapping",
+    "effect_aware_tool_batch_evidence",
+    "proof_reuse_gate",
+    "lane_placement_planner",
+    "replay_acceleration_harness",
+    "fairness_stress_gate",
+    "work_admission_dry_run_executor",
+    "hostcall_qos_starvation_regression",
+    "source_boundaries",
+    "pushed_commits",
+    "quality_gates"
+  ],
+  "required_source_boundary_ids": [
+    "beads_are_source_of_truth",
+    "agent_mail_is_coordination_only",
+    "read_only_gate",
+    "rch_required_for_heavy_cargo",
+    "staged_ubs_required",
+    "beads_ledger_required",
+    "no_release_or_dropin_claims",
+    "no_mail_rch_or_runtime_mutation",
+    "no_sixth_wave_rewrite",
+    "closeout_does_not_replace_child_artifacts"
+  ],
+  "required_quality_gate_ids": [
+    "py_compile",
+    "runpack_self_test",
+    "json_contracts",
+    "git_diff_check",
+    "staged_ubs",
+    "beads_ledger_reconcile"
+  ],
+  "requirements": [
+    {
+      "id": "child_artifact_mapping",
+      "description": "Every seventh-wave child bead maps to pushed commits, source paths, tests or fixtures, evidence artifacts, validation commands, close reason, and claim-boundary text."
+    },
+    {
+      "id": "prompt_to_artifact_coverage",
+      "description": "The checklist covers effect-aware tool batching, RCH proof reuse, cgroup/NUMA lane placement, large-session replay acceleration, provider/RPC/TUI fairness, work-admission dry-run execution, hostcall QoS starvation, source boundaries, pushed refs, and quality gates."
+    },
+    {
+      "id": "safe_close_behavior",
+      "description": "A passing gate may close the final gate and parent epic only after the closeout commit lands and the branch is pushed. A failing gate must emit follow-up beads instead of optimistic closeout."
+    },
+    {
+      "id": "not_source_of_truth",
+      "description": "The closeout gate is evidence over Beads, git, docs, tests, RCH, Doctor, runpack, Agent Mail health, UBS, and source artifacts. It does not replace those sources of truth."
+    },
+    {
+      "id": "claim_boundaries",
+      "description": "The closeout gate must not mutate coordination state, RCH workers, installed extensions, user config, temp artifacts, runtime throttles, or make release-facing performance, capacity, benchmark, or strict drop-in claims."
+    },
+    {
+      "id": "prior_wave_boundary",
+      "description": "The seventh-wave gate may reference sixth-wave authority boundaries but must not rewrite sixth-wave contracts or evidence."
+    }
+  ]
+}
