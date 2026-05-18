@@ -735,6 +735,7 @@ The operator smoothness SLO emits `pi.operator.smoothness_slo.v1`, governed by `
 The extension resource firewall matrix emits `pi.ext.resource_firewall_matrix.v1`, governed by `docs/contracts/extension-resource-firewall-matrix-contract.json`; focused `extensions_stress` runs write `resource_firewall_matrix.json` under target/perf. It covers cheap-read flood, large payload emission, denied capability churn, slow hostcall, repeated failure, and steady-peer progress rows with budgets, observed counters, admission decisions, denial modes, fallback behavior, payload redaction, capability-boundary preservation, and fail-closed negative controls for missing counters, missing peer progress, and unredacted payload bodies. The matrix is advisory stress evidence only and does not replace runtime enforcement, hostcall cost attribution, RCH validation, Agent Mail, Beads, UBS, CI, or benchmark/capacity/release claims.
 The swarm incident corpus emits `pi.swarm.incident_corpus.v1`, governed by `docs/contracts/swarm-incident-corpus-contract.json`; the current fixture artifact is `docs/evidence/swarm-incident-corpus.json`. It captures deterministic operator incidents for Agent Mail schema corruption, RCH saturation/local-fallback denial, stale evidence, duplicate work risk, dirty worktree admission denial, malformed source artifacts, and deletion or live-mutation rejection, plus fail-closed negative controls for missing sources, unsafe unredacted bodies, contradictory status, and unsafe authorization attempts. The corpus is advisory fixture evidence only and does not replace release performance, drop-in certification, Agent Mail, RCH, Beads, git, source artifacts, or destructive-action authority.
 The swarm incident replay harness emits `pi.swarm.incident_replay.v1`, governed by `docs/contracts/swarm-incident-replay-contract.json`; the current fixture artifact is `docs/evidence/swarm-incident-replay.json`. It consumes the incident corpus and reconstructs source capture, Agent Mail degradation, RCH admission, Beads ownership, dirty worktree state, validation outcome, and final recommendation phases with per-step assertions and redacted excerpts. Negative controls fail closed for out-of-order events, missing sources, unredacted sensitive content, and replay output being treated as source-of-truth authority. Replay is advisory fixture evidence only and does not replace live Agent Mail, RCH, Beads, git, source artifacts, or destructive-action authority.
+The swarm incident replay E2E harness emits `pi.swarm.incident_replay_e2e.v1`, governed by `docs/contracts/swarm-incident-replay-e2e-contract.json`; the current fixture artifact is `docs/evidence/swarm-incident-replay-e2e.json` with JSONL events in `docs/evidence/swarm-incident-replay-e2e-events.jsonl`. It combines real temporary Beads and git workspaces with fixture-captured degraded Agent Mail/RCH inputs to exercise healthy replay, Beads soft-lock fallback, RCH proof refresh backoff, duplicate-work risk, dirty-worktree denial, stale proof-memory refresh, extension resource firewall failure, and smoothness SLO failure. The E2E artifact is advisory operator evidence only and does not authorize live source mutation, local heavyweight Cargo fallback, release, benchmark, capacity, or drop-in claims.
 The validation proof-memory index emits `pi.validation.proof_memory_index.v1`, governed by `docs/contracts/validation-proof-memory-index-contract.json`; the current fixture artifact is `docs/evidence/validation-proof-memory-index.json`. It classifies reusable, stale, missing-artifact, local-fallback, dirty-worktree mismatch, command-mismatch, path-coverage mismatch, and non-authoritative validation proof entries from checked remote-validation proof fixtures. Proof memory is advisory fixture evidence only and does not skip validation or replace RCH, Agent Mail, Beads, git, source artifacts, or claim-integrity gates.
 
 ### Validation Broker Operator Workflow
@@ -1226,6 +1227,26 @@ blocked open bead, fixture-captured Agent Mail semantic-readiness failure, and
 an RCH worker workspace-shadow blocker. A passing verdict means the runpack
 recommends Beads soft-lock ownership, keeps validation degraded instead of
 green, and emits no cleanup or deletion commands for temp artifacts.
+
+Incident replay E2E evidence:
+
+```bash
+e2e_dir="/data/tmp/pi_swarm_incident_replay_e2e/${AGENT_NAME:-agent}-$(date -u +%Y%m%dT%H%M%SZ)"
+python3 scripts/build_swarm_operator_runpack.py \
+  --run-swarm-incident-replay-e2e \
+  --capture-dir "$e2e_dir" \
+  --out-swarm-incident-replay-e2e-json "$e2e_dir/summary.json" \
+  --out-swarm-incident-replay-e2e-events-jsonl "$e2e_dir/events.jsonl"
+```
+
+The summary emits `pi.swarm.incident_replay_e2e.v1` and JSONL events with
+`pi.swarm.incident_replay_e2e.event.v1`. It uses real temp Beads and git
+workspaces where safe, fixture-captured Agent Mail/RCH failures where live
+mutation would be unsafe, checked-in incident replay/proof-memory/operator-work
+sources, and extension firewall plus smoothness-SLO failure evidence. A passing
+verdict proves the harness fails closed to explicit operator actions and does
+not authorize cleanup commands, local heavyweight Cargo fallback, release,
+benchmark, capacity, strict drop-in, or live source-system claims.
 
 Autopilot final decision-gate evidence:
 

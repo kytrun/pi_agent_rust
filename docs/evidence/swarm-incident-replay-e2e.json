@@ -1,0 +1,368 @@
+{
+  "correlation_id": "incident-replay-e2e-2026-05-18T000000Z0000",
+  "events_jsonl": "docs/evidence/swarm-incident-replay-e2e-events.jsonl",
+  "generated_at": "2026-05-18T00:00:00+00:00",
+  "guards": {
+    "fixture_captures_degraded_rch_and_agent_mail": true,
+    "heavy_rust_validation_requires_rch": true,
+    "no_cleanup_or_deletion_commands": true,
+    "no_live_agent_mail_rch_beads_git_or_file_mutation_authorized": true,
+    "operator_evidence_not_release_claim": true,
+    "stale_after_hours": 24,
+    "uses_real_temp_beads": true,
+    "uses_real_temp_git": true
+  },
+  "operator_next_actions": [
+    "Use the E2E summary to inspect incident replay, proof memory, runpack, and operator-work failure handling together.",
+    "Treat live Beads, Agent Mail, RCH, git, and source artifacts as authoritative before taking action.",
+    "Keep local heavyweight Cargo validation behind RCH and never use this evidence for release, benchmark, capacity, drop-in, or destructive-action claims."
+  ],
+  "purpose": "no_mock_incident_replay_e2e_operator_evidence_not_release_claim",
+  "required_scenarios": [
+    "healthy_incident_replay",
+    "agent_mail_corrupt_soft_lock",
+    "rch_saturated_proof_refresh",
+    "duplicate_work_risk",
+    "dirty_worktree_denial",
+    "stale_proof_memory_refresh",
+    "extension_resource_firewall_failure",
+    "smoothness_slo_failure"
+  ],
+  "scenario_count": 8,
+  "scenarios": {
+    "agent_mail_corrupt_soft_lock": {
+      "artifact_dir": "/data/tmp/pi_agent_rust_cargo/codex_bd_9yq7i_7/evidence_capture_1/capture/agent_mail_corrupt_soft_lock",
+      "command_count": 8,
+      "details": {
+        "agent_mail_semantic_readiness": "fail",
+        "agent_mail_status": "error",
+        "bead_count": 3,
+        "blocked_open_bead": "e2e-kqi",
+        "fresh_in_progress_bead": "e2e-gzp",
+        "ready_count": 0,
+        "selected_safe_action": "Use Beads assignee/status/comments as the soft lock, keep the incident visible, and avoid live Agent Mail writes until repaired."
+      },
+      "evidence_paths": [
+        "agent_mail.schema_health",
+        "beads.active_ownership",
+        "docs/evidence/swarm-incident-replay.json"
+      ],
+      "fixture_captured_agent_mail": true,
+      "fixture_captured_rch": false,
+      "no_delete_evidence": {
+        "cleanup_commands_present": false,
+        "emitted_deletion_command_count": 0
+      },
+      "no_live_mutation": true,
+      "recommended_action": "use_beads_soft_lock",
+      "scenario_id": "agent_mail_corrupt_soft_lock",
+      "source_paths": [
+        "tests/fixtures/agent_mail/schema_corrupt_health.json",
+        "/data/projects/pi_agent_rust/docs/evidence/swarm-incident-replay.json"
+      ],
+      "status": "pass",
+      "uses_real_temp_beads": true,
+      "uses_real_temp_git": false,
+      "verdict": "pass"
+    },
+    "dirty_worktree_denial": {
+      "artifact_dir": "/data/tmp/pi_agent_rust_cargo/codex_bd_9yq7i_7/evidence_capture_1/capture/dirty_worktree_denial",
+      "command_count": 8,
+      "details": {
+        "dirty_paths": [
+          " M README.md"
+        ],
+        "git_dirty": true,
+        "operator_work_action": "stop_and_surface_blocker",
+        "selected_safe_action": "Preserve dirty unrelated work, deny unsafe admission, and continue only on an owned non-overlapping surface.",
+        "unsafe_admission_denied": true
+      },
+      "evidence_paths": [
+        "git_state.porcelain_lines",
+        "docs/evidence/operator-work-recommendation.json",
+        "docs/evidence/swarm-incident-replay.json"
+      ],
+      "fixture_captured_agent_mail": false,
+      "fixture_captured_rch": false,
+      "no_delete_evidence": {
+        "cleanup_commands_present": false,
+        "emitted_deletion_command_count": 0
+      },
+      "no_live_mutation": true,
+      "recommended_action": "stop_and_surface_dirty_worktree_blocker",
+      "scenario_id": "dirty_worktree_denial",
+      "source_paths": [
+        "/data/tmp/pi_agent_rust_cargo/codex_bd_9yq7i_7/evidence_capture_1/capture/dirty_worktree_denial/git-status.json",
+        "/data/projects/pi_agent_rust/docs/evidence/operator-work-recommendation.json"
+      ],
+      "status": "pass",
+      "uses_real_temp_beads": false,
+      "uses_real_temp_git": true,
+      "verdict": "pass"
+    },
+    "duplicate_work_risk": {
+      "artifact_dir": "/data/tmp/pi_agent_rust_cargo/codex_bd_9yq7i_7/evidence_capture_1/capture/duplicate_work_risk",
+      "command_count": 0,
+      "details": {
+        "confidence": 0.82,
+        "incident_status": "pass",
+        "mutation_authorized": false,
+        "operator_work_action": "open_follow_up_bead",
+        "selected_safe_action": "Do not revert peer work; use Beads ownership, avoid the contested surface, and choose non-overlapping evidence or surface the conflict."
+      },
+      "evidence_paths": [
+        "docs/evidence/swarm-incident-replay.json",
+        "docs/evidence/operator-work-recommendation.json"
+      ],
+      "fixture_captured_agent_mail": false,
+      "fixture_captured_rch": false,
+      "no_delete_evidence": {
+        "cleanup_commands_present": false,
+        "emitted_deletion_command_count": 0
+      },
+      "no_live_mutation": true,
+      "recommended_action": "open_follow_up_bead_or_choose_non_overlapping_surface",
+      "scenario_id": "duplicate_work_risk",
+      "source_paths": [
+        "/data/projects/pi_agent_rust/docs/evidence/swarm-incident-replay.json",
+        "/data/projects/pi_agent_rust/docs/evidence/operator-work-recommendation.json"
+      ],
+      "status": "pass",
+      "uses_real_temp_beads": false,
+      "uses_real_temp_git": false,
+      "verdict": "pass"
+    },
+    "extension_resource_firewall_failure": {
+      "artifact_dir": "/data/tmp/pi_agent_rust_cargo/codex_bd_9yq7i_7/evidence_capture_1/capture/extension_resource_firewall_failure",
+      "command_count": 0,
+      "details": {
+        "contract_schema": "pi.ext.resource_firewall_matrix_contract.v1",
+        "firewall_failure_fails_closed": true,
+        "fixture_builder_present": true,
+        "negative_control": "unredacted_payload_body",
+        "required_resource_classes": [
+          "cheap_read_flood",
+          "denied_capability_churn",
+          "large_payload_emission",
+          "repeated_failure",
+          "slow_hostcall",
+          "steady_peer_progress"
+        ]
+      },
+      "evidence_paths": [
+        "docs/contracts/extension-resource-firewall-matrix-contract.json",
+        "tests/extensions_stress.rs"
+      ],
+      "fixture_captured_agent_mail": false,
+      "fixture_captured_rch": false,
+      "no_delete_evidence": {
+        "cleanup_commands_present": false,
+        "emitted_deletion_command_count": 0
+      },
+      "no_live_mutation": true,
+      "recommended_action": "surface_extension_resource_firewall_failure",
+      "scenario_id": "extension_resource_firewall_failure",
+      "source_paths": [
+        "/data/projects/pi_agent_rust/docs/contracts/extension-resource-firewall-matrix-contract.json",
+        "/data/projects/pi_agent_rust/tests/extensions_stress.rs"
+      ],
+      "status": "pass",
+      "uses_real_temp_beads": false,
+      "uses_real_temp_git": false,
+      "verdict": "pass"
+    },
+    "healthy_incident_replay": {
+      "artifact_dir": "/data/tmp/pi_agent_rust_cargo/codex_bd_9yq7i_7/evidence_capture_1/capture/healthy_incident_replay",
+      "command_count": 8,
+      "details": {
+        "bead_count": 1,
+        "git_dirty": false,
+        "incident_replay_decision": "replay_passed",
+        "incident_replay_status": "pass",
+        "ready_count": 1,
+        "selected_safe_action": "Use live source systems when healthy; use replay only as advisory fixture evidence."
+      },
+      "evidence_paths": [
+        "docs/evidence/swarm-incident-replay.json",
+        "beads_ready",
+        "git_status"
+      ],
+      "fixture_captured_agent_mail": false,
+      "fixture_captured_rch": false,
+      "no_delete_evidence": {
+        "cleanup_commands_present": false,
+        "emitted_deletion_command_count": 0
+      },
+      "no_live_mutation": true,
+      "recommended_action": "use_live_sources_and_keep_replay_advisory",
+      "scenario_id": "healthy_incident_replay",
+      "source_paths": [
+        "/data/projects/pi_agent_rust/docs/evidence/swarm-incident-replay.json",
+        "/data/tmp/pi_agent_rust_cargo/codex_bd_9yq7i_7/evidence_capture_1/capture/healthy_incident_replay/git-status.json"
+      ],
+      "status": "pass",
+      "uses_real_temp_beads": true,
+      "uses_real_temp_git": true,
+      "verdict": "pass"
+    },
+    "rch_saturated_proof_refresh": {
+      "artifact_dir": "/data/tmp/pi_agent_rust_cargo/codex_bd_9yq7i_7/evidence_capture_1/capture/rch_saturated_proof_refresh",
+      "command_count": 5,
+      "details": {
+        "bead_count": 1,
+        "local_fallback_allowed": false,
+        "operator_work_action": "wait_for_rch",
+        "queue_action": "backoff",
+        "ready_count": 1,
+        "selected_safe_action": "Deny local heavyweight fallback, keep the exact RCH env shape, and surface or retry only when remote capacity is available.",
+        "slot_pressure": "saturated"
+      },
+      "evidence_paths": [
+        "cargo_admission.rch_queue_forecast",
+        "docs/evidence/operator-work-recommendation.json",
+        "docs/evidence/swarm-incident-replay.json"
+      ],
+      "fixture_captured_agent_mail": false,
+      "fixture_captured_rch": true,
+      "no_delete_evidence": {
+        "cleanup_commands_present": false,
+        "emitted_deletion_command_count": 0
+      },
+      "no_live_mutation": true,
+      "recommended_action": "wait_for_rch_and_refresh_remote_proof",
+      "scenario_id": "rch_saturated_proof_refresh",
+      "source_paths": [
+        "/data/projects/pi_agent_rust/docs/evidence/operator-work-recommendation.json",
+        "/data/projects/pi_agent_rust/docs/evidence/swarm-incident-replay.json"
+      ],
+      "status": "pass",
+      "uses_real_temp_beads": true,
+      "uses_real_temp_git": false,
+      "verdict": "pass"
+    },
+    "smoothness_slo_failure": {
+      "artifact_dir": "/data/tmp/pi_agent_rust_cargo/codex_bd_9yq7i_7/evidence_capture_1/capture/smoothness_slo_failure",
+      "command_count": 0,
+      "details": {
+        "failure_reason": "delayed_semantic_visibility",
+        "negative_control": "delayed_semantic_visibility_fails_closed",
+        "negative_control_verdict": "fail",
+        "release_performance_claim_authorized": false,
+        "smoothness_status": "pass"
+      },
+      "evidence_paths": [
+        "docs/evidence/operator-smoothness-slo.json",
+        "docs/contracts/operator-smoothness-slo-contract.json"
+      ],
+      "fixture_captured_agent_mail": false,
+      "fixture_captured_rch": false,
+      "no_delete_evidence": {
+        "cleanup_commands_present": false,
+        "emitted_deletion_command_count": 0
+      },
+      "no_live_mutation": true,
+      "recommended_action": "file_follow_up_before_relying_on_smoothness_slo",
+      "scenario_id": "smoothness_slo_failure",
+      "source_paths": [
+        "/data/projects/pi_agent_rust/docs/evidence/operator-smoothness-slo.json"
+      ],
+      "status": "pass",
+      "uses_real_temp_beads": false,
+      "uses_real_temp_git": false,
+      "verdict": "pass"
+    },
+    "stale_proof_memory_refresh": {
+      "artifact_dir": "/data/tmp/pi_agent_rust_cargo/codex_bd_9yq7i_7/evidence_capture_1/capture/stale_proof_memory_refresh",
+      "command_count": 0,
+      "details": {
+        "operator_work_action": "refresh_stale_evidence",
+        "proof_memory_classification": "stale",
+        "reuse_allowed": false,
+        "reuse_decision": "rerun_validation",
+        "selected_safe_action": "Reject stale proof reuse and refresh the focused validation evidence before using it for an operator recommendation."
+      },
+      "evidence_paths": [
+        "docs/evidence/validation-proof-memory-index.json",
+        "docs/evidence/operator-work-recommendation.json",
+        "docs/evidence/swarm-incident-replay.json"
+      ],
+      "fixture_captured_agent_mail": false,
+      "fixture_captured_rch": false,
+      "no_delete_evidence": {
+        "cleanup_commands_present": false,
+        "emitted_deletion_command_count": 0
+      },
+      "no_live_mutation": true,
+      "recommended_action": "refresh_stale_evidence",
+      "scenario_id": "stale_proof_memory_refresh",
+      "source_paths": [
+        "/data/projects/pi_agent_rust/docs/evidence/validation-proof-memory-index.json",
+        "/data/projects/pi_agent_rust/docs/evidence/operator-work-recommendation.json"
+      ],
+      "status": "pass",
+      "uses_real_temp_beads": false,
+      "uses_real_temp_git": false,
+      "verdict": "pass"
+    }
+  },
+  "schema": "pi.swarm.incident_replay_e2e.v1",
+  "source_artifacts": {
+    "extension_resource_firewall_contract": {
+      "id": "extension_resource_firewall_contract",
+      "issue": null,
+      "path": "/data/projects/pi_agent_rust/docs/contracts/extension-resource-firewall-matrix-contract.json",
+      "schema": "pi.ext.resource_firewall_matrix_contract.v1",
+      "sha256": "dcfec94212fa42329f34c08be2d35df7a3f2deafb11b1d58e6c9bb1327d60f22",
+      "size_bytes": 3168,
+      "status": "ok"
+    },
+    "incident_corpus": {
+      "id": "incident_corpus",
+      "issue": null,
+      "path": "/data/projects/pi_agent_rust/docs/evidence/swarm-incident-corpus.json",
+      "schema": "pi.swarm.incident_corpus.v1",
+      "sha256": "32a7203ff32bed58b01a5d4075bacebbb1b39cbc980c7d35ef89796b8395ee09",
+      "size_bytes": 26701,
+      "status": "ok"
+    },
+    "incident_replay": {
+      "id": "incident_replay",
+      "issue": null,
+      "path": "/data/projects/pi_agent_rust/docs/evidence/swarm-incident-replay.json",
+      "schema": "pi.swarm.incident_replay.v1",
+      "sha256": "7e8396795694c4e9bfd35b6e5373bf9f1037b338fcc51fcd7d6853315d7b9b71",
+      "size_bytes": 62431,
+      "status": "ok"
+    },
+    "operator_smoothness_slo": {
+      "id": "operator_smoothness_slo",
+      "issue": null,
+      "path": "/data/projects/pi_agent_rust/docs/evidence/operator-smoothness-slo.json",
+      "schema": "pi.operator.smoothness_slo.v1",
+      "sha256": "b7c2edcbe9d4afcdcc66b18f987009f8c7cb32aa9009d0a60c1620df380d7021",
+      "size_bytes": 34991,
+      "status": "ok"
+    },
+    "operator_work_recommendation": {
+      "id": "operator_work_recommendation",
+      "issue": null,
+      "path": "/data/projects/pi_agent_rust/docs/evidence/operator-work-recommendation.json",
+      "schema": "pi.swarm.operator_work_recommendation.v1",
+      "sha256": "46ba54a14ac32b662b16b74abf84f4e0ad17ff996f9b452738116bbba46e3efa",
+      "size_bytes": 24032,
+      "status": "ok"
+    },
+    "proof_memory_index": {
+      "id": "proof_memory_index",
+      "issue": null,
+      "path": "/data/projects/pi_agent_rust/docs/evidence/validation-proof-memory-index.json",
+      "schema": "pi.validation.proof_memory_index.v1",
+      "sha256": "d37d37d803468d5cedc97a10c41f9669f975808509834e1e336f73fa40dd4d4a",
+      "size_bytes": 49102,
+      "status": "ok"
+    }
+  },
+  "source_bead": "bd-9yq7i.7",
+  "status": "pass",
+  "workspace": "/data/tmp/pi_agent_rust_cargo/codex_bd_9yq7i_7/evidence_capture_1/capture"
+}

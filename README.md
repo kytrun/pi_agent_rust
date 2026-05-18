@@ -2143,6 +2143,18 @@ fixture artifact is `docs/evidence/swarm-incident-replay.json`. Replay output is
 read-only operator evidence and cannot replace source systems or authorize live
 Agent Mail, RCH, Beads, git, deletion, release, benchmark, or drop-in claims.
 
+The swarm incident replay E2E harness emits `pi.swarm.incident_replay_e2e.v1`
+plus `pi.swarm.incident_replay_e2e.event.v1` JSONL events. It joins real
+temporary Beads and git workspaces with fixture-captured degraded Agent Mail and
+RCH inputs, then verifies healthy replay, Beads soft-lock fallback, RCH proof
+refresh backoff, duplicate-work risk, dirty worktree denial, stale proof-memory
+refresh, extension resource firewall failure, and smoothness SLO failure. It is
+governed by `docs/contracts/swarm-incident-replay-e2e-contract.json`; the
+current fixture artifact is `docs/evidence/swarm-incident-replay-e2e.json`.
+This evidence is advisory only and does not authorize live source mutation,
+local heavyweight Cargo fallback, release, benchmark, capacity, or drop-in
+claims.
+
 The validation proof-memory index emits `pi.validation.proof_memory_index.v1`.
 It indexes existing remote validation proof fixtures by command fingerprint,
 git head, touched paths, RCH provenance, artifact retrieval hash, freshness, and

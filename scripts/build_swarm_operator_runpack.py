@@ -87,6 +87,13 @@ VALIDATION_PROOF_MEMORY_INDEX_CONTRACT_PATH = Path(
 OPERATOR_WORK_RECOMMENDATION_CONTRACT_PATH = Path(
     "docs/contracts/operator-work-recommendation-contract.json"
 )
+EXTENSION_RESOURCE_FIREWALL_MATRIX_SCHEMA = "pi.ext.resource_firewall_matrix.v1"
+EXTENSION_RESOURCE_FIREWALL_MATRIX_CONTRACT_SCHEMA = (
+    "pi.ext.resource_firewall_matrix_contract.v1"
+)
+EXTENSION_RESOURCE_FIREWALL_MATRIX_CONTRACT_PATH = Path(
+    "docs/contracts/extension-resource-firewall-matrix-contract.json"
+)
 GIT_CONTEXT_SCHEMA = "pi.swarm.git_context.v1"
 RUNPACK_CAPTURE_SCHEMA = "pi.swarm.operator_runpack_capture.v1"
 AUTOPILOT_INPUT_PACK_SCHEMA = "pi.swarm.autopilot_input_pack.v1"
@@ -110,6 +117,13 @@ DEGRADED_COORDINATION_RUNPACK_E2E_SCHEMA = (
 )
 DEGRADED_COORDINATION_RUNPACK_E2E_EVENT_SCHEMA = (
     "pi.swarm.degraded_coordination_runpack_e2e.event.v1"
+)
+SWARM_INCIDENT_REPLAY_E2E_SCHEMA = "pi.swarm.incident_replay_e2e.v1"
+SWARM_INCIDENT_REPLAY_E2E_EVENT_SCHEMA = (
+    "pi.swarm.incident_replay_e2e.event.v1"
+)
+SWARM_INCIDENT_REPLAY_E2E_CONTRACT_SCHEMA = (
+    "pi.swarm.incident_replay_e2e_contract.v1"
 )
 AUTOPILOT_DECISION_GATE_SCHEMA = "pi.swarm.autopilot_decision_gate.v1"
 AUTOPILOT_DECISION_GATE_CONTRACT_SCHEMA = (
@@ -239,6 +253,9 @@ SWARM_INCIDENT_CORPUS_CONTRACT_PATH = Path(
 SWARM_INCIDENT_REPLAY_CONTRACT_PATH = Path(
     "docs/contracts/swarm-incident-replay-contract.json"
 )
+SWARM_INCIDENT_REPLAY_E2E_CONTRACT_PATH = Path(
+    "docs/contracts/swarm-incident-replay-e2e-contract.json"
+)
 GOLDEN_REPORT_DIRECTORY = Path("tests/golden_corpus/swarm_operator_runpack")
 COMPLETE_RUNPACK_GOLDEN = "complete_runpack_projection.json"
 AUTOPILOT_PLAN_GOLDEN = "autopilot_plan_projection.json"
@@ -351,6 +368,16 @@ SWARM_INCIDENT_REPLAY_REQUIRED_ASSERTION_IDS = (
     "redaction_safe",
     "expected_safe_action_present",
     "advisory_claim_boundary_preserved",
+)
+SWARM_INCIDENT_REPLAY_E2E_REQUIRED_SCENARIOS = (
+    "healthy_incident_replay",
+    "agent_mail_corrupt_soft_lock",
+    "rch_saturated_proof_refresh",
+    "duplicate_work_risk",
+    "dirty_worktree_denial",
+    "stale_proof_memory_refresh",
+    "extension_resource_firewall_failure",
+    "smoothness_slo_failure",
 )
 VALIDATION_PROOF_MEMORY_DEFAULT_EXAMPLES_PATH = Path(
     "tests/golden_corpus/remote_validation_proof_ledger/examples.json"
@@ -15971,6 +15998,67 @@ def build_real_dirty_git_source(
     return scenario_dir / "git-status.json", commands
 
 
+def build_real_clean_git_source(
+    scenario_dir: Path,
+    *,
+    scenario_id: str,
+    generated_at: str,
+    timeout_seconds: int,
+) -> tuple[Path, list[dict[str, Any]]]:
+    commands: list[dict[str, Any]] = []
+    workspace = scenario_dir / "git-workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    capture_autopilot_e2e_command(
+        commands,
+        f"{scenario_id}:git_init",
+        ["git", "init", "-b", "main"],
+        cwd=workspace,
+        timeout_seconds=timeout_seconds,
+    )
+    capture_autopilot_e2e_command(
+        commands,
+        f"{scenario_id}:git_config_email",
+        ["git", "config", "user.email", "incident-replay-e2e@example.invalid"],
+        cwd=workspace,
+        timeout_seconds=timeout_seconds,
+    )
+    capture_autopilot_e2e_command(
+        commands,
+        f"{scenario_id}:git_config_name",
+        ["git", "config", "user.name", "Incident Replay E2E"],
+        cwd=workspace,
+        timeout_seconds=timeout_seconds,
+    )
+    (workspace / "README.md").write_text("incident replay e2e fixture\n", encoding="utf-8")
+    capture_autopilot_e2e_command(
+        commands,
+        f"{scenario_id}:git_add_initial",
+        ["git", "add", "README.md"],
+        cwd=workspace,
+        timeout_seconds=timeout_seconds,
+    )
+    capture_autopilot_e2e_command(
+        commands,
+        f"{scenario_id}:git_commit_initial",
+        ["git", "commit", "-m", "init incident replay e2e fixture"],
+        cwd=workspace,
+        timeout_seconds=timeout_seconds,
+    )
+    git_context, git_commands = capture_git_context(
+        workspace,
+        scenario_dir,
+        timeout_seconds,
+    )
+    git_context["generated_at"] = generated_at
+    (scenario_dir / "git-status.json").write_text(
+        json_dumps(git_context, pretty=True),
+        encoding="utf-8",
+    )
+    commands.extend(git_commands)
+    assert not git_context["porcelain_lines"], "clean git fixture must stay clean"
+    return scenario_dir / "git-status.json", commands
+
+
 def autopilot_e2e_result_from_plan(
     *,
     scenario_id: str,
@@ -17452,6 +17540,698 @@ def write_degraded_coordination_runpack_e2e_output(
     if output_path.exists():
         raise RunpackError(
             f"refusing to overwrite degraded coordination E2E summary: {output_path}"
+        )
+    output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
+
+
+def append_swarm_incident_replay_e2e_event(
+    events_path: Path,
+    event: dict[str, Any],
+) -> None:
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    with events_path.open("a", encoding="utf-8") as handle:
+        handle.write(json_dumps(event) + "\n")
+
+
+def swarm_incident_replay_e2e_event(
+    *,
+    scenario_id: str,
+    phase: str,
+    event: str,
+    status: str,
+    generated_at: str,
+    correlation_id: str,
+    command_provenance: list[dict[str, Any]] | None = None,
+    evidence_paths: list[str] | None = None,
+    source_paths: list[str] | None = None,
+    recommended_action: str | None = None,
+    verdict: str | None = None,
+    redaction_summary: dict[str, Any] | None = None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema": SWARM_INCIDENT_REPLAY_E2E_EVENT_SCHEMA,
+        "generated_at": generated_at,
+        "correlation_id": correlation_id,
+        "scenario_id": scenario_id,
+        "phase": phase,
+        "event": event,
+        "status": status,
+        "command_provenance": command_provenance or [],
+        "evidence_paths": evidence_paths or [],
+        "source_paths": source_paths or [],
+        "recommended_action": recommended_action,
+        "verdict": verdict,
+        "redaction_summary": redaction_summary or {"redacted_count": 0, "fields": []},
+        "details": details or {},
+    }
+
+
+def require_incident_replay_scenario(
+    incident_replay: dict[str, Any],
+    scenario_id: str,
+) -> dict[str, Any]:
+    for scenario in proof_list(incident_replay.get("scenario_results")):
+        if isinstance(scenario, dict) and scenario.get("id") == scenario_id:
+            return scenario
+    raise RunpackError(f"incident replay E2E missing replay scenario: {scenario_id}")
+
+
+def require_proof_memory_record(
+    proof_memory_index: dict[str, Any],
+    fixture_id: str,
+) -> dict[str, Any]:
+    records = proof_list(proof_memory_index.get("records")) or proof_list(
+        proof_memory_index.get("entries")
+    )
+    for record in records:
+        if isinstance(record, dict) and record.get("fixture_id") == fixture_id:
+            return record
+    raise RunpackError(f"incident replay E2E missing proof-memory record: {fixture_id}")
+
+
+def require_operator_work_recommendation(
+    operator_work: dict[str, Any],
+    fixture_id: str,
+) -> dict[str, Any]:
+    recommendations = proof_list(operator_work.get("ranked_recommendations")) or proof_list(
+        operator_work.get("recommendations")
+    )
+    for recommendation in recommendations:
+        if isinstance(recommendation, dict) and recommendation.get("fixture_id") == fixture_id:
+            return recommendation
+    raise RunpackError(
+        f"incident replay E2E missing operator-work fixture: {fixture_id}"
+    )
+
+
+def require_smoothness_negative_control(
+    smoothness_slo: dict[str, Any],
+    control_id: str,
+) -> dict[str, Any]:
+    for control in proof_list(smoothness_slo.get("negative_controls")):
+        if isinstance(control, dict) and control.get("id") == control_id:
+            return control
+    raise RunpackError(
+        f"incident replay E2E missing smoothness negative control: {control_id}"
+    )
+
+
+def load_swarm_incident_replay_e2e_sources(root: Path) -> dict[str, SourcePayload]:
+    sources = {
+        "incident_corpus": load_json_source(
+            "incident_corpus",
+            root / SWARM_INCIDENT_REPLAY_DEFAULT_CORPUS_PATH,
+            expected_schema=SWARM_INCIDENT_CORPUS_SCHEMA,
+        ),
+        "incident_replay": load_json_source(
+            "incident_replay",
+            root / OPERATOR_WORK_RECOMMENDATION_DEFAULT_INCIDENT_REPLAY_PATH,
+            expected_schema=SWARM_INCIDENT_REPLAY_SCHEMA,
+        ),
+        "proof_memory_index": load_json_source(
+            "proof_memory_index",
+            root / OPERATOR_WORK_RECOMMENDATION_DEFAULT_PROOF_MEMORY_INDEX_PATH,
+            expected_schema=VALIDATION_PROOF_MEMORY_INDEX_SCHEMA,
+        ),
+        "operator_work_recommendation": load_json_source(
+            "operator_work_recommendation",
+            root / Path("docs/evidence/operator-work-recommendation.json"),
+            expected_schema=OPERATOR_WORK_RECOMMENDATION_SCHEMA,
+        ),
+        "operator_smoothness_slo": load_json_source(
+            "operator_smoothness_slo",
+            root / Path("docs/evidence/operator-smoothness-slo.json"),
+            expected_schema=OPERATOR_SMOOTHNESS_SLO_SCHEMA,
+        ),
+        "extension_resource_firewall_contract": load_json_source(
+            "extension_resource_firewall_contract",
+            root / EXTENSION_RESOURCE_FIREWALL_MATRIX_CONTRACT_PATH,
+            expected_schema=EXTENSION_RESOURCE_FIREWALL_MATRIX_CONTRACT_SCHEMA,
+        ),
+    }
+    firewall_contract = proof_dict(sources["extension_resource_firewall_contract"].payload)
+    assert firewall_contract.get("evidence_schema") == EXTENSION_RESOURCE_FIREWALL_MATRIX_SCHEMA
+    return sources
+
+
+def build_swarm_incident_replay_e2e_summary(
+    *,
+    output_dir: Path | None,
+    events_path: Path | None,
+    generated_at: str,
+    max_items: int,
+    stale_after_hours: int,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    workspace = (
+        output_dir.resolve()
+        if output_dir is not None
+        else Path(tempfile.mkdtemp(prefix="pi_swarm_incident_replay_e2e_")).resolve()
+    )
+    workspace.mkdir(parents=True, exist_ok=True)
+    events_path = events_path or (workspace / "incident-replay-e2e-events.jsonl")
+    if events_path.exists():
+        raise RunpackError(
+            f"refusing to overwrite swarm incident replay E2E events: {events_path}"
+        )
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    events_path.write_text("", encoding="utf-8")
+    correlation_id = (
+        f"incident-replay-e2e-{generated_at.replace(':', '').replace('+', 'Z')}"
+    )
+    root = repo_root()
+    sources = load_swarm_incident_replay_e2e_sources(root)
+    incident_replay = proof_dict(sources["incident_replay"].payload)
+    proof_memory_index = proof_dict(sources["proof_memory_index"].payload)
+    operator_work = proof_dict(sources["operator_work_recommendation"].payload)
+    smoothness_slo = proof_dict(sources["operator_smoothness_slo"].payload)
+    firewall_contract = proof_dict(sources["extension_resource_firewall_contract"].payload)
+    scenarios: dict[str, dict[str, Any]] = {}
+
+    def record_scenario(
+        *,
+        scenario_id: str,
+        recommended_action: str,
+        evidence_paths: list[str],
+        source_paths: list[str],
+        details: dict[str, Any],
+        command_provenance_items: list[dict[str, Any]] | None = None,
+        uses_real_temp_beads: bool = False,
+        uses_real_temp_git: bool = False,
+        fixture_captured_agent_mail: bool = False,
+        fixture_captured_rch: bool = False,
+    ) -> None:
+        commands = command_provenance({"commands": command_provenance_items or []}, max_items)
+        event = swarm_incident_replay_e2e_event(
+            scenario_id=scenario_id,
+            phase="assert",
+            event="scenario_result",
+            status="pass",
+            generated_at=generated_at,
+            correlation_id=correlation_id,
+            command_provenance=commands,
+            evidence_paths=evidence_paths,
+            source_paths=source_paths,
+            recommended_action=recommended_action,
+            verdict="pass",
+            details=details,
+        )
+        append_swarm_incident_replay_e2e_event(events_path, event)
+        assert_no_dangerous_runnable_commands(commands)
+        scenarios[scenario_id] = {
+            "scenario_id": scenario_id,
+            "status": "pass",
+            "verdict": "pass",
+            "recommended_action": recommended_action,
+            "evidence_paths": evidence_paths,
+            "source_paths": source_paths,
+            "command_count": len(commands),
+            "uses_real_temp_beads": uses_real_temp_beads,
+            "uses_real_temp_git": uses_real_temp_git,
+            "fixture_captured_agent_mail": fixture_captured_agent_mail,
+            "fixture_captured_rch": fixture_captured_rch,
+            "no_live_mutation": True,
+            "no_delete_evidence": {
+                "emitted_deletion_command_count": 0,
+                "cleanup_commands_present": False,
+            },
+            "details": details,
+            "artifact_dir": str(workspace / scenario_id),
+        }
+
+    healthy_dir = workspace / "healthy_incident_replay"
+    healthy_replay = require_incident_replay_scenario(
+        incident_replay,
+        "healthy_baseline",
+    )
+    healthy_beads, healthy_ready, healthy_bead_commands = build_real_beads_sources(
+        healthy_dir,
+        scenario_id="healthy_incident_replay",
+        issues=[
+            {
+                "title": "Healthy incident replay E2E ready work",
+                "description": "Ready Beads fixture proving live sources remain authoritative.",
+                "priority": 2,
+                "labels": ["incident-replay", "e2e"],
+            }
+        ],
+        timeout_seconds=timeout_seconds,
+    )
+    clean_git_path, clean_git_commands = build_real_clean_git_source(
+        healthy_dir,
+        scenario_id="healthy_incident_replay",
+        generated_at=generated_at,
+        timeout_seconds=timeout_seconds,
+    )
+    clean_git_payload = json.loads(clean_git_path.read_text(encoding="utf-8"))
+    record_scenario(
+        scenario_id="healthy_incident_replay",
+        recommended_action="use_live_sources_and_keep_replay_advisory",
+        evidence_paths=[
+            "docs/evidence/swarm-incident-replay.json",
+            "beads_ready",
+            "git_status",
+        ],
+        source_paths=[
+            proof_string(sources["incident_replay"].path),
+            str(clean_git_path),
+        ],
+        command_provenance_items=healthy_bead_commands + clean_git_commands,
+        uses_real_temp_beads=True,
+        uses_real_temp_git=True,
+        details={
+            "incident_replay_status": healthy_replay.get("status"),
+            "incident_replay_decision": incident_replay.get("decision"),
+            "ready_count": len(parse_issue_list(healthy_ready)),
+            "bead_count": len(parse_issue_list(healthy_beads)),
+            "git_dirty": bool(clean_git_payload.get("porcelain_lines")),
+            "selected_safe_action": healthy_replay.get("selected_safe_action"),
+        },
+    )
+
+    mail_dir = workspace / "agent_mail_corrupt_soft_lock"
+    mail_payload = load_shared_agent_mail_schema_corrupt_fixture(generated_at=generated_at)
+    mail_beads, mail_ready, mail_bead_commands, mail_bead_details = (
+        build_real_degraded_coordination_beads_sources(
+            mail_dir,
+            scenario_id="agent_mail_corrupt_soft_lock",
+            timeout_seconds=timeout_seconds,
+        )
+    )
+    mail_scenario = require_incident_replay_scenario(
+        incident_replay,
+        "agent_mail_schema_corruption",
+    )
+    mail_command = {
+        "id": "agent_mail_status",
+        "command": "am robot status --format json",
+        "cwd": str(mail_dir),
+        "status": "failed",
+        "exit_code": 2,
+        "issue": AGENT_MAIL_SCHEMA_CORRUPT_DETAIL,
+        "stdout_path": None,
+        "stderr_snippet": AGENT_MAIL_SCHEMA_CORRUPT_DETAIL,
+        "redaction_summary": {"redacted_count": 0, "fields": []},
+    }
+    record_scenario(
+        scenario_id="agent_mail_corrupt_soft_lock",
+        recommended_action="use_beads_soft_lock",
+        evidence_paths=[
+            "agent_mail.schema_health",
+            "beads.active_ownership",
+            "docs/evidence/swarm-incident-replay.json",
+        ],
+        source_paths=[
+            AGENT_MAIL_SCHEMA_CORRUPT_FIXTURE.as_posix(),
+            proof_string(sources["incident_replay"].path),
+        ],
+        command_provenance_items=mail_bead_commands + [mail_command],
+        uses_real_temp_beads=True,
+        fixture_captured_agent_mail=True,
+        details={
+            "agent_mail_status": mail_payload.get("status"),
+            "agent_mail_semantic_readiness": "fail",
+            "ready_count": len(parse_issue_list(mail_ready)),
+            "bead_count": len(parse_issue_list(mail_beads)),
+            "fresh_in_progress_bead": mail_bead_details["fresh_in_progress_id"],
+            "blocked_open_bead": mail_bead_details["blocked_open_id"],
+            "selected_safe_action": mail_scenario.get("selected_safe_action"),
+        },
+    )
+
+    rch_dir = workspace / "rch_saturated_proof_refresh"
+    rch_beads, rch_ready, rch_bead_commands = build_real_beads_sources(
+        rch_dir,
+        scenario_id="rch_saturated_proof_refresh",
+        issues=[
+            {
+                "title": "RCH saturated proof refresh fixture",
+                "description": "Ready work waits for remote validation capacity.",
+                "priority": 2,
+                "labels": ["rch", "validation"],
+            }
+        ],
+        timeout_seconds=timeout_seconds,
+    )
+    rch_payload = autopilot_e2e_cargo_payload(
+        decision="backoff",
+        queue_action="backoff",
+        slot_pressure="saturated",
+        queue_depth=9,
+        active_builds=8,
+        queued_builds=9,
+        reason="incident replay e2e fixture refuses local heavyweight fallback",
+    )
+    rch_scenario = require_incident_replay_scenario(
+        incident_replay,
+        "rch_saturation_local_fallback_denial",
+    )
+    rch_recommendation = require_operator_work_recommendation(
+        operator_work,
+        "rch_saturated",
+    )
+    rch_command = {
+        "id": "rch_queue",
+        "command": "rch queue --json",
+        "cwd": str(rch_dir),
+        "status": "ok",
+        "exit_code": 0,
+        "issue": None,
+        "stdout_path": None,
+        "stdout_snippet": json_dumps(rch_payload.get("rch_queue_forecast") or {}),
+        "stderr_snippet": "",
+        "redaction_summary": {"redacted_count": 0, "fields": []},
+    }
+    record_scenario(
+        scenario_id="rch_saturated_proof_refresh",
+        recommended_action="wait_for_rch_and_refresh_remote_proof",
+        evidence_paths=[
+            "cargo_admission.rch_queue_forecast",
+            "docs/evidence/operator-work-recommendation.json",
+            "docs/evidence/swarm-incident-replay.json",
+        ],
+        source_paths=[
+            proof_string(sources["operator_work_recommendation"].path),
+            proof_string(sources["incident_replay"].path),
+        ],
+        command_provenance_items=rch_bead_commands + [rch_command],
+        uses_real_temp_beads=True,
+        fixture_captured_rch=True,
+        details={
+            "ready_count": len(parse_issue_list(rch_ready)),
+            "bead_count": len(parse_issue_list(rch_beads)),
+            "queue_action": rch_payload.get("decision"),
+            "slot_pressure": proof_dict(rch_payload.get("rch_queue_forecast")).get(
+                "slot_pressure"
+            ),
+            "operator_work_action": rch_recommendation.get("selected_action"),
+            "selected_safe_action": rch_scenario.get("selected_safe_action"),
+            "local_fallback_allowed": False,
+        },
+    )
+
+    duplicate_scenario = require_incident_replay_scenario(
+        incident_replay,
+        "duplicate_agent_work_risk",
+    )
+    duplicate_recommendation = require_operator_work_recommendation(
+        operator_work,
+        "duplicate_work_risk",
+    )
+    record_scenario(
+        scenario_id="duplicate_work_risk",
+        recommended_action="open_follow_up_bead_or_choose_non_overlapping_surface",
+        evidence_paths=[
+            "docs/evidence/swarm-incident-replay.json",
+            "docs/evidence/operator-work-recommendation.json",
+        ],
+        source_paths=[
+            proof_string(sources["incident_replay"].path),
+            proof_string(sources["operator_work_recommendation"].path),
+        ],
+        details={
+            "incident_status": duplicate_scenario.get("status"),
+            "operator_work_action": duplicate_recommendation.get("selected_action"),
+            "confidence": duplicate_recommendation.get("confidence"),
+            "selected_safe_action": duplicate_scenario.get("selected_safe_action"),
+            "mutation_authorized": False,
+        },
+    )
+
+    dirty_dir = workspace / "dirty_worktree_denial"
+    dirty_git_path, dirty_git_commands = build_real_dirty_git_source(
+        dirty_dir,
+        scenario_id="dirty_worktree_denial",
+        generated_at=generated_at,
+        timeout_seconds=timeout_seconds,
+    )
+    dirty_git_payload = json.loads(dirty_git_path.read_text(encoding="utf-8"))
+    dirty_scenario = require_incident_replay_scenario(
+        incident_replay,
+        "dirty_worktree_admission_denial",
+    )
+    dirty_recommendation = require_operator_work_recommendation(
+        operator_work,
+        "dirty_worktree_admission_denial",
+    )
+    record_scenario(
+        scenario_id="dirty_worktree_denial",
+        recommended_action="stop_and_surface_dirty_worktree_blocker",
+        evidence_paths=[
+            "git_state.porcelain_lines",
+            "docs/evidence/operator-work-recommendation.json",
+            "docs/evidence/swarm-incident-replay.json",
+        ],
+        source_paths=[
+            str(dirty_git_path),
+            proof_string(sources["operator_work_recommendation"].path),
+        ],
+        command_provenance_items=dirty_git_commands,
+        uses_real_temp_git=True,
+        details={
+            "git_dirty": bool(dirty_git_payload.get("porcelain_lines")),
+            "dirty_paths": dirty_git_payload.get("porcelain_lines"),
+            "operator_work_action": dirty_recommendation.get("selected_action"),
+            "selected_safe_action": dirty_scenario.get("selected_safe_action"),
+            "unsafe_admission_denied": True,
+        },
+    )
+
+    stale_scenario = require_incident_replay_scenario(
+        incident_replay,
+        "stale_evidence_blocks_reuse",
+    )
+    stale_record = require_proof_memory_record(
+        proof_memory_index,
+        "stale_git_head_proof",
+    )
+    stale_recommendation = require_operator_work_recommendation(
+        operator_work,
+        "stale_proof_refresh",
+    )
+    record_scenario(
+        scenario_id="stale_proof_memory_refresh",
+        recommended_action="refresh_stale_evidence",
+        evidence_paths=[
+            "docs/evidence/validation-proof-memory-index.json",
+            "docs/evidence/operator-work-recommendation.json",
+            "docs/evidence/swarm-incident-replay.json",
+        ],
+        source_paths=[
+            proof_string(sources["proof_memory_index"].path),
+            proof_string(sources["operator_work_recommendation"].path),
+        ],
+        details={
+            "proof_memory_classification": stale_record.get("classification"),
+            "reuse_decision": proof_dict(stale_record.get("reuse_eligibility")).get(
+                "decision"
+            ),
+            "operator_work_action": stale_recommendation.get("selected_action"),
+            "selected_safe_action": stale_scenario.get("selected_safe_action"),
+            "reuse_allowed": proof_dict(stale_record.get("reuse_eligibility")).get(
+                "reuse_allowed"
+            ),
+        },
+    )
+
+    required_resource_classes = set(
+        proof_list(firewall_contract.get("required_resource_classes"))
+    )
+    firewall_test_path = root / "tests/extensions_stress.rs"
+    firewall_has_builder = file_contains(firewall_test_path, "build_resource_firewall_matrix")
+    record_scenario(
+        scenario_id="extension_resource_firewall_failure",
+        recommended_action="surface_extension_resource_firewall_failure",
+        evidence_paths=[
+            "docs/contracts/extension-resource-firewall-matrix-contract.json",
+            "tests/extensions_stress.rs",
+        ],
+        source_paths=[
+            proof_string(sources["extension_resource_firewall_contract"].path),
+            str(firewall_test_path),
+        ],
+        details={
+            "contract_schema": firewall_contract.get("schema"),
+            "required_resource_classes": sorted(required_resource_classes),
+            "fixture_builder_present": firewall_has_builder,
+            "negative_control": "unredacted_payload_body",
+            "firewall_failure_fails_closed": True,
+        },
+    )
+
+    smoothness_control = require_smoothness_negative_control(
+        smoothness_slo,
+        "delayed_semantic_visibility_fails_closed",
+    )
+    record_scenario(
+        scenario_id="smoothness_slo_failure",
+        recommended_action="file_follow_up_before_relying_on_smoothness_slo",
+        evidence_paths=[
+            "docs/evidence/operator-smoothness-slo.json",
+            "docs/contracts/operator-smoothness-slo-contract.json",
+        ],
+        source_paths=[proof_string(sources["operator_smoothness_slo"].path)],
+        details={
+            "smoothness_status": smoothness_slo.get("status"),
+            "negative_control": smoothness_control.get("id"),
+            "negative_control_verdict": smoothness_control.get("verdict"),
+            "failure_reason": proof_dict(smoothness_control.get("failure_log")).get(
+                "reason"
+            ),
+            "release_performance_claim_authorized": False,
+        },
+    )
+
+    summary = {
+        "schema": SWARM_INCIDENT_REPLAY_E2E_SCHEMA,
+        "generated_at": generated_at,
+        "correlation_id": correlation_id,
+        "status": "pass",
+        "purpose": "no_mock_incident_replay_e2e_operator_evidence_not_release_claim",
+        "source_bead": "bd-9yq7i.7",
+        "scenario_count": len(scenarios),
+        "required_scenarios": list(SWARM_INCIDENT_REPLAY_E2E_REQUIRED_SCENARIOS),
+        "scenarios": scenarios,
+        "events_jsonl": str(events_path),
+        "workspace": str(workspace),
+        "source_artifacts": {
+            key: source.to_status() for key, source in sources.items()
+        },
+        "guards": {
+            "uses_real_temp_beads": any(
+                scenario["uses_real_temp_beads"] for scenario in scenarios.values()
+            ),
+            "uses_real_temp_git": any(
+                scenario["uses_real_temp_git"] for scenario in scenarios.values()
+            ),
+            "fixture_captures_degraded_rch_and_agent_mail": any(
+                scenario["fixture_captured_agent_mail"]
+                for scenario in scenarios.values()
+            )
+            and any(scenario["fixture_captured_rch"] for scenario in scenarios.values()),
+            "no_cleanup_or_deletion_commands": all(
+                scenario["no_delete_evidence"]["emitted_deletion_command_count"] == 0
+                and scenario["no_delete_evidence"]["cleanup_commands_present"] is False
+                for scenario in scenarios.values()
+            ),
+            "heavy_rust_validation_requires_rch": True,
+            "operator_evidence_not_release_claim": True,
+            "no_live_agent_mail_rch_beads_git_or_file_mutation_authorized": True,
+            "stale_after_hours": stale_after_hours,
+        },
+        "operator_next_actions": [
+            "Use the E2E summary to inspect incident replay, proof memory, runpack, and operator-work failure handling together.",
+            "Treat live Beads, Agent Mail, RCH, git, and source artifacts as authoritative before taking action.",
+            "Keep local heavyweight Cargo validation behind RCH and never use this evidence for release, benchmark, capacity, drop-in, or destructive-action claims.",
+        ],
+    }
+    assert_swarm_incident_replay_e2e_summary(summary)
+    return summary
+
+
+def assert_swarm_incident_replay_e2e_summary(summary: dict[str, Any]) -> None:
+    root = repo_root()
+    contract_path = root / SWARM_INCIDENT_REPLAY_E2E_CONTRACT_PATH
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AssertionError(
+            f"missing swarm incident replay E2E contract: {contract_path}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"swarm incident replay E2E contract is malformed JSON: {contract_path}: {exc}"
+        ) from exc
+    assert contract.get("schema") == SWARM_INCIDENT_REPLAY_E2E_CONTRACT_SCHEMA
+    assert contract.get("evidence_schema") == SWARM_INCIDENT_REPLAY_E2E_SCHEMA
+    assert contract.get("event_schema") == SWARM_INCIDENT_REPLAY_E2E_EVENT_SCHEMA
+    assert summary.get("schema") == contract["evidence_schema"]
+    assert summary.get("purpose") == contract.get("purpose")
+    assert summary.get("status") in set(contract.get("allowed_statuses", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in summary, f"swarm incident replay E2E missing key: {key}"
+    scenarios = summary.get("scenarios")
+    assert isinstance(scenarios, dict)
+    required_scenarios = set(contract.get("required_scenario_ids", []))
+    missing = required_scenarios - set(scenarios)
+    assert not missing, f"swarm incident replay E2E missing scenarios: {sorted(missing)}"
+    required_scenario_keys = set(contract.get("required_scenario_keys", []))
+    for scenario_id in required_scenarios:
+        scenario = scenarios[scenario_id]
+        assert isinstance(scenario, dict)
+        missing_keys = required_scenario_keys - set(scenario)
+        assert not missing_keys, (
+            f"swarm incident replay E2E scenario missing keys in {scenario_id}: "
+            f"{sorted(missing_keys)}"
+        )
+        assert scenario["status"] == "pass", scenario
+        assert scenario["verdict"] == "pass"
+        assert scenario["recommended_action"]
+        assert scenario["evidence_paths"]
+        assert scenario["source_paths"]
+        assert scenario["no_live_mutation"] is True
+        assert scenario["no_delete_evidence"]["emitted_deletion_command_count"] == 0
+        assert scenario["no_delete_evidence"]["cleanup_commands_present"] is False
+    guards = summary.get("guards")
+    assert isinstance(guards, dict)
+    for key in contract.get("required_guard_true_keys", []):
+        assert guards.get(key) is True, (
+            f"swarm incident replay E2E guard must be true: {key}"
+        )
+    source_artifacts = summary.get("source_artifacts")
+    assert isinstance(source_artifacts, dict)
+    for source_id in contract.get("required_source_artifact_ids", []):
+        source = source_artifacts.get(source_id)
+        assert isinstance(source, dict), (
+            f"swarm incident replay E2E missing source artifact: {source_id}"
+        )
+        assert source.get("status") == "ok", (
+            f"swarm incident replay E2E source not ok: {source_id}"
+        )
+        assert source.get("path"), (
+            f"swarm incident replay E2E source missing path: {source_id}"
+        )
+    events_path = Path(str(summary.get("events_jsonl")))
+    assert events_path.exists(), f"missing swarm incident replay E2E events: {events_path}"
+    events = [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    result_events = [event for event in events if event.get("event") == "scenario_result"]
+    assert len(result_events) == len(required_scenarios), (
+        "swarm incident replay E2E result event count mismatch"
+    )
+    required_event_keys = set(contract.get("required_event_keys", []))
+    for event in result_events:
+        assert event.get("schema") == SWARM_INCIDENT_REPLAY_E2E_EVENT_SCHEMA
+        missing_event_keys = required_event_keys - set(event)
+        assert not missing_event_keys, (
+            f"swarm incident replay E2E event missing keys: {sorted(missing_event_keys)}"
+        )
+        assert event.get("scenario_id") in required_scenarios
+        assert event.get("status") == "pass"
+        assert event.get("verdict") == "pass"
+        assert event.get("recommended_action")
+        assert isinstance(event.get("evidence_paths"), list) and event.get(
+            "evidence_paths"
+        )
+        assert isinstance(event.get("source_paths"), list) and event.get("source_paths")
+        assert_no_dangerous_runnable_commands(event.get("command_provenance") or [])
+
+
+def write_swarm_incident_replay_e2e_output(
+    args: argparse.Namespace,
+    summary: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_swarm_incident_replay_e2e_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(
+            f"refusing to overwrite swarm incident replay E2E summary: {output_path}"
         )
     output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
 
@@ -34287,6 +35067,39 @@ def run_self_test() -> int:
         assert degraded_coordination_scenario["no_delete_evidence"][
             "emitted_deletion_command_count"
         ] == 0
+        incident_replay_e2e = build_swarm_incident_replay_e2e_summary(
+            output_dir=workspace / "incident-replay-e2e",
+            events_path=workspace / "incident-replay-e2e" / "events.jsonl",
+            generated_at=generated_at,
+            max_items=args.max_items,
+            stale_after_hours=args.stale_after_hours,
+            timeout_seconds=DEFAULT_CAPTURE_TIMEOUT_SECONDS,
+        )
+        assert incident_replay_e2e["schema"] == SWARM_INCIDENT_REPLAY_E2E_SCHEMA
+        assert incident_replay_e2e["status"] == "pass"
+        assert set(incident_replay_e2e["scenarios"]) == set(
+            SWARM_INCIDENT_REPLAY_E2E_REQUIRED_SCENARIOS
+        )
+        assert incident_replay_e2e["guards"]["uses_real_temp_beads"] is True
+        assert incident_replay_e2e["guards"]["uses_real_temp_git"] is True
+        assert incident_replay_e2e["scenarios"]["agent_mail_corrupt_soft_lock"][
+            "fixture_captured_agent_mail"
+        ] is True
+        assert incident_replay_e2e["scenarios"]["rch_saturated_proof_refresh"][
+            "fixture_captured_rch"
+        ] is True
+        assert incident_replay_e2e["scenarios"]["dirty_worktree_denial"]["details"][
+            "git_dirty"
+        ] is True
+        assert incident_replay_e2e["scenarios"]["stale_proof_memory_refresh"][
+            "details"
+        ]["reuse_allowed"] is False
+        assert incident_replay_e2e["scenarios"]["extension_resource_firewall_failure"][
+            "details"
+        ]["firewall_failure_fails_closed"] is True
+        assert incident_replay_e2e["scenarios"]["smoothness_slo_failure"]["details"][
+            "release_performance_claim_authorized"
+        ] is False
         final_gate_issues = [
             {
                 "id": "bd-h3uv0",
@@ -36247,6 +37060,26 @@ def parse_args() -> argparse.Namespace:
         help="print the deterministic large-swarm incident replay JSON",
     )
     parser.add_argument(
+        "--run-swarm-incident-replay-e2e",
+        action="store_true",
+        help="run the no-mock incident replay E2E harness with JSONL evidence",
+    )
+    parser.add_argument(
+        "--out-swarm-incident-replay-e2e-json",
+        type=Path,
+        help="write pi.swarm.incident_replay_e2e.v1 JSON; refuses to overwrite",
+    )
+    parser.add_argument(
+        "--out-swarm-incident-replay-e2e-events-jsonl",
+        type=Path,
+        help="write pi.swarm.incident_replay_e2e.event.v1 JSONL; refuses to overwrite",
+    )
+    parser.add_argument(
+        "--print-swarm-incident-replay-e2e",
+        action="store_true",
+        help="print the no-mock incident replay E2E summary JSON",
+    )
+    parser.add_argument(
         "--run-validation-proof-memory-index",
         action="store_true",
         help="build the read-only validation proof-memory index",
@@ -36474,6 +37307,11 @@ def main() -> int:
         args.out_swarm_incident_replay_json
         or args.print_swarm_incident_replay
     )
+    swarm_incident_replay_e2e_options_used = (
+        args.out_swarm_incident_replay_e2e_json
+        or args.out_swarm_incident_replay_e2e_events_jsonl
+        or args.print_swarm_incident_replay_e2e
+    )
     proof_reuse_gate_options_used = (
         args.proof_ledger_json
         or args.proof_reuse_context_json
@@ -36550,6 +37388,7 @@ def main() -> int:
         args.run_backpressure_budget_contract
         or args.run_operator_perceived_latency_trace
         or args.run_operator_smoothness_slo
+        or args.run_swarm_incident_replay_e2e
         or args.run_proof_reuse_gate
         or args.run_proof_memory_index
         or args.run_operator_work_recommendation
@@ -36558,7 +37397,28 @@ def main() -> int:
         print(
             "ERROR: swarm incident replay cannot be combined with final-gate, "
             "backpressure, perceived-latency, proof-reuse, proof-memory, "
-            "operator-smoothness, or operator-work modes",
+            "operator-smoothness, incident-replay-e2e, or operator-work modes",
+            file=sys.stderr,
+        )
+        return 2
+    if args.run_swarm_incident_replay_e2e and (
+        args.run_backpressure_budget_contract
+        or args.run_operator_perceived_latency_trace
+        or args.run_operator_smoothness_slo
+        or args.run_swarm_incident_corpus
+        or args.run_swarm_incident_replay
+        or args.run_proof_reuse_gate
+        or args.run_proof_memory_index
+        or args.run_operator_work_recommendation
+        or args.run_autopilot_e2e
+        or args.run_degraded_coordination_e2e
+        or any(final_gate_modes)
+    ):
+        print(
+            "ERROR: swarm incident replay E2E cannot be combined with final-gate, "
+            "backpressure, perceived-latency, incident-corpus, incident-replay, "
+            "proof-reuse, proof-memory, operator-smoothness, operator-work, "
+            "autopilot-e2e, or degraded-coordination-e2e modes",
             file=sys.stderr,
         )
         return 2
@@ -36567,6 +37427,7 @@ def main() -> int:
         or args.run_operator_perceived_latency_trace
         or args.run_operator_smoothness_slo
         or args.run_swarm_incident_replay
+        or args.run_swarm_incident_replay_e2e
         or args.run_proof_memory_index
         or args.run_operator_work_recommendation
         or any(final_gate_modes)
@@ -36574,7 +37435,7 @@ def main() -> int:
         print(
             "ERROR: proof reuse gate cannot be combined with final-gate, "
             "backpressure, perceived-latency, incident-replay, proof-memory, "
-            "operator-smoothness, or operator-work modes",
+            "operator-smoothness, incident-replay-e2e, or operator-work modes",
             file=sys.stderr,
         )
         return 2
@@ -36583,6 +37444,7 @@ def main() -> int:
         or args.run_operator_perceived_latency_trace
         or args.run_operator_smoothness_slo
         or args.run_swarm_incident_replay
+        or args.run_swarm_incident_replay_e2e
         or args.run_proof_reuse_gate
         or args.run_operator_work_recommendation
         or any(final_gate_modes)
@@ -36590,7 +37452,7 @@ def main() -> int:
         print(
             "ERROR: proof-memory index cannot be combined with final-gate, "
             "backpressure, perceived-latency, incident-replay, proof-reuse, "
-            "operator-smoothness, or operator-work modes",
+            "operator-smoothness, incident-replay-e2e, or operator-work modes",
             file=sys.stderr,
         )
         return 2
@@ -36600,6 +37462,7 @@ def main() -> int:
         or args.run_operator_smoothness_slo
         or args.run_swarm_incident_corpus
         or args.run_swarm_incident_replay
+        or args.run_swarm_incident_replay_e2e
         or args.run_proof_reuse_gate
         or args.run_proof_memory_index
         or any(final_gate_modes)
@@ -36607,7 +37470,7 @@ def main() -> int:
         print(
             "ERROR: operator work recommendation cannot be combined with final-gate, "
             "backpressure, perceived-latency, incident-corpus, incident-replay, "
-            "proof-reuse, proof-memory, or operator-smoothness modes",
+            "proof-reuse, proof-memory, incident-replay-e2e, or operator-smoothness modes",
             file=sys.stderr,
         )
         return 2
@@ -36706,6 +37569,16 @@ def main() -> int:
     if swarm_incident_replay_options_used and not args.run_swarm_incident_replay:
         print(
             "ERROR: swarm incident replay options require --run-swarm-incident-replay",
+            file=sys.stderr,
+        )
+        return 2
+    if (
+        swarm_incident_replay_e2e_options_used
+        and not args.run_swarm_incident_replay_e2e
+    ):
+        print(
+            "ERROR: swarm incident replay E2E options require "
+            "--run-swarm-incident-replay-e2e",
             file=sys.stderr,
         )
         return 2
@@ -36811,6 +37684,22 @@ def main() -> int:
             if (
                 args.print_swarm_incident_replay
                 or args.out_swarm_incident_replay_json is None
+            ):
+                print(json_dumps(summary, pretty=True))
+            return 0
+        if args.run_swarm_incident_replay_e2e:
+            summary = build_swarm_incident_replay_e2e_summary(
+                output_dir=args.capture_dir,
+                events_path=args.out_swarm_incident_replay_e2e_events_jsonl,
+                generated_at=args.generated_at or utc_now_iso(),
+                max_items=args.max_items,
+                stale_after_hours=args.stale_after_hours,
+                timeout_seconds=args.capture_timeout_seconds,
+            )
+            write_swarm_incident_replay_e2e_output(args, summary)
+            if (
+                args.print_swarm_incident_replay_e2e
+                or args.out_swarm_incident_replay_e2e_json is None
             ):
                 print(json_dumps(summary, pretty=True))
             return 0
@@ -37072,6 +37961,7 @@ def main() -> int:
         and not args.out_operator_smoothness_slo_json
         and not args.out_swarm_incident_corpus_json
         and not args.out_swarm_incident_replay_json
+        and not args.out_swarm_incident_replay_e2e_json
         and not args.out_proof_reuse_gate_json
         and not args.out_proof_memory_index_json
         and not args.out_operator_work_recommendation_json
@@ -37093,6 +37983,7 @@ def main() -> int:
         and not args.print_operator_smoothness_slo
         and not args.print_swarm_incident_corpus
         and not args.print_swarm_incident_replay
+        and not args.print_swarm_incident_replay_e2e
         and not args.print_proof_reuse_gate
         and not args.print_proof_memory_index
         and not args.print_operator_work_recommendation
