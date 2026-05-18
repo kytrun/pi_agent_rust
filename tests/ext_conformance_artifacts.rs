@@ -122,6 +122,7 @@ struct ApiUsagePackage {
 struct ApiUsageSummary {
     shim_completeness: ApiUsageShimCompleteness,
     missing_modules_used_by_corpus: Vec<String>,
+    top_gaps_by_impact: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -216,6 +217,99 @@ fn parse_markdown_shim_summary_counts(markdown: &str) -> BTreeMap<String, usize>
     }
 
     counts
+}
+
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    !needle.is_empty()
+        && haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn contains_ascii_joined_case_insensitive(
+    haystack: &str,
+    first: &str,
+    middle: &str,
+    second: &str,
+) -> bool {
+    let first = first.as_bytes();
+    let middle = middle.as_bytes();
+    let second = second.as_bytes();
+    let target_len = first.len() + middle.len() + second.len();
+    if target_len == 0 {
+        return false;
+    }
+
+    haystack.as_bytes().windows(target_len).any(|window| {
+        let (first_window, rest) = window.split_at(first.len());
+        let (middle_window, second_window) = rest.split_at(middle.len());
+        first_window.eq_ignore_ascii_case(first)
+            && middle_window.eq_ignore_ascii_case(middle)
+            && second_window.eq_ignore_ascii_case(second)
+    })
+}
+
+fn gap_mentions_missing(gap: &str) -> bool {
+    contains_ascii_case_insensitive(gap, "missing")
+        || contains_ascii_case_insensitive(gap, "unregistered")
+}
+
+fn gap_mentions_stub(gap: &str) -> bool {
+    contains_ascii_case_insensitive(gap, "stubbed")
+        || contains_ascii_case_insensitive(gap, "stub-only")
+        || contains_ascii_case_insensitive(gap, "stub only")
+        || contains_ascii_case_insensitive(gap, "stub -")
+}
+
+fn gap_mentions_partial(gap: &str) -> bool {
+    contains_ascii_case_insensitive(gap, "partial")
+}
+
+fn gap_mentions_error_throw(gap: &str) -> bool {
+    contains_ascii_case_insensitive(gap, "error throw")
+        || contains_ascii_case_insensitive(gap, "throws")
+}
+
+fn assert_gap_status_not_contradicted(identifier: &str, status: &str, gap: &str) {
+    let missing = gap_mentions_missing(gap);
+    let stub = gap_mentions_stub(gap);
+    let partial = gap_mentions_partial(gap);
+    let error_throw = gap_mentions_error_throw(gap);
+
+    match status {
+        "missing" => {
+            assert!(
+                !stub && !partial && !error_throw,
+                "{identifier} top-gap text contradicts missing status: {gap}"
+            );
+        }
+        "stub" => {
+            assert!(
+                !missing && !partial && !error_throw,
+                "{identifier} top-gap text contradicts stub status: {gap}"
+            );
+        }
+        "partial" => {
+            assert!(
+                !missing && !stub && !error_throw,
+                "{identifier} top-gap text contradicts partial status: {gap}"
+            );
+        }
+        "error_throw" => {
+            assert!(
+                !missing && !stub && !partial,
+                "{identifier} top-gap text contradicts error_throw status: {gap}"
+            );
+        }
+        _ => {
+            assert!(
+                !missing && !stub && !partial && !error_throw,
+                "{identifier} top-gap text contradicts {status} status: {gap}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -590,6 +684,65 @@ fn test_api_usage_matrix_missing_summary_matches_rows() {
         matrix.summary.shim_completeness.missing_from_corpus,
         expected.len(),
         "summary missing_from_corpus count should match missing npm package rows"
+    );
+}
+
+#[test]
+fn test_api_usage_matrix_top_gap_wording_matches_row_statuses() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let matrix_path = repo_root.join("tests/ext_conformance/api_usage_matrix.json");
+    let bytes = fs::read(&matrix_path).expect("read api_usage_matrix.json");
+    let matrix: ApiUsageMatrix =
+        serde_json::from_slice(&bytes).expect("parse api_usage_matrix.json");
+
+    let mut checked_targets = 0usize;
+    for gap in &matrix.summary.top_gaps_by_impact {
+        for module in &matrix.node_modules {
+            if contains_ascii_case_insensitive(gap, module.module.as_str()) {
+                assert_gap_status_not_contradicted(
+                    module.module.as_str(),
+                    module.shim_status.as_str(),
+                    gap.as_str(),
+                );
+                checked_targets += 1;
+            }
+
+            let Some(module_name) = module.module.strip_prefix("node:") else {
+                continue;
+            };
+            for api in &module.apis {
+                if contains_ascii_joined_case_insensitive(gap, module_name, ".", api.name.as_str())
+                {
+                    assert_gap_status_not_contradicted(
+                        api.name.as_str(),
+                        api.shim_status.as_str(),
+                        gap.as_str(),
+                    );
+                    checked_targets += 1;
+                }
+            }
+        }
+
+        for package in &matrix.npm_packages {
+            if contains_ascii_joined_case_insensitive(
+                gap,
+                package.module.as_str(),
+                " npm package",
+                "",
+            ) {
+                assert_gap_status_not_contradicted(
+                    package.module.as_str(),
+                    package.shim_status.as_str(),
+                    gap.as_str(),
+                );
+                checked_targets += 1;
+            }
+        }
+    }
+
+    assert!(
+        checked_targets >= 5,
+        "top_gaps_by_impact should validate current row-backed gap entries"
     );
 }
 
