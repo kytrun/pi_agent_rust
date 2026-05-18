@@ -36,6 +36,96 @@ pub struct SlashCommandScenario {
     pub setup: Vec<String>,
 }
 
+/// How a slash command can be observed by the mirrored RPC runner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SlashCommandObservability {
+    /// The command maps to shared, credential-free RPC requests today.
+    RpcObservable,
+    /// The command is slash/UI behavior, but needs an explicit RPC adapter first.
+    UiOnlyNeedsAdapter,
+    /// The command cannot be counted as credential-free mirrored pass evidence.
+    ExcludedFromPassEvidence,
+}
+
+/// Classification result used to keep pass-evidence policy explicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlashCommandObservabilityPolicy {
+    pub kind: SlashCommandObservability,
+    pub reason: &'static str,
+}
+
+impl SlashCommandObservabilityPolicy {
+    const fn rpc(reason: &'static str) -> Self {
+        Self {
+            kind: SlashCommandObservability::RpcObservable,
+            reason,
+        }
+    }
+
+    const fn adapter(reason: &'static str) -> Self {
+        Self {
+            kind: SlashCommandObservability::UiOnlyNeedsAdapter,
+            reason,
+        }
+    }
+
+    const fn excluded(reason: &'static str) -> Self {
+        Self {
+            kind: SlashCommandObservability::ExcludedFromPassEvidence,
+            reason,
+        }
+    }
+}
+
+/// Classify slash inputs before translating them to RPC commands.
+pub fn slash_command_observability(input: &str) -> SlashCommandObservabilityPolicy {
+    let trimmed = input.trim();
+    if !trimmed.starts_with('/') {
+        return SlashCommandObservabilityPolicy::excluded(
+            "plain prompts require model execution and are not credential-free differential evidence",
+        );
+    }
+
+    let (command, args) = trimmed
+        .split_once(char::is_whitespace)
+        .unwrap_or((trimmed, ""));
+    let command = command.to_ascii_lowercase();
+    let args = args.trim();
+
+    match command.as_str() {
+        "/help" | "/h" | "/?" => SlashCommandObservabilityPolicy::rpc(
+            "help maps to get_state plus get_commands over shared RPC",
+        ),
+        "/clear" | "/cls" => {
+            SlashCommandObservabilityPolicy::rpc("clear maps to new_session over shared RPC")
+        }
+        "/model" | "/m" if args.is_empty() => SlashCommandObservabilityPolicy::rpc(
+            "model selector inventory maps to get_available_models over shared RPC",
+        ),
+        "/thinking" | "/think" | "/t" => SlashCommandObservabilityPolicy::rpc(
+            "thinking level inspection or mutation maps to shared RPC",
+        ),
+        "/session" | "/info" => SlashCommandObservabilityPolicy::rpc(
+            "session info maps to get_state and get_session_stats over shared RPC",
+        ),
+        "/tree" => {
+            SlashCommandObservabilityPolicy::rpc("tree maps to get_fork_messages over shared RPC")
+        }
+        "/compact" => {
+            SlashCommandObservabilityPolicy::rpc("compact maps to compact over shared RPC")
+        }
+        "/theme" | "/history" | "/hist" => SlashCommandObservabilityPolicy::adapter(
+            "interactive UI surface needs an RPC-observable adapter before pass evidence",
+        ),
+        "/exit" | "/quit" | "/q" => SlashCommandObservabilityPolicy::excluded(
+            "process termination is not credential-free mirrored RPC pass evidence",
+        ),
+        _ => SlashCommandObservabilityPolicy::adapter(
+            "slash parser error or extension command needs a shared RPC observation contract",
+        ),
+    }
+}
+
 /// Canonicalizes RPC response JSON by removing non-deterministic fields.
 pub fn canonicalize_response(mut response: Value) -> Value {
     // Remove time-sensitive fields
@@ -386,9 +476,11 @@ fn scenario_rpc_commands(scenario: &SlashCommandScenario) -> anyhow::Result<Vec<
 
 fn slash_input_to_rpc_steps(input: &str) -> anyhow::Result<Vec<RpcStep>> {
     let trimmed = input.trim();
-    if !trimmed.starts_with('/') {
+    let policy = slash_command_observability(trimmed);
+    if policy.kind != SlashCommandObservability::RpcObservable {
         anyhow::bail!(
-            "scenario setup requires model prompt execution, which is not credential-free: {trimmed}"
+            "slash input is not RPC-observable: {trimmed}; {}",
+            policy.reason
         );
     }
 

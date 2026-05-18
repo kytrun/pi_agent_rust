@@ -7,6 +7,7 @@
 mod dropin_slash_differential;
 use dropin_slash_differential::*;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 fn repo_path(relative: &str) -> PathBuf {
@@ -223,6 +224,50 @@ fn test_slash_command_parsing() {
             "Missing test scenario for essential command: {essential}"
         );
     }
+}
+
+/// Every scenario input must carry an explicit pass-evidence observability policy.
+#[test]
+fn test_slash_command_scenarios_have_observability_policy() -> Result<(), String> {
+    let tester = DifferentialTester::new()
+        .map_err(|err| format!("failed to create differential tester: {err:?}"))?;
+    let mut policy_counts = BTreeMap::new();
+
+    for scenario in &tester.scenarios {
+        let policy = slash_command_observability(&scenario.command);
+        assert!(
+            !policy.reason.is_empty(),
+            "scenario {} command {} must explain its observability policy",
+            scenario.name,
+            scenario.command
+        );
+        *policy_counts.entry(policy.kind).or_insert(0usize) += 1;
+
+        for setup in &scenario.setup {
+            let setup_policy = slash_command_observability(setup);
+            assert!(
+                !setup_policy.reason.is_empty(),
+                "scenario {} setup {setup} must explain its observability policy",
+                scenario.name
+            );
+            *policy_counts.entry(setup_policy.kind).or_insert(0usize) += 1;
+        }
+    }
+
+    assert!(
+        policy_counts.contains_key(&SlashCommandObservability::RpcObservable),
+        "slash differential policy inventory should include RPC-observable commands"
+    );
+    assert!(
+        policy_counts.contains_key(&SlashCommandObservability::UiOnlyNeedsAdapter),
+        "slash differential policy inventory should name UI-only commands needing adapters"
+    );
+    assert!(
+        policy_counts.contains_key(&SlashCommandObservability::ExcludedFromPassEvidence),
+        "slash differential policy inventory should name excluded non-credential-free inputs"
+    );
+
+    Ok(())
 }
 
 /// Test response canonicalization functionality.
