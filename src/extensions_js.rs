@@ -21006,10 +21006,12 @@ if (typeof globalThis.Buffer === 'undefined') {
             return copyLen;
         }
         slice(start, end) {
-            const sliced = super.slice(start, end);
-            const buf = new Buffer(sliced.length);
-            buf.set(sliced);
-            return buf;
+            return this.subarray(start, end);
+        }
+        subarray(start, end) {
+            const sub = super.subarray(start, end);
+            Object.setPrototypeOf(sub, Buffer.prototype);
+            return sub;
         }
         indexOf(value, byteOffset, encoding) {
             let offset = Buffer._normalizeSearchOffset(this.length, byteOffset);

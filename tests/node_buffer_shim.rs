@@ -772,6 +772,26 @@ fn global_buffer_concat_rejects_non_arrays_like_node() {
 }
 
 #[test]
+fn global_buffer_slice_and_subarray_are_shared_buffer_views_like_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const buf = Buffer.from([1, 2, 3, 4]);
+        const sliced = buf.slice(1, 3);
+        sliced[0] = 9;
+        const sub = buf.subarray(2, 4);
+        sub[0] = 8;
+        return [
+            sliced.toString("hex"),
+            buf.toString("hex"),
+            Buffer.isBuffer(sliced),
+            Buffer.isBuffer(sub),
+        ].join("|");
+    })()"#,
+    );
+    assert_eq!(result, "0908|01090804|true|true");
+}
+
+#[test]
 fn global_buffer_unknown_encoding_strict_entrypoints_match_node() {
     let result = eval_global_buffer(
         r#"(() => {
