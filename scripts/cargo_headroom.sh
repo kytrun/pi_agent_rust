@@ -42,6 +42,11 @@ Environment:
                               Local cargo/rustc process cap for heavy gates
   PI_CARGO_PROCESS_COUNT      Test/operator override for observed process count
   PI_CARGO_FORCE_ADMIT        Set to 1 to override local process pressure
+  PI_CARGO_INCLUDE_SCRATCH_CLEANUP
+                              Set to 1 to include scratch cleanup pressure on
+                              allow decisions too; backoff/degraded decisions
+                              include it automatically
+  PI_CARGO_SCRATCH_PLAN_JSON  Test/operator override containing planner JSON
 EOF
 }
 
@@ -346,6 +351,180 @@ admission_action_for_decision() {
     esac
 }
 
+scratch_cleanup_pressure_not_checked() {
+    local reason="$1"
+    printf '{"schema":"pi.cargo_headroom.scratch_cleanup_pressure.v1","status":"not_checked","recommended_action":"none","reason":"%s","source_kind":"none","cleanup_command_authorized":false,"destructive_actions_executed":false,"delete_apply_mode_available":false,"arg_max_safe_scan":null,"matched_entries":null,"listed_entries":null,"omitted_entries":null,"shallow_bytes":null,"by_cleanup_safety":{},"by_owner_marker_status":{},"risk_flags":{"arg_max_prone":false,"unknown_owner_entries":0,"active_owner_markers":0},"warnings":[],"operator_note":"scratch cleanup planner was not run"}' \
+        "$(json_escape "$reason")"
+}
+
+scratch_cleanup_pressure_unavailable() {
+    local reason="$1"
+    local detail="$2"
+    printf '{"schema":"pi.cargo_headroom.scratch_cleanup_pressure.v1","status":"unavailable","recommended_action":"manual_review","reason":"%s","detail":"%s","source_kind":"none","cleanup_command_authorized":false,"destructive_actions_executed":false,"delete_apply_mode_available":false,"arg_max_safe_scan":null,"matched_entries":null,"listed_entries":null,"omitted_entries":null,"shallow_bytes":null,"by_cleanup_safety":{},"by_owner_marker_status":{},"risk_flags":{"arg_max_prone":false,"unknown_owner_entries":0,"active_owner_markers":0},"warnings":[],"operator_note":"scratch cleanup planner did not run; do not infer cleanup safety"}' \
+        "$(json_escape "$reason")" \
+        "$(json_escape "$detail")"
+}
+
+summarize_scratch_cleanup_plan() {
+    local raw="$1"
+    local source_kind="$2"
+    SCRATCH_PLAN_RAW="$raw" SCRATCH_PLAN_SOURCE_KIND="$source_kind" python3 - <<'PY'
+import json
+import os
+
+
+def as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+raw = os.environ.get("SCRATCH_PLAN_RAW", "")
+source_kind = os.environ.get("SCRATCH_PLAN_SOURCE_KIND", "unknown")
+try:
+    plan = json.loads(raw)
+except json.JSONDecodeError as exc:
+    print(json.dumps({
+        "schema": "pi.cargo_headroom.scratch_cleanup_pressure.v1",
+        "status": "malformed",
+        "recommended_action": "manual_review",
+        "reason": "planner_json_malformed",
+        "detail": str(exc),
+        "source_kind": source_kind,
+        "cleanup_command_authorized": False,
+        "destructive_actions_executed": False,
+        "delete_apply_mode_available": False,
+        "arg_max_safe_scan": None,
+        "matched_entries": None,
+        "listed_entries": None,
+        "omitted_entries": None,
+        "shallow_bytes": None,
+        "by_cleanup_safety": {},
+        "by_owner_marker_status": {},
+        "risk_flags": {
+            "arg_max_prone": False,
+            "unknown_owner_entries": 0,
+            "active_owner_markers": 0,
+        },
+        "warnings": [],
+        "operator_note": "planner output was malformed; do not infer cleanup safety",
+    }, sort_keys=True, separators=(",", ":")))
+    raise SystemExit
+
+if not isinstance(plan, dict):
+    plan = {}
+totals = plan.get("totals")
+if not isinstance(totals, dict):
+    totals = {}
+by_cleanup_safety = totals.get("by_cleanup_safety")
+if not isinstance(by_cleanup_safety, dict):
+    by_cleanup_safety = {}
+by_owner_marker_status = totals.get("by_owner_marker_status")
+if not isinstance(by_owner_marker_status, dict):
+    by_owner_marker_status = {}
+
+matched_entries = as_int(totals.get("matched_entries"))
+listed_entries = as_int(totals.get("listed_entries"))
+omitted_entries = as_int(totals.get("omitted_entries"))
+shallow_bytes = as_int(totals.get("shallow_bytes"))
+unknown_owner_entries = (
+    as_int(by_cleanup_safety.get("unknown_owner_fail_closed"))
+    + as_int(by_cleanup_safety.get("unknown_owner_malformed_marker_fail_closed"))
+)
+active_owner_markers = as_int(by_owner_marker_status.get("active"))
+arg_max_prone = matched_entries > 1000
+
+status = "ok" if plan.get("schema") == "pi.scratch_cleanup_plan.v1" else "malformed"
+unsafe_planner = bool(plan.get("destructive_actions_executed")) or bool(
+    plan.get("delete_apply_mode_available")
+)
+if unsafe_planner:
+    status = "unsafe"
+
+if unsafe_planner:
+    recommended_action = "backoff"
+    reason = "planner_reported_destructive_capability"
+elif active_owner_markers > 0:
+    recommended_action = "preserve_active_targets"
+    reason = "active_owner_markers_present"
+elif matched_entries > 0:
+    recommended_action = "manual_review"
+    reason = "cleanup_candidates_need_approval"
+else:
+    recommended_action = "none"
+    reason = "no_cleanup_candidates"
+
+warnings = plan.get("warnings")
+if not isinstance(warnings, list):
+    warnings = []
+warnings = [str(item) for item in warnings[:8]]
+
+print(json.dumps({
+    "schema": "pi.cargo_headroom.scratch_cleanup_pressure.v1",
+    "status": status,
+    "recommended_action": recommended_action,
+    "reason": reason,
+    "source_kind": source_kind,
+    "planner_schema": plan.get("schema"),
+    "owner_marker_schema": (
+        plan.get("owner_marker_contract", {}).get("schema")
+        if isinstance(plan.get("owner_marker_contract"), dict)
+        else None
+    ),
+    "cleanup_command_authorized": False,
+    "destructive_actions_executed": bool(plan.get("destructive_actions_executed")),
+    "delete_apply_mode_available": bool(plan.get("delete_apply_mode_available")),
+    "arg_max_safe_scan": plan.get("arg_max_safe_scan"),
+    "matched_entries": matched_entries,
+    "listed_entries": listed_entries,
+    "omitted_entries": omitted_entries,
+    "shallow_bytes": shallow_bytes,
+    "by_cleanup_safety": by_cleanup_safety,
+    "by_owner_marker_status": by_owner_marker_status,
+    "risk_flags": {
+        "arg_max_prone": arg_max_prone,
+        "unknown_owner_entries": unknown_owner_entries,
+        "active_owner_markers": active_owner_markers,
+    },
+    "warnings": warnings,
+    "operator_note": plan.get(
+        "operator_note",
+        "scratch cleanup planner output is advisory only; do not infer cleanup safety",
+    ),
+}, sort_keys=True, separators=(",", ":")))
+PY
+}
+
+scratch_cleanup_pressure_json() {
+    local decision="$1"
+    local raw
+
+    if [[ "$decision" == "allow" && "${PI_CARGO_INCLUDE_SCRATCH_CLEANUP:-0}" != "1" ]]; then
+        scratch_cleanup_pressure_not_checked "admission_allowed"
+        return 0
+    fi
+
+    if [[ -n "${PI_CARGO_SCRATCH_PLAN_JSON:-}" ]]; then
+        summarize_scratch_cleanup_plan "$PI_CARGO_SCRATCH_PLAN_JSON" "env_override"
+        return 0
+    fi
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        scratch_cleanup_pressure_unavailable "python3_not_found" ""
+        return 0
+    fi
+    if [[ ! -f "$SCRIPT_DIR/plan_scratch_cleanup.py" ]]; then
+        scratch_cleanup_pressure_unavailable "planner_not_found" "$SCRIPT_DIR/plan_scratch_cleanup.py"
+        return 0
+    fi
+    if ! raw="$(python3 "$SCRIPT_DIR/plan_scratch_cleanup.py" --limit 0 --json 2>&1)"; then
+        scratch_cleanup_pressure_unavailable "planner_failed" "$raw"
+        return 0
+    fi
+    summarize_scratch_cleanup_plan "$raw" "planner"
+}
+
 is_safe_local_command() {
     local subcommand="$1"
     shift || true
@@ -539,7 +718,7 @@ emit_admission_decision() {
     local command_class="$4"
     local rch_detail="$5"
     shift 5
-    local admission_action command_text json planned_command recommended_target_dir recommended_tmpdir target_remediation tmpdir_remediation
+    local admission_action command_text json planned_command recommended_target_dir recommended_tmpdir scratch_pressure target_remediation tmpdir_remediation
 
     admission_action="$(admission_action_for_decision "$decision")"
     command_text="$(cargo_command_string "$@")"
@@ -548,7 +727,8 @@ emit_admission_decision() {
     recommended_tmpdir="$BUILD_ROOT/$(safe_agent_suffix)/tmp"
     target_remediation="Set CARGO_TARGET_DIR or pass --target-dir to an off-repo scratch path such as $recommended_target_dir; current CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
     tmpdir_remediation="Set TMPDIR or pass --tmpdir to an off-repo scratch path such as $recommended_tmpdir; current TMPDIR=$TMPDIR"
-    json="{\"schema\":\"pi.cargo_headroom.admission.v1\",\"decision\":\"$(json_escape "$decision")\",\"admission_action\":\"$(json_escape "$admission_action")\",\"requested_runner\":\"$(json_escape "$RUNNER")\",\"resolved_runner\":\"$(json_escape "$resolved_runner")\",\"reason\":\"$(json_escape "$reason")\",\"command_class\":\"$(json_escape "$command_class")\",\"allow_local_fallback\":$(if [[ "$ALLOW_LOCAL_FALLBACK" == "1" ]]; then echo true; else echo false; fi),\"force_override\":$(if [[ "$FORCE_ADMIT" == "1" ]]; then echo true; else echo false; fi),\"cargo_target_dir\":\"$(json_escape "$CARGO_TARGET_DIR")\",\"tmpdir\":\"$(json_escape "$TMPDIR")\",\"recommended_cargo_target_dir\":\"$(json_escape "$recommended_target_dir")\",\"recommended_tmpdir\":\"$(json_escape "$recommended_tmpdir")\",\"storage_remediation\":{\"cargo_target_dir\":\"$(json_escape "$target_remediation")\",\"tmpdir\":\"$(json_escape "$tmpdir_remediation")\"},\"cargo_command\":\"$(json_escape "$command_text")\",\"planned_command\":\"$(json_escape "$planned_command")\",\"local_process_pressure\":$LOCAL_PROCESS_PRESSURE_JSON,\"rch_detail\":\"$(json_escape "$rch_detail")\",\"rch_queue_forecast\":$RCH_QUEUE_FORECAST_JSON}"
+    scratch_pressure="$(scratch_cleanup_pressure_json "$decision")"
+    json="{\"schema\":\"pi.cargo_headroom.admission.v1\",\"decision\":\"$(json_escape "$decision")\",\"admission_action\":\"$(json_escape "$admission_action")\",\"requested_runner\":\"$(json_escape "$RUNNER")\",\"resolved_runner\":\"$(json_escape "$resolved_runner")\",\"reason\":\"$(json_escape "$reason")\",\"command_class\":\"$(json_escape "$command_class")\",\"allow_local_fallback\":$(if [[ "$ALLOW_LOCAL_FALLBACK" == "1" ]]; then echo true; else echo false; fi),\"force_override\":$(if [[ "$FORCE_ADMIT" == "1" ]]; then echo true; else echo false; fi),\"cargo_target_dir\":\"$(json_escape "$CARGO_TARGET_DIR")\",\"tmpdir\":\"$(json_escape "$TMPDIR")\",\"recommended_cargo_target_dir\":\"$(json_escape "$recommended_target_dir")\",\"recommended_tmpdir\":\"$(json_escape "$recommended_tmpdir")\",\"storage_remediation\":{\"cargo_target_dir\":\"$(json_escape "$target_remediation")\",\"tmpdir\":\"$(json_escape "$tmpdir_remediation")\"},\"cargo_command\":\"$(json_escape "$command_text")\",\"planned_command\":\"$(json_escape "$planned_command")\",\"local_process_pressure\":$LOCAL_PROCESS_PRESSURE_JSON,\"scratch_cleanup_pressure\":$scratch_pressure,\"rch_detail\":\"$(json_escape "$rch_detail")\",\"rch_queue_forecast\":$RCH_QUEUE_FORECAST_JSON}"
 
     echo "$json"
     if [[ -n "$DECISION_JSON_PATH" ]]; then
