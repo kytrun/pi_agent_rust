@@ -20905,6 +20905,15 @@ if (typeof globalThis.Buffer === 'undefined') {
             }
             return n;
         }
+        static _checkedSize(size) {
+            if (typeof size !== 'number') {
+                throw new TypeError('The size argument must be a number');
+            }
+            if (!Number.isFinite(size) || size < 0) {
+                throw new RangeError('The size argument is out of range');
+            }
+            return Math.floor(size);
+        }
         static _fillStartBound(value, defaultValue) {
             const n = value === undefined ? defaultValue : Number(value);
             if (!Number.isInteger(n) || n < 0) {
@@ -20966,11 +20975,13 @@ if (typeof globalThis.Buffer === 'undefined') {
             throw new TypeError('Buffer.from: unsupported input');
         }
         static alloc(size, fill, encoding) {
-            const buf = new Buffer(size);
-            if (fill !== undefined) buf.fill(fill, 0, size, encoding);
+            const len = Buffer._checkedSize(size);
+            const buf = new Buffer(len);
+            if (fill !== undefined) buf.fill(fill, 0, len, encoding);
             return buf;
         }
-        static allocUnsafe(size) { return new Buffer(size); }
+        static allocUnsafe(size) { return new Buffer(Buffer._checkedSize(size)); }
+        static allocUnsafeSlow(size) { return Buffer.allocUnsafe(size); }
         static isBuffer(obj) { return obj instanceof Buffer; }
         static isEncoding(enc) {
             return ['utf8','utf-8','ascii','latin1','binary','base64','hex','ucs2','ucs-2','utf16le','utf-16le'].includes(String(enc).toLowerCase());

@@ -722,6 +722,40 @@ fn global_buffer_available() {
 }
 
 #[test]
+fn global_buffer_allocation_size_vectors_match_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const cases = [
+            ["zero", 0],
+            ["three", 3],
+            ["fraction", 3.5],
+            ["string", "3"],
+            ["negative", -1],
+            ["nan", NaN],
+            ["infinity", Infinity],
+            ["null", null],
+            ["undefined", undefined],
+        ];
+        const methods = ["alloc", "allocUnsafe", "allocUnsafeSlow"];
+        const entries = methods.map((method) => {
+            return method + "=" + cases.map(([label, size]) => {
+                try {
+                    return label + ":" + Buffer[method](size).length;
+                } catch (e) {
+                    return label + ":" + e.name;
+                }
+            }).join(",");
+        });
+        return "hasSlow:" + typeof Buffer.allocUnsafeSlow + "|" + entries.join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "hasSlow:function|alloc=zero:0,three:3,fraction:3,string:TypeError,negative:RangeError,nan:RangeError,infinity:RangeError,null:TypeError,undefined:TypeError|allocUnsafe=zero:0,three:3,fraction:3,string:TypeError,negative:RangeError,nan:RangeError,infinity:RangeError,null:TypeError,undefined:TypeError|allocUnsafeSlow=zero:0,three:3,fraction:3,string:TypeError,negative:RangeError,nan:RangeError,infinity:RangeError,null:TypeError,undefined:TypeError"
+    );
+}
+
+#[test]
 fn global_buffer_search_semantics_match_node() {
     let result = eval_global_buffer(
         r#"(() => {
