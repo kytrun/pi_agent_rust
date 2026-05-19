@@ -1423,6 +1423,37 @@ fn global_buffer_unknown_encoding_strict_entrypoints_match_node() {
 }
 
 #[test]
+fn global_buffer_to_string_range_vectors_match_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const b = Buffer.from([0x61, 0x62, 0x63, 0x64]);
+        const cases = [
+            ["default", () => b.toString()],
+            ["start1", () => b.toString("utf8", 1)],
+            ["range1_3", () => b.toString("utf8", 1, 3)],
+            ["neg_start", () => b.toString("utf8", -2)],
+            ["neg_end", () => b.toString("utf8", 0, -1)],
+            ["start_oob", () => b.toString("utf8", 99)],
+            ["end_oob", () => b.toString("utf8", 1, 99)],
+            ["start_gt_end", () => b.toString("utf8", 3, 1)],
+            ["fraction", () => b.toString("utf8", 1.9, 3.9)],
+            ["nan", () => b.toString("utf8", NaN, 3)],
+            ["inf", () => b.toString("utf8", Infinity)],
+            ["neg_inf_start", () => b.toString("utf8", -Infinity, 2)],
+            ["neg_inf_end", () => b.toString("utf8", 0, -Infinity)],
+            ["null_start", () => b.toString("utf8", null, 2)],
+            ["undefined_end", () => b.toString("utf8", 1, undefined)],
+        ];
+        return cases.map(([label, run]) => label + ":" + run()).join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "default:abcd|start1:bcd|range1_3:bc|neg_start:abcd|neg_end:|start_oob:|end_oob:bcd|start_gt_end:|fraction:bc|nan:abc|inf:|neg_inf_start:ab|neg_inf_end:|null_start:ab|undefined_end:bcd"
+    );
+}
+
+#[test]
 fn global_buffer_utf16le_alias_encodings_match_node_vectors() {
     let result = eval_global_buffer(
         r#"(() => {

@@ -20921,6 +20921,15 @@ if (typeof globalThis.Buffer === 'undefined') {
             }
             return n;
         }
+        static _toStringBound(value, defaultValue, length) {
+            const number = value === undefined ? defaultValue : Number(value);
+            if (Number.isNaN(number) || number === -Infinity) return 0;
+            if (number === Infinity) return length;
+            const n = Math.trunc(number);
+            if (n < 0) return 0;
+            if (n > length) return length;
+            return n;
+        }
         static from(input, encoding, length) {
             if (typeof input === 'string') {
                 const enc = __pi_buffer_normalize_encoding(encoding);
@@ -21028,8 +21037,8 @@ if (typeof globalThis.Buffer === 'undefined') {
             return 0;
         }
         toString(encoding, start, end) {
-            const s = start || 0;
-            const e = end !== undefined ? end : this.length;
+            const s = Buffer._toStringBound(start, 0, this.length);
+            const e = Buffer._toStringBound(end, this.length, this.length);
             const view = this.subarray(s, e);
             const enc = __pi_buffer_normalize_encoding(encoding);
             if (enc === 'base64') {
