@@ -32,6 +32,16 @@ GOLDEN_ROOT = Path("tests/golden_corpus/semantic_validation_route")
 ROUTE_PLAN_GOLDEN = "route_plan_projection.json"
 NO_MOCK_GOLDEN = "no_mock_git_beads_projection.json"
 UPDATE_GOLDEN_ENV = "UPDATE_SEMANTIC_ROUTE_GOLDEN"
+SEMANTIC_ROUTE_CLOSEOUT_CONTRACT_SCHEMA = (
+    "pi.validation.semantic_route_plan.closeout_gate_contract.v1"
+)
+SEMANTIC_ROUTE_CLOSEOUT_SCHEMA = "pi.validation.semantic_route_plan.closeout_gate.v1"
+SEMANTIC_ROUTE_CLOSEOUT_CONTRACT_PATH = Path(
+    "docs/contracts/semantic-validation-route-closeout-gate-contract.json"
+)
+SEMANTIC_ROUTE_CLOSEOUT_EVIDENCE_PATH = Path(
+    "docs/evidence/semantic-validation-route-closeout-gate.json"
+)
 
 REQUIRED_TOP_LEVEL_KEYS = (
     "schema",
@@ -1325,6 +1335,171 @@ def assert_named_golden(payload: dict[str, Any], *, filename: str, label: str) -
         )
 
 
+def repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def load_repo_json(relative_path: Path) -> dict[str, Any]:
+    return load_json(repo_root() / relative_path)
+
+
+def require_ids(
+    *,
+    actual: set[str],
+    required: list[str],
+    label: str,
+) -> None:
+    missing = sorted(set(required) - actual)
+    if missing:
+        raise RoutePlanError(f"{label} missing required ids: {', '.join(missing)}")
+
+
+def assert_semantic_route_closeout_gate(
+    gate: dict[str, Any],
+    contract: dict[str, Any],
+) -> dict[str, Any]:
+    if contract.get("schema") != SEMANTIC_ROUTE_CLOSEOUT_CONTRACT_SCHEMA:
+        raise RoutePlanError("semantic route closeout contract schema mismatch")
+    if contract.get("decision_gate_schema") != SEMANTIC_ROUTE_CLOSEOUT_SCHEMA:
+        raise RoutePlanError("semantic route closeout decision schema mismatch")
+    if gate.get("schema") != SEMANTIC_ROUTE_CLOSEOUT_SCHEMA:
+        raise RoutePlanError("semantic route closeout gate schema mismatch")
+    if gate.get("purpose") != contract.get("purpose"):
+        raise RoutePlanError("semantic route closeout purpose mismatch")
+    if gate.get("status") not in set(contract.get("allowed_statuses", [])):
+        raise RoutePlanError("semantic route closeout status is not allowed")
+    for key in contract.get("required_top_level_keys", []):
+        if key not in gate:
+            raise RoutePlanError(f"semantic route closeout missing key: {key}")
+
+    child_entries = gate.get("child_artifact_map")
+    if not isinstance(child_entries, list):
+        raise RoutePlanError("semantic route closeout child_artifact_map must be a list")
+    child_ids = {
+        str(item.get("bead_id"))
+        for item in child_entries
+        if isinstance(item, dict) and item.get("bead_id")
+    }
+    require_ids(
+        actual=child_ids,
+        required=contract.get("required_child_bead_ids", []),
+        label="semantic route closeout child map",
+    )
+    for item in child_entries:
+        if not isinstance(item, dict):
+            raise RoutePlanError("semantic route closeout child map entry must be object")
+        if item.get("status") != "closed":
+            raise RoutePlanError(f"child bead is not closed: {item.get('bead_id')}")
+        for key in contract.get("required_child_map_fields", []):
+            value = item.get(key)
+            if value is None or value == "" or value == []:
+                raise RoutePlanError(
+                    f"child bead {item.get('bead_id')} missing {key}"
+                )
+
+    checks = gate.get("required_checks")
+    if not isinstance(checks, list):
+        raise RoutePlanError("semantic route closeout required_checks must be a list")
+    check_ids = {
+        str(item.get("id"))
+        for item in checks
+        if isinstance(item, dict) and item.get("id")
+    }
+    require_ids(
+        actual=check_ids,
+        required=contract.get("required_check_ids", []),
+        label="semantic route closeout checks",
+    )
+    failing_checks = [
+        item.get("id")
+        for item in checks
+        if isinstance(item, dict) and item.get("status") != "pass"
+    ]
+    if failing_checks:
+        raise RoutePlanError(
+            "semantic route closeout checks failed: " + ", ".join(map(str, failing_checks))
+        )
+
+    boundary_checks = gate.get("source_boundary_checks")
+    if not isinstance(boundary_checks, list):
+        raise RoutePlanError("semantic route closeout boundary checks must be a list")
+    boundary_ids = {
+        str(item.get("id"))
+        for item in boundary_checks
+        if isinstance(item, dict) and item.get("id")
+    }
+    require_ids(
+        actual=boundary_ids,
+        required=contract.get("required_source_boundary_ids", []),
+        label="semantic route closeout source boundaries",
+    )
+    if any(
+        isinstance(item, dict) and item.get("status") != "pass"
+        for item in boundary_checks
+    ):
+        raise RoutePlanError("semantic route closeout source boundary check failed")
+
+    quality_gates = gate.get("quality_gate_results")
+    if not isinstance(quality_gates, list):
+        raise RoutePlanError("semantic route closeout quality gates must be a list")
+    quality_ids = {
+        str(item.get("id"))
+        for item in quality_gates
+        if isinstance(item, dict) and item.get("id")
+    }
+    require_ids(
+        actual=quality_ids,
+        required=contract.get("required_quality_gate_ids", []),
+        label="semantic route closeout quality gates",
+    )
+    if any(isinstance(item, dict) and item.get("status") != "pass" for item in quality_gates):
+        raise RoutePlanError("semantic route closeout quality gate failed")
+
+    negative_controls = gate.get("negative_controls")
+    if not isinstance(negative_controls, list):
+        raise RoutePlanError("semantic route closeout negative controls must be a list")
+    negative_ids = {
+        str(item.get("id"))
+        for item in negative_controls
+        if isinstance(item, dict) and item.get("id")
+    }
+    require_ids(
+        actual=negative_ids,
+        required=contract.get("required_negative_control_ids", []),
+        label="semantic route closeout negative controls",
+    )
+    if any(
+        isinstance(item, dict) and item.get("status") != "pass"
+        for item in negative_controls
+    ):
+        raise RoutePlanError("semantic route closeout negative control failed")
+
+    boundaries = gate.get("claim_boundaries")
+    if not isinstance(boundaries, dict):
+        raise RoutePlanError("semantic route closeout claim boundaries must be an object")
+    for key in contract.get("required_false_claim_boundary_flags", []):
+        if boundaries.get(key) is not False:
+            raise RoutePlanError(f"semantic route closeout boundary must be false: {key}")
+    if gate.get("decision") not in set(contract.get("allowed_decisions", [])):
+        raise RoutePlanError("semantic route closeout decision is not allowed")
+    if gate.get("follow_up_required") not in {True, False}:
+        raise RoutePlanError("semantic route closeout follow_up_required must be boolean")
+    return {
+        "schema": gate["schema"],
+        "status": gate["status"],
+        "decision": gate["decision"],
+        "child_count": len(child_entries),
+        "quality_gate_count": len(quality_gates),
+        "negative_control_count": len(negative_controls),
+    }
+
+
+def validate_checked_in_closeout_gate() -> dict[str, Any]:
+    contract = load_repo_json(SEMANTIC_ROUTE_CLOSEOUT_CONTRACT_PATH)
+    gate = load_repo_json(SEMANTIC_ROUTE_CLOSEOUT_EVIDENCE_PATH)
+    return assert_semantic_route_closeout_gate(gate, contract)
+
+
 def command_projection(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
@@ -1945,6 +2120,7 @@ def run_self_test() -> dict[str, Any]:
     negative_results = negative_control_results(provider_plan)
     route_projection["negative_controls"] = negative_results
     no_mock_projection = run_no_mock_git_beads_smoke()
+    closeout_gate = validate_checked_in_closeout_gate()
     assert_named_golden(
         route_projection,
         filename=ROUTE_PLAN_GOLDEN,
@@ -1960,6 +2136,7 @@ def run_self_test() -> dict[str, Any]:
         if all(item["status"] == "pass" for item in results)
         and all(item["status"] == "pass" for item in negative_results)
         and no_mock_projection["status"] == "pass"
+        and closeout_gate["status"] == "pass"
         and all(
             item["status"] == "pass"
             for item in no_mock_projection.get("assertions", [])
@@ -1985,6 +2162,7 @@ def run_self_test() -> dict[str, Any]:
             "beads_open_count": no_mock_projection["beads_open_count"],
             "assertions": no_mock_projection["assertions"],
         },
+        "closeout_gate": closeout_gate,
     }
 
 

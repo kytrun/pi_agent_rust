@@ -1,0 +1,483 @@
+{
+  "schema": "pi.validation.semantic_route_plan.closeout_gate.v1",
+  "generated_at": "2026-05-19T04:40:00Z",
+  "status": "pass",
+  "purpose": "prompt_to_artifact_semantic_validation_route_closeout_gate_not_source_of_truth",
+  "parent_epic": {
+    "id": "bd-4w2mw",
+    "title": "Twelfth-wave semantic validation routing and cache-aware swarm scheduler",
+    "status_before_closeout": "open"
+  },
+  "final_gate_bead": {
+    "id": "bd-4w2mw.7",
+    "title": "SVR-7: Closeout gate for semantic validation routing",
+    "status_before_closeout": "in_progress",
+    "commit_note": "This evidence is committed by the closeout commit; git is the source of truth for the final hash."
+  },
+  "operator_summary": "Semantic validation routing is implemented as read-only advisory operator evidence: it inventories route inputs, emits route plans, adds cache/coalescing advice, joins coordination admission, projects into runpacks, freezes golden/no-mock evidence, and records final source-boundary checks.",
+  "required_checks": [
+    {
+      "id": "child_beads_closed",
+      "status": "pass",
+      "evidence": [
+        ".beads/issues.jsonl",
+        "bd-4w2mw.1 through bd-4w2mw.6 are closed before this final gate closes"
+      ]
+    },
+    {
+      "id": "child_artifact_mapping",
+      "status": "pass",
+      "evidence": [
+        "child_artifact_map"
+      ]
+    },
+    {
+      "id": "semantic_route_inventory",
+      "status": "pass",
+      "evidence": [
+        "docs/evidence/semantic-validation-route-inventory.json"
+      ]
+    },
+    {
+      "id": "semantic_route_planner",
+      "status": "pass",
+      "evidence": [
+        "scripts/plan_semantic_validation_route.py",
+        "pi.validation.semantic_route_plan.v1"
+      ]
+    },
+    {
+      "id": "cache_heat_and_coalescing",
+      "status": "pass",
+      "evidence": [
+        "cache_heat",
+        "coalescing_advice",
+        "tests/golden_corpus/semantic_validation_route/route_plan_projection.json"
+      ]
+    },
+    {
+      "id": "coordination_admission",
+      "status": "pass",
+      "evidence": [
+        "coordination_risk",
+        "coordination_admission",
+        "tests/golden_corpus/semantic_validation_route/route_plan_projection.json"
+      ]
+    },
+    {
+      "id": "runpack_projection",
+      "status": "pass",
+      "evidence": [
+        "scripts/build_swarm_operator_runpack.py",
+        "tests/golden_corpus/swarm_operator_runpack/semantic_route_runpack_projection.json",
+        "docs/swarm-operations-runbook.md"
+      ]
+    },
+    {
+      "id": "golden_no_mock_evidence",
+      "status": "pass",
+      "evidence": [
+        "tests/golden_corpus/semantic_validation_route/route_plan_projection.json",
+        "tests/golden_corpus/semantic_validation_route/no_mock_git_beads_projection.json"
+      ]
+    },
+    {
+      "id": "source_boundaries",
+      "status": "pass",
+      "evidence": [
+        "claim_boundaries",
+        "source_boundary_checks"
+      ]
+    },
+    {
+      "id": "pushed_commits",
+      "status": "pass",
+      "evidence": [
+        "35d66de7f",
+        "bc3cdd812",
+        "f6d9fdb95",
+        "74e309c3a",
+        "b53822c14",
+        "1f028c460"
+      ]
+    },
+    {
+      "id": "quality_gates",
+      "status": "pass",
+      "evidence": [
+        "quality_gate_results"
+      ]
+    },
+    {
+      "id": "final_br_ready_bv_checks",
+      "status": "pass",
+      "evidence": [
+        "br ready --json",
+        "bv --recipe actionable --robot-plan"
+      ]
+    }
+  ],
+  "child_artifact_map": [
+    {
+      "bead_id": "bd-4w2mw.1",
+      "title": "SVR-1: Inventory source-to-proof routing gaps and contract shape",
+      "status": "closed",
+      "commit": "35d66de7f",
+      "code_paths": [
+        "docs/evidence/semantic-validation-route-inventory.json"
+      ],
+      "docs_or_evidence_paths": [
+        "docs/evidence/semantic-validation-route-inventory.json"
+      ],
+      "test_paths": [
+        "docs/evidence/semantic-validation-route-inventory.json"
+      ],
+      "validation_commands": [
+        "python3 -m json.tool docs/evidence/semantic-validation-route-inventory.json >/dev/null",
+        "git diff --check",
+        "./scripts/reconcile_beads_ledger.sh"
+      ],
+      "close_reason": "Completed semantic validation route inventory artifact at docs/evidence/semantic-validation-route-inventory.json; defines source inventory, proposed route plan contract, negative controls, follow-on bead graph, and advisory claim boundaries.",
+      "claim_boundary_text": "Inventory is read-only design evidence; it does not execute cargo/RCH, mutate source systems, or authorize release/drop-in/performance claims.",
+      "negative_control": {
+        "id": "inventory_non_goal_boundaries",
+        "evidence": [
+          "non_goals",
+          "negative_controls"
+        ]
+      }
+    },
+    {
+      "bead_id": "bd-4w2mw.2",
+      "title": "SVR-2: Implement read-only semantic validation route planner",
+      "status": "closed",
+      "commit": "bc3cdd812",
+      "code_paths": [
+        "scripts/plan_semantic_validation_route.py"
+      ],
+      "docs_or_evidence_paths": [
+        "docs/evidence/semantic-validation-route-inventory.json"
+      ],
+      "test_paths": [
+        "scripts/plan_semantic_validation_route.py"
+      ],
+      "validation_commands": [
+        "python3 -m py_compile scripts/plan_semantic_validation_route.py",
+        "python3 scripts/plan_semantic_validation_route.py --self-test"
+      ],
+      "close_reason": "Implemented scripts/plan_semantic_validation_route.py as a read-only semantic route planner.",
+      "claim_boundary_text": "Planner emits advisory JSON only; it never executes listed validation commands, launches RCH, mutates Beads, mutates Agent Mail, mutates git, or deletes files.",
+      "negative_control": {
+        "id": "missing_scheduler_or_unknown_path_fails_closed",
+        "evidence": [
+          "missing_scheduler_plan_fails_closed",
+          "unknown_path"
+        ]
+      }
+    },
+    {
+      "bead_id": "bd-4w2mw.3",
+      "title": "SVR-3: Add RCH cache-heat and validation coalescing advice",
+      "status": "closed",
+      "commit": "f6d9fdb95",
+      "code_paths": [
+        "scripts/plan_semantic_validation_route.py"
+      ],
+      "docs_or_evidence_paths": [
+        "docs/evidence/semantic-validation-route-inventory.json"
+      ],
+      "test_paths": [
+        "scripts/plan_semantic_validation_route.py"
+      ],
+      "validation_commands": [
+        "python3 -m py_compile scripts/plan_semantic_validation_route.py",
+        "python3 scripts/plan_semantic_validation_route.py --self-test"
+      ],
+      "close_reason": "Added deterministic cache_heat and coalescing_advice sections to the semantic route planner.",
+      "claim_boundary_text": "Cache heat and coalescing are ordering hints only; proof-memory and RCH/CI remain the source of validation authority.",
+      "negative_control": {
+        "id": "stale_proof_memory_not_reuse_authority",
+        "evidence": [
+          "stale_proof_memory_blocks_reuse"
+        ]
+      }
+    },
+    {
+      "bead_id": "bd-4w2mw.4",
+      "title": "SVR-4: Join coordination collision risk into route admission",
+      "status": "closed",
+      "commit": "74e309c3a",
+      "code_paths": [
+        "scripts/plan_semantic_validation_route.py"
+      ],
+      "docs_or_evidence_paths": [
+        "docs/evidence/semantic-validation-route-inventory.json"
+      ],
+      "test_paths": [
+        "scripts/plan_semantic_validation_route.py"
+      ],
+      "validation_commands": [
+        "python3 -m py_compile scripts/plan_semantic_validation_route.py",
+        "python3 scripts/plan_semantic_validation_route.py --self-test"
+      ],
+      "close_reason": "Added coordination_risk plus enhanced coordination_admission output to the semantic route planner.",
+      "claim_boundary_text": "Coordination admission is advisory; Beads and Agent Mail remain the source of issue ownership and reservations.",
+      "negative_control": {
+        "id": "active_overlap_or_dirty_worktree_blocks",
+        "evidence": [
+          "active_overlap",
+          "dirty_worktree_admission_denied"
+        ]
+      }
+    },
+    {
+      "bead_id": "bd-4w2mw.5",
+      "title": "SVR-5: Project semantic route plans into swarm runpacks and docs",
+      "status": "closed",
+      "commit": "b53822c14",
+      "code_paths": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "docs_or_evidence_paths": [
+        "docs/contracts/swarm-operator-runpack-contract.json",
+        "docs/swarm-operations-runbook.md",
+        "tests/golden_corpus/swarm_operator_runpack/semantic_route_runpack_projection.json"
+      ],
+      "test_paths": [
+        "scripts/build_swarm_operator_runpack.py",
+        "tests/golden_corpus/swarm_operator_runpack/semantic_route_runpack_projection.json"
+      ],
+      "validation_commands": [
+        "python3 -m py_compile scripts/build_swarm_operator_runpack.py",
+        "python3 scripts/build_swarm_operator_runpack.py --self-test",
+        "python3 -m json.tool docs/contracts/swarm-operator-runpack-contract.json >/dev/null"
+      ],
+      "close_reason": "Projected semantic validation route plans into operator runpacks with optional input, Markdown summary, contract coverage, golden projection, and runbook guidance.",
+      "claim_boundary_text": "Runpack projection is handoff context only; it does not replace route source artifacts, Beads, Agent Mail, RCH, git, or claim-integrity gates.",
+      "negative_control": {
+        "id": "blocked_or_degraded_route_visible_in_runpack",
+        "evidence": [
+          "semantic_route_runpack_projection.json"
+        ]
+      }
+    },
+    {
+      "bead_id": "bd-4w2mw.6",
+      "title": "SVR-6: Add no-mock/golden semantic-route evidence tests",
+      "status": "closed",
+      "commit": "1f028c460",
+      "code_paths": [
+        "scripts/plan_semantic_validation_route.py"
+      ],
+      "docs_or_evidence_paths": [
+        "tests/golden_corpus/semantic_validation_route/route_plan_projection.json",
+        "tests/golden_corpus/semantic_validation_route/no_mock_git_beads_projection.json"
+      ],
+      "test_paths": [
+        "scripts/plan_semantic_validation_route.py",
+        "tests/golden_corpus/semantic_validation_route/route_plan_projection.json",
+        "tests/golden_corpus/semantic_validation_route/no_mock_git_beads_projection.json"
+      ],
+      "validation_commands": [
+        "python3 -m py_compile scripts/plan_semantic_validation_route.py",
+        "UPDATE_SEMANTIC_ROUTE_GOLDEN=1 python3 scripts/plan_semantic_validation_route.py --self-test",
+        "python3 scripts/plan_semantic_validation_route.py --self-test"
+      ],
+      "close_reason": "Added canonical semantic route golden projections and a no-mock temporary git/Beads smoke covering route, coordination, proof-memory, local-fallback, and advisory-boundary controls.",
+      "claim_boundary_text": "Goldens freeze deterministic route behavior; no-mock smoke uses temporary git/Beads state and does not invoke heavyweight Cargo or live provider/network calls.",
+      "negative_control": {
+        "id": "golden_negative_controls",
+        "evidence": [
+          "advisory_route_as_authority_rejected",
+          "file_deletion_authority_rejected",
+          "local_heavy_cargo_fallback_rejected",
+          "missing_scheduler_source_blocks_ready",
+          "stale_proof_memory_blocks_reuse"
+        ]
+      }
+    }
+  ],
+  "source_boundary_checks": [
+    {
+      "id": "beads_are_source_of_truth",
+      "status": "pass",
+      "evidence": ".beads/issues.jsonl remains the issue ledger."
+    },
+    {
+      "id": "agent_mail_is_coordination_authority",
+      "status": "pass",
+      "evidence": "Agent Mail remains the reservation/message ledger; route output only emits hints."
+    },
+    {
+      "id": "semantic_route_plan_is_advisory_only",
+      "status": "pass",
+      "evidence": "claim_boundaries.read_only=true and advisory evidence authority is false."
+    },
+    {
+      "id": "rch_required_for_heavy_cargo",
+      "status": "pass",
+      "evidence": "All heavy Cargo command templates use rch exec -- and local fallback rejection text."
+    },
+    {
+      "id": "staged_ubs_required",
+      "status": "pass",
+      "evidence": "staged UBS remains a commit gate."
+    },
+    {
+      "id": "beads_ledger_required",
+      "status": "pass",
+      "evidence": "./scripts/reconcile_beads_ledger.sh remains a commit gate."
+    },
+    {
+      "id": "no_file_deletion_authority",
+      "status": "pass",
+      "evidence": "Route and closeout claim boundaries do not authorize deletion."
+    },
+    {
+      "id": "no_release_performance_capacity_or_dropin_claims",
+      "status": "pass",
+      "evidence": "Closeout suppresses release, benchmark, capacity, performance, and drop-in claims."
+    },
+    {
+      "id": "no_live_provider_or_network_authority",
+      "status": "pass",
+      "evidence": "Self-tests use fixtures/temp git and do not call providers or network APIs."
+    },
+    {
+      "id": "closeout_does_not_replace_child_artifacts",
+      "status": "pass",
+      "evidence": "child_artifact_map points back to source files, goldens, docs, and Beads."
+    }
+  ],
+  "quality_gate_results": [
+    {
+      "id": "py_compile",
+      "status": "pass",
+      "command": "python3 -m py_compile scripts/plan_semantic_validation_route.py"
+    },
+    {
+      "id": "semantic_route_self_test",
+      "status": "pass",
+      "command": "python3 scripts/plan_semantic_validation_route.py --self-test"
+    },
+    {
+      "id": "json_contracts",
+      "status": "pass",
+      "command": "python3 -m json.tool docs/contracts/semantic-validation-route-closeout-gate-contract.json >/dev/null && python3 -m json.tool docs/evidence/semantic-validation-route-closeout-gate.json >/dev/null"
+    },
+    {
+      "id": "git_diff_check",
+      "status": "pass",
+      "command": "git diff --check && git diff --cached --check"
+    },
+    {
+      "id": "staged_ubs",
+      "status": "pass",
+      "command": "ubs --staged --only=rust .",
+      "note": "No staged Rust files for this docs/script evidence gate."
+    },
+    {
+      "id": "beads_ledger_reconcile",
+      "status": "pass",
+      "command": "./scripts/reconcile_beads_ledger.sh"
+    },
+    {
+      "id": "br_ready",
+      "status": "pass",
+      "command": "br ready --json"
+    },
+    {
+      "id": "bv_robot_plan",
+      "status": "pass",
+      "command": "bv --recipe actionable --robot-plan"
+    }
+  ],
+  "negative_controls": [
+    {
+      "id": "advisory_route_as_authority_rejected",
+      "status": "pass",
+      "evidence": "scripts/plan_semantic_validation_route.py self-test"
+    },
+    {
+      "id": "file_deletion_authority_rejected",
+      "status": "pass",
+      "evidence": "scripts/plan_semantic_validation_route.py self-test"
+    },
+    {
+      "id": "local_heavy_cargo_fallback_rejected",
+      "status": "pass",
+      "evidence": "scripts/plan_semantic_validation_route.py self-test"
+    },
+    {
+      "id": "missing_scheduler_source_blocks_ready",
+      "status": "pass",
+      "evidence": "scripts/plan_semantic_validation_route.py self-test"
+    },
+    {
+      "id": "stale_proof_memory_blocks_reuse",
+      "status": "pass",
+      "evidence": "scripts/plan_semantic_validation_route.py self-test"
+    },
+    {
+      "id": "closeout_boundary_flip_fails_contract",
+      "status": "pass",
+      "evidence": "assert_semantic_route_closeout_gate requires all forbidden claim flags to be false"
+    }
+  ],
+  "checklist": [
+    {
+      "id": "contract_and_evidence_exist",
+      "status": "pass",
+      "evidence": [
+        "docs/contracts/semantic-validation-route-closeout-gate-contract.json",
+        "docs/evidence/semantic-validation-route-closeout-gate.json"
+      ]
+    },
+    {
+      "id": "children_have_concrete_artifacts",
+      "status": "pass",
+      "evidence": [
+        "child_artifact_map"
+      ]
+    },
+    {
+      "id": "route_is_advisory_only",
+      "status": "pass",
+      "evidence": [
+        "source_boundary_checks",
+        "claim_boundaries"
+      ]
+    },
+    {
+      "id": "quality_gates_recorded",
+      "status": "pass",
+      "evidence": [
+        "quality_gate_results"
+      ]
+    }
+  ],
+  "missing_checks": [],
+  "remaining_follow_ups": [],
+  "known_limitations": [
+    "The final closeout commit hash is not embedded in this artifact to avoid circular self-reference; git refs and Beads close reasons are the source of truth after push.",
+    "The route planner is advisory and intentionally does not execute validation commands or reserve coordination resources."
+  ],
+  "claim_boundaries": {
+    "strict_dropin_or_release_claim_authorized": false,
+    "performance_or_capacity_claim_authorized": false,
+    "benchmark_claim_authorized": false,
+    "closeout_mutates_source_artifacts": false,
+    "closeout_mutates_agent_mail_rch_or_runtime": false,
+    "closeout_authorizes_file_deletion": false,
+    "closeout_runs_live_provider_or_network_calls": false,
+    "closeout_replaces_child_artifacts": false,
+    "closeout_replaces_source_artifacts": false,
+    "live_agent_mail_or_rch_mutation_authorized": false,
+    "local_heavy_cargo_fallback_authorized": false,
+    "parent_can_close_before_closeout_commit_is_pushed": false
+  },
+  "follow_up_required": false,
+  "follow_up_beads": [],
+  "decision": "close_final_gate_and_parent_epic",
+  "epic_can_close_after_this_commit": true
+}

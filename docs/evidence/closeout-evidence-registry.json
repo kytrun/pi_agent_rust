@@ -91,6 +91,17 @@
       "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
     },
     {
+      "artifact_path": "docs/evidence/semantic-validation-route-closeout-gate.json",
+      "contract_path": "docs/contracts/semantic-validation-route-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.validation.semantic_route_plan.closeout_gate.v1",
+      "source_bead_or_epic": "bd-4w2mw",
+      "reference_paths": [
+        "README.md",
+        "docs/swarm-operations-runbook.md"
+      ],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, performance evidence, drop-in certification, or source files."
+    },
+    {
       "artifact_path": "docs/evidence/seventh-wave-runtime-autonomy-closeout-gate.json",
       "contract_path": "docs/contracts/seventh-wave-runtime-autonomy-closeout-gate-contract.json",
       "decision_gate_schema": "pi.swarm.runtime_autonomy.closeout_gate.v1",
