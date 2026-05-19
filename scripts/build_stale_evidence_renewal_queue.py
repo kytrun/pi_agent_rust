@@ -27,10 +27,19 @@ CONTRACT_SCHEMA = "pi.swarm.stale_evidence_renewal_queue_contract.v1"
 FIXTURE_SCHEMA = "pi.swarm.stale_evidence_renewal_queue_fixtures.v1"
 ACTION_PLAN_SCHEMA = "pi.swarm.action_plan.v1"
 RUNPACK_INTEGRATION_SCHEMA = "pi.swarm.stale_evidence_renewal_runpack.v1"
+CACHE_BUDGET_SCHEMA = "pi.swarm.evidence_cache_budget.v1"
 CONTRACT_PATH = Path("docs/contracts/stale-evidence-renewal-queue-contract.json")
 FIXTURE_PATH = Path("tests/fixtures/stale_evidence_renewal_queue/scenarios.json")
 DEFAULT_FRESHNESS_HOURS = 336
 DEFAULT_MAX_ITEMS = 20
+DEFAULT_CACHE_BUDGET_BYTES = 256 * 1024 * 1024
+DEFAULT_CACHE_ROOTS = (
+    Path("docs/evidence"),
+    Path("tests/perf/reports"),
+    Path("tests/ext_conformance/reports"),
+    Path("tests/full_suite_gate"),
+    Path("tests/e2e_results"),
+)
 MTIME_SKEW_SECONDS = 2.0
 PATH_KEY_FRAGMENTS = ("path", "paths", "artifact", "artifacts", "evidence", "source")
 PATH_SUFFIXES = (".json", ".jsonl", ".md", ".rs", ".py", ".toml", ".sh", ".txt")
@@ -66,6 +75,13 @@ REASON_CODES = (
 )
 STATUS_ORDER = {"fresh": 0, "renewal_recommended": 1, "blocked": 2}
 SEVERITY_ORDER = {"info": 0, "medium": 1, "high": 2, "critical": 3}
+CACHE_CLASSIFICATIONS = {
+    "docs/evidence": "checked_in_evidence_source_of_truth",
+    "tests/perf/reports": "generated_perf_report_cache",
+    "tests/ext_conformance/reports": "generated_conformance_report_cache",
+    "tests/full_suite_gate": "generated_release_gate_report_cache",
+    "tests/e2e_results": "generated_e2e_report_cache",
+}
 
 
 class RenewalQueueError(Exception):
@@ -434,13 +450,196 @@ def discover_files(root: Path, patterns: list[str]) -> list[Path]:
     return sorted(set(files))
 
 
+def cache_root_classification(path: Path, source_root: Path) -> str:
+    relative = relative_path(path, source_root)
+    normalized = relative.rstrip("/")
+    for root, classification in CACHE_CLASSIFICATIONS.items():
+        if normalized == root or normalized.startswith(f"{root}/"):
+            return classification
+    return "operator_supplied_cache_root"
+
+
+def cache_file_record(
+    path: Path,
+    source_root: Path,
+    generated_at: datetime,
+) -> dict[str, Any]:
+    stat = path.stat()
+    mtime = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+    age_hours = round((generated_at - mtime).total_seconds() / 3600, 2)
+    return {
+        "path": relative_path(path, source_root),
+        "size_bytes": stat.st_size,
+        "mtime": mtime.isoformat(),
+        "age_hours": max(0.0, age_hours),
+    }
+
+
+def build_cache_root_budget(
+    root: Path,
+    *,
+    source_root: Path,
+    generated_at: datetime,
+    freshness_hours: int,
+    budget_bytes: int,
+    max_items: int,
+) -> dict[str, Any]:
+    root_text = relative_path(root, source_root)
+    classification = cache_root_classification(root, source_root)
+    if not root.exists():
+        return {
+            "root": root_text,
+            "classification": classification,
+            "root_status": "missing",
+            "budget_status": "not_present",
+            "budget_bytes": budget_bytes,
+            "file_count": 0,
+            "total_bytes": 0,
+            "stale_file_count": 0,
+            "oldest_mtime": None,
+            "newest_mtime": None,
+            "largest_files": [],
+            "stale_samples": [],
+        }
+    if not root.is_dir():
+        return {
+            "root": root_text,
+            "classification": classification,
+            "root_status": "not_directory",
+            "budget_status": "review",
+            "budget_bytes": budget_bytes,
+            "file_count": 0,
+            "total_bytes": 0,
+            "stale_file_count": 0,
+            "oldest_mtime": None,
+            "newest_mtime": None,
+            "largest_files": [],
+            "stale_samples": [],
+        }
+
+    records: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            records.append(cache_file_record(path, source_root, generated_at))
+        except OSError:
+            continue
+
+    total_bytes = sum(int(record["size_bytes"]) for record in records)
+    stale_records = [
+        record
+        for record in records
+        if float(record["age_hours"]) > freshness_hours
+    ]
+    over_budget = total_bytes > budget_bytes
+    if over_budget:
+        budget_status = "over_budget"
+    elif stale_records:
+        budget_status = "stale_pressure"
+    else:
+        budget_status = "ok"
+    mtimes = [str(record["mtime"]) for record in records]
+    return {
+        "root": root_text,
+        "classification": classification,
+        "root_status": "ok",
+        "budget_status": budget_status,
+        "budget_bytes": budget_bytes,
+        "file_count": len(records),
+        "total_bytes": total_bytes,
+        "stale_file_count": len(stale_records),
+        "oldest_mtime": min(mtimes) if mtimes else None,
+        "newest_mtime": max(mtimes) if mtimes else None,
+        "largest_files": sorted(
+            records,
+            key=lambda record: (-int(record["size_bytes"]), str(record["path"])),
+        )[:max_items],
+        "stale_samples": sorted(
+            stale_records,
+            key=lambda record: (-float(record["age_hours"]), str(record["path"])),
+        )[:max_items],
+    }
+
+
+def build_cache_budget(
+    *,
+    cache_roots: list[Path],
+    source_root: Path,
+    generated_at: datetime,
+    freshness_hours: int,
+    budget_bytes: int,
+    max_items: int,
+) -> dict[str, Any]:
+    root_summaries = [
+        build_cache_root_budget(
+            root,
+            source_root=source_root,
+            generated_at=generated_at,
+            freshness_hours=freshness_hours,
+            budget_bytes=budget_bytes,
+            max_items=max_items,
+        )
+        for root in cache_roots
+    ]
+    scanned_roots = [root for root in root_summaries if root["root_status"] == "ok"]
+    over_budget_roots = [
+        root for root in scanned_roots if root["budget_status"] == "over_budget"
+    ]
+    stale_roots = [
+        root for root in scanned_roots if int(root["stale_file_count"]) > 0
+    ]
+    total_bytes = sum(int(root["total_bytes"]) for root in scanned_roots)
+    file_count = sum(int(root["file_count"]) for root in scanned_roots)
+    stale_file_count = sum(int(root["stale_file_count"]) for root in scanned_roots)
+    status = "degraded" if over_budget_roots or stale_roots else "ready"
+    return {
+        "schema": CACHE_BUDGET_SCHEMA,
+        "generated_at": generated_at.isoformat(),
+        "status": status,
+        "purpose": "read_only_artifact_cache_budget_not_cleanup_authority",
+        "freshness_window_hours": freshness_hours,
+        "per_root_budget_bytes": budget_bytes,
+        "summary": {
+            "root_count": len(root_summaries),
+            "scanned_root_count": len(scanned_roots),
+            "file_count": file_count,
+            "total_bytes": total_bytes,
+            "stale_file_count": stale_file_count,
+            "over_budget_root_count": len(over_budget_roots),
+            "stale_root_count": len(stale_roots),
+            "missing_root_count": sum(
+                1 for root in root_summaries if root["root_status"] == "missing"
+            ),
+        },
+        "roots": root_summaries,
+        "largest_roots": sorted(
+            scanned_roots,
+            key=lambda root: (-int(root["total_bytes"]), str(root["root"])),
+        )[:max_items],
+        "guardrails": {
+            "read_only": True,
+            "no_file_deletion": True,
+            "no_evidence_regeneration": True,
+            "no_output_overwrite": True,
+            "explicit_operator_permission_required_for_cleanup": True,
+        },
+        "operator_note": (
+            "This budget is an inventory only. It does not classify any path as "
+            "safe to delete or authorize cleanup."
+        ),
+    }
+
+
 def build_queue(
     *,
     artifacts: list[Path],
     contract_paths: list[Path],
+    cache_roots: list[Path],
     source_root: Path,
     generated_at: datetime,
     freshness_hours: int,
+    cache_budget_bytes: int,
     max_items: int,
 ) -> dict[str, Any]:
     contract_index = build_contract_index(contract_paths)
@@ -465,8 +664,29 @@ def build_queue(
     blocked = sum(1 for item in queue if item["status"] == "blocked")
     recommended = sum(1 for item in queue if item["status"] == "renewal_recommended")
     fresh = sum(1 for item in items if item["status"] == "fresh")
-    status = "blocked" if blocked else "degraded" if recommended else "ready"
-    action_decision = "renew_stale_evidence" if queue else "implement_ready_work"
+    cache_budget = build_cache_budget(
+        cache_roots=cache_roots,
+        source_root=source_root,
+        generated_at=generated_at,
+        freshness_hours=freshness_hours,
+        budget_bytes=cache_budget_bytes,
+        max_items=max_items,
+    )
+    cache_degraded = cache_budget["status"] != "ready"
+    status = (
+        "blocked"
+        if blocked
+        else "degraded"
+        if recommended or cache_degraded
+        else "ready"
+    )
+    if queue:
+        action_decision = "renew_stale_evidence"
+    elif cache_degraded:
+        action_decision = "review_artifact_cache_budget"
+    else:
+        action_decision = "implement_ready_work"
+    cache_summary = cache_budget["summary"]
     payload = {
         "schema": QUEUE_SCHEMA,
         "generated_at": generated_at.isoformat(),
@@ -481,7 +701,13 @@ def build_queue(
             "renewal_recommended_count": recommended,
             "blocked_count": blocked,
             "contract_count": len(contract_paths),
+            "cache_budget_status": cache_budget["status"],
+            "cache_total_bytes": cache_summary["total_bytes"],
+            "cache_file_count": cache_summary["file_count"],
+            "cache_stale_file_count": cache_summary["stale_file_count"],
+            "cache_over_budget_root_count": cache_summary["over_budget_root_count"],
         },
+        "cache_budget": cache_budget,
         "queue": queue[:max_items],
         "fresh_samples": [item for item in items if item["status"] == "fresh"][:max_items],
         "action_plan_integration": {
@@ -498,6 +724,8 @@ def build_queue(
             "operator_next_action": (
                 "Renew stale evidence before using runpack or release claims"
                 if queue
+                else "Review stale artifact cache budget before cleanup approval"
+                if cache_degraded
                 else "Evidence renewal queue is clean"
             ),
             "source_status": "ok",
@@ -505,6 +733,7 @@ def build_queue(
                 "stale_evidence_renewal_queue.status",
                 "stale_evidence_renewal_queue.summary.renewal_item_count",
                 "stale_evidence_renewal_queue.queue",
+                "stale_evidence_renewal_queue.cache_budget.summary",
             ],
         },
         "guardrails": {
@@ -533,6 +762,14 @@ def assert_queue_contract(queue: dict[str, Any]) -> None:
     assert queue.get("status") in set(contract.get("allowed_statuses", []))
     for key in contract.get("required_top_level_keys", []):
         assert key in queue, f"missing renewal queue key: {key}"
+    cache_budget = queue.get("cache_budget")
+    assert isinstance(cache_budget, dict)
+    assert cache_budget.get("schema") == contract.get("cache_budget_schema")
+    cache_guards = cache_budget.get("guardrails")
+    assert isinstance(cache_guards, dict)
+    assert cache_guards.get("read_only") is True
+    assert cache_guards.get("no_file_deletion") is True
+    assert cache_guards.get("no_evidence_regeneration") is True
     guards = queue.get("guardrails")
     assert isinstance(guards, dict)
     for guard in contract.get("required_true_guardrails", []):
@@ -587,12 +824,24 @@ def run_self_test() -> int:
         with tempfile.TemporaryDirectory(prefix="pi_stale_evidence_") as tmp:
             root = Path(tmp)
             artifacts, contracts = write_fixture_files(root, scenario)
+            scenario_cache_roots = (
+                scenario.get("cache_roots")
+                if isinstance(scenario.get("cache_roots"), list)
+                else []
+            )
             queue = build_queue(
                 artifacts=artifacts,
                 contract_paths=contracts,
+                cache_roots=[
+                    root / str(cache_root)
+                    for cache_root in scenario_cache_roots
+                ],
                 source_root=root,
                 generated_at=parse_utc(scenario.get("generated_at")) or datetime.now(timezone.utc),
                 freshness_hours=int(scenario.get("freshness_hours") or DEFAULT_FRESHNESS_HOURS),
+                cache_budget_bytes=int(
+                    scenario.get("cache_budget_bytes") or DEFAULT_CACHE_BUDGET_BYTES
+                ),
                 max_items=DEFAULT_MAX_ITEMS,
             )
             expected = scenario.get("expected") if isinstance(scenario.get("expected"), dict) else {}
@@ -614,11 +863,26 @@ def run_self_test() -> int:
                     for item in queue.get("queue", [])
                     for command_item in item.get("renewal_commands", [])
                 ), scenario.get("id")
+            if expected.get("cache_budget_status"):
+                assert (
+                    queue["cache_budget"]["status"] == expected["cache_budget_status"]
+                ), scenario.get("id")
+            if expected.get("cache_stale_file_count") is not None:
+                assert (
+                    queue["cache_budget"]["summary"]["stale_file_count"]
+                    == expected["cache_stale_file_count"]
+                ), scenario.get("id")
+            if expected.get("cache_over_budget_root_count") is not None:
+                assert (
+                    queue["cache_budget"]["summary"]["over_budget_root_count"]
+                    == expected["cache_over_budget_root_count"]
+                ), scenario.get("id")
             results.append(
                 {
                     "id": scenario.get("id"),
                     "status": queue["status"],
                     "renewal_item_count": queue["summary"]["renewal_item_count"],
+                    "cache_budget_status": queue["cache_budget"]["status"],
                 }
             )
     print(
@@ -641,6 +905,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--contract", dest="contracts", action="append", type=Path, default=[])
     parser.add_argument("--evidence-dir", type=Path, default=Path("docs/evidence"))
     parser.add_argument("--contract-dir", type=Path, default=Path("docs/contracts"))
+    parser.add_argument(
+        "--cache-root",
+        dest="cache_roots",
+        action="append",
+        type=Path,
+        default=[],
+        help="artifact cache root to budget; defaults to known evidence/perf/conformance roots",
+    )
+    parser.add_argument(
+        "--cache-budget-bytes",
+        type=int,
+        default=DEFAULT_CACHE_BUDGET_BYTES,
+        help="per-root advisory budget for evidence cache reports",
+    )
     parser.add_argument("--freshness-hours", type=int, default=DEFAULT_FRESHNESS_HOURS)
     parser.add_argument("--max-items", type=int, default=DEFAULT_MAX_ITEMS)
     parser.add_argument("--generated-at", help="override generated timestamp")
@@ -659,9 +937,15 @@ def main() -> int:
             raise RenewalQueueError("--freshness-hours must be non-negative")
         if args.max_items < 0:
             raise RenewalQueueError("--max-items must be non-negative")
+        if args.cache_budget_bytes < 0:
+            raise RenewalQueueError("--cache-budget-bytes must be non-negative")
         source_root = args.source_root.resolve()
         artifacts = [path if path.is_absolute() else source_root / path for path in args.artifacts]
         contracts = [path if path.is_absolute() else source_root / path for path in args.contracts]
+        cache_roots = [
+            path if path.is_absolute() else source_root / path
+            for path in (args.cache_roots or list(DEFAULT_CACHE_ROOTS))
+        ]
         if not artifacts:
             evidence_dir = args.evidence_dir if args.evidence_dir.is_absolute() else source_root / args.evidence_dir
             artifacts = discover_files(evidence_dir, ["*.json"])
@@ -671,9 +955,11 @@ def main() -> int:
         queue = build_queue(
             artifacts=artifacts,
             contract_paths=contracts,
+            cache_roots=cache_roots,
             source_root=source_root,
             generated_at=parse_utc(args.generated_at) or datetime.now(timezone.utc),
             freshness_hours=args.freshness_hours,
+            cache_budget_bytes=args.cache_budget_bytes,
             max_items=args.max_items,
         )
         if args.out_json:

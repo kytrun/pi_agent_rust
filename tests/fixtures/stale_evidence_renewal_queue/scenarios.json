@@ -215,6 +215,41 @@
         "action_plan_decision": "renew_stale_evidence",
         "requires_safe_command": true
       }
+    },
+    {
+      "id": "cache_budget_pressure",
+      "generated_at": "2026-05-16T08:00:00+00:00",
+      "freshness_hours": 24,
+      "cache_budget_bytes": 80,
+      "cache_roots": [
+        "tests/perf/reports",
+        "tests/ext_conformance/reports"
+      ],
+      "files": [
+        {
+          "path": "tests/perf/reports/old-large.json",
+          "mtime": "2026-05-10T00:00:00+00:00",
+          "content": "{\"schema\":\"pi.fixture.perf_report.v1\",\"generated_at\":\"2026-05-10T00:00:00+00:00\",\"payload\":\"large-fixture\"}\n"
+        },
+        {
+          "path": "tests/perf/reports/current-small.json",
+          "mtime": "2026-05-16T07:00:00+00:00",
+          "content": "{\"schema\":\"pi.fixture.perf_report.v1\",\"generated_at\":\"2026-05-16T07:00:00+00:00\"}\n"
+        },
+        {
+          "path": "tests/ext_conformance/reports/current.json",
+          "mtime": "2026-05-16T07:30:00+00:00",
+          "content": "{\"schema\":\"pi.fixture.conformance_report.v1\",\"generated_at\":\"2026-05-16T07:30:00+00:00\"}\n"
+        }
+      ],
+      "expected": {
+        "status": "degraded",
+        "renewal_item_count": 0,
+        "cache_budget_status": "degraded",
+        "cache_stale_file_count": 1,
+        "cache_over_budget_root_count": 2,
+        "action_plan_decision": "review_artifact_cache_budget"
+      }
     }
   ]
 }
