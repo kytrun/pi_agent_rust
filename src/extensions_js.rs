@@ -21045,10 +21045,10 @@ if (typeof globalThis.Buffer === 'undefined') {
         }
         compare(other, targetStart, targetEnd, sourceStart, sourceEnd) {
             if (!(other instanceof Uint8Array)) throw new TypeError('Argument must be a Buffer');
-            const ts = targetStart || 0;
-            const te = targetEnd !== undefined ? targetEnd : other.length;
-            const ss = sourceStart || 0;
-            const se = sourceEnd !== undefined ? sourceEnd : this.length;
+            const ts = Buffer._fillStartBound(targetStart, 0);
+            const te = Buffer._writeBound(targetEnd, other.length, other.length);
+            const ss = Buffer._fillStartBound(sourceStart, 0);
+            const se = Buffer._writeBound(sourceEnd, this.length, this.length);
             return Buffer.compare(this.subarray(ss, se), other.subarray(ts, te));
         }
         copy(target, targetStart, sourceStart, sourceEnd) {

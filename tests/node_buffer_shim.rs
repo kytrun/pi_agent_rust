@@ -1093,6 +1093,38 @@ fn global_buffer_compare_range_vectors_match_node() {
 }
 
 #[test]
+fn global_buffer_compare_invalid_range_vectors_match_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const cases = [
+            ["compare_neg_target_start", () => Buffer.from("abc").compare(Buffer.from("abc"), -1)],
+            ["compare_neg_target_end", () => Buffer.from("abc").compare(Buffer.from("abc"), 0, -1)],
+            ["compare_target_start_oob", () => Buffer.from("abc").compare(Buffer.from("abc"), 4)],
+            ["compare_target_end_oob", () => Buffer.from("abc").compare(Buffer.from("abc"), 0, 4)],
+            ["compare_neg_source_start", () => Buffer.from("abc").compare(Buffer.from("abc"), 0, 3, -1)],
+            ["compare_neg_source_end", () => Buffer.from("abc").compare(Buffer.from("abc"), 0, 3, 0, -1)],
+            ["compare_source_start_oob", () => Buffer.from("abc").compare(Buffer.from("abc"), 0, 3, 4)],
+            ["compare_source_end_oob", () => Buffer.from("abc").compare(Buffer.from("abc"), 0, 3, 0, 4)],
+            ["compare_target_start_eq_len", () => Buffer.from("abc").compare(Buffer.from("abc"), 3, 3, 0, 0)],
+            ["compare_source_start_eq_len", () => Buffer.from("abc").compare(Buffer.from("abc"), 0, 0, 3, 3)],
+            ["compare_cross_empty", () => Buffer.from("abc").compare(Buffer.from("abc"), 2, 1, 2, 1)],
+        ];
+        return cases.map(([label, run]) => {
+            try {
+                return label + ":" + run();
+            } catch (e) {
+                return label + ":" + e.name;
+            }
+        }).join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "compare_neg_target_start:RangeError|compare_neg_target_end:RangeError|compare_target_start_oob:1|compare_target_end_oob:RangeError|compare_neg_source_start:RangeError|compare_neg_source_end:RangeError|compare_source_start_oob:-1|compare_source_end_oob:RangeError|compare_target_start_eq_len:0|compare_source_start_eq_len:0|compare_cross_empty:0"
+    );
+}
+
+#[test]
 fn global_buffer_byte_swap_vectors_match_node() {
     let result = eval_global_buffer(
         r#"(() => {
