@@ -172,6 +172,33 @@ fn from_string_latin1_encode() {
     assert_eq!(result, "hello");
 }
 
+#[test]
+fn single_byte_encodings_match_node_vectors() {
+    let result = eval_buffer(
+        r#"(() => {
+        const latin1 = Buffer.from("\u00ffA", "latin1");
+        const binary = Buffer.from("\u00ffA", "binary");
+        const ascii = Buffer.from("\u00ffA", "ascii");
+        const latin1Codes = Array.from(latin1.toString("latin1")).map((ch) => ch.charCodeAt(0).toString(16)).join(",");
+        const binaryCodes = Array.from(binary.toString("binary")).map((ch) => ch.charCodeAt(0).toString(16)).join(",");
+        const asciiCodes = Array.from(ascii.toString("ascii")).map((ch) => ch.charCodeAt(0).toString(16)).join(",");
+        return [
+            latin1.toString("hex"),
+            binary.toString("hex"),
+            ascii.toString("hex"),
+            latin1Codes,
+            binaryCodes,
+            asciiCodes,
+            Buffer.byteLength("\u00ffA", "latin1"),
+            Buffer.byteLength("\u00ffA", "binary"),
+            Buffer.byteLength("\u00ffA", "ascii"),
+            Buffer.byteLength("\u00ffA", "utf8"),
+        ].join("|");
+    })()"#,
+    );
+    assert_eq!(result, "ff41|ff41|ff41|ff,41|ff,41|7f,41|2|2|2|3");
+}
+
 // ─── Buffer.from(array) ────────────────────────────────────────────────────
 
 #[test]
@@ -262,6 +289,23 @@ fn write_into_buffer() {
     // "hi" + 3 null bytes renders as "hi\0\0\0" but toString utf8 stops at the nulls
     // Actually Node.js returns "hi\0\0\0" — let's test the first 2 bytes
     assert!(result.starts_with("hi"), "expected 'hi...' got: {result}");
+}
+
+#[test]
+fn write_accepts_encoding_overload_for_single_byte_strings() {
+    let result = eval_buffer(
+        r#"(() => {
+        const latin1 = Buffer.alloc(2);
+        const ascii = Buffer.alloc(2);
+        return [
+            latin1.write("\u00ffA", "latin1"),
+            latin1.toString("hex"),
+            ascii.write("\u00ffA", "ascii"),
+            ascii.toString("hex"),
+        ].join("|");
+    })()"#,
+    );
+    assert_eq!(result, "2|ff41|2|ff41");
 }
 
 // ─── buf.slice ─────────────────────────────────────────────────────────────

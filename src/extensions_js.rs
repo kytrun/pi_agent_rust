@@ -20715,6 +20715,37 @@ if (typeof globalThis.URL === 'undefined') {
 }
 
 if (typeof globalThis.Buffer === 'undefined') {
+    function __pi_buffer_normalize_encoding(encoding) {
+        if (encoding == null || encoding === '') return 'utf8';
+        const enc = String(encoding).toLowerCase();
+        if (enc === 'utf8' || enc === 'utf-8') return 'utf8';
+        if (enc === 'latin1' || enc === 'binary' || enc === 'ascii') return enc;
+        if (enc === 'base64' || enc === 'hex') return enc;
+        if (enc === 'ucs2' || enc === 'ucs-2' || enc === 'utf16le' || enc === 'utf-16le') return 'utf16le';
+        return enc;
+    }
+    function __pi_buffer_from_one_byte_string(input) {
+        const out = new Buffer(input.length);
+        for (let i = 0; i < input.length; i++) {
+            out[i] = input.charCodeAt(i) & 0xff;
+        }
+        return out;
+    }
+    function __pi_buffer_one_byte_to_string(input, stripHighBit) {
+        let output = '';
+        let chunk = [];
+        for (let i = 0; i < input.length; i++) {
+            chunk.push(stripHighBit ? (input[i] & 0x7f) : input[i]);
+            if (chunk.length >= 4096) {
+                output += String.fromCharCode.apply(null, chunk);
+                chunk.length = 0;
+            }
+        }
+        if (chunk.length > 0) {
+            output += String.fromCharCode.apply(null, chunk);
+        }
+        return output;
+    }
     class Buffer extends Uint8Array {
         static _normalizeSearchOffset(length, byteOffset) {
             if (byteOffset == null) return 0;
@@ -20729,7 +20760,7 @@ if (typeof globalThis.Buffer === 'undefined') {
         }
         static from(input, encoding) {
             if (typeof input === 'string') {
-                const enc = String(encoding || '').toLowerCase();
+                const enc = __pi_buffer_normalize_encoding(encoding);
                 if (enc === 'base64') {
                     const bin = __pi_base64_decode_native(input);
                     const out = new Buffer(bin.length);
@@ -20745,6 +20776,9 @@ if (typeof globalThis.Buffer === 'undefined') {
                         out[i] = parseInt(hex.substr(i * 2, 2), 16);
                     }
                     return out;
+                }
+                if (enc === 'latin1' || enc === 'binary' || enc === 'ascii') {
+                    return __pi_buffer_from_one_byte_string(input);
                 }
                 const encoded = new TextEncoder().encode(input);
                 const out = new Buffer(encoded.length);
@@ -20780,9 +20814,10 @@ if (typeof globalThis.Buffer === 'undefined') {
         }
         static byteLength(str, encoding) {
             if (typeof str !== 'string') return str.length || 0;
-            const enc = String(encoding || 'utf8').toLowerCase();
+            const enc = __pi_buffer_normalize_encoding(encoding);
             if (enc === 'base64') return Math.ceil(str.length * 3 / 4);
             if (enc === 'hex') return str.length >> 1;
+            if (enc === 'latin1' || enc === 'binary' || enc === 'ascii') return str.length;
             return new TextEncoder().encode(str).length;
         }
         static concat(list, totalLength) {
@@ -20813,7 +20848,7 @@ if (typeof globalThis.Buffer === 'undefined') {
             const s = start || 0;
             const e = end !== undefined ? end : this.length;
             const view = this.subarray(s, e);
-            const enc = String(encoding || 'utf8').toLowerCase();
+            const enc = __pi_buffer_normalize_encoding(encoding);
             if (enc === 'base64') {
                 if (typeof globalThis.__pi_base64_encode_bytes_native === 'function') {
                     return __pi_base64_encode_bytes_native(view);
@@ -20839,6 +20874,8 @@ if (typeof globalThis.Buffer === 'undefined') {
                 }
                 return hexArr.join('');
             }
+            if (enc === 'latin1' || enc === 'binary') return __pi_buffer_one_byte_to_string(view, false);
+            if (enc === 'ascii') return __pi_buffer_one_byte_to_string(view, true);
             return new TextDecoder().decode(view);
         }
         toJSON() {
@@ -20894,11 +20931,22 @@ if (typeof globalThis.Buffer === 'undefined') {
             return this.indexOf(value, byteOffset, encoding) !== -1;
         }
         write(string, offset, length, encoding) {
-            const o = offset || 0;
-            const enc = encoding || 'utf8';
+            let o = 0;
+            let len = length;
+            let enc = encoding;
+            if (typeof offset === 'string') {
+                enc = offset;
+                len = undefined;
+            } else {
+                o = offset || 0;
+                if (typeof length === 'string') {
+                    enc = length;
+                    len = undefined;
+                }
+            }
             const bytes = Buffer.from(string, enc);
-            const len = length !== undefined ? Math.min(length, bytes.length) : bytes.length;
-            const copyLen = Math.min(len, this.length - o);
+            const limit = len !== undefined ? Math.min(len, bytes.length) : bytes.length;
+            const copyLen = Math.max(0, Math.min(limit, this.length - o));
             this.set(bytes.subarray(0, copyLen), o);
             return copyLen;
         }

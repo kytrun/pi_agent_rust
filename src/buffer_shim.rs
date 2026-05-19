@@ -68,12 +68,13 @@ function latin1Encode(str) {
   return bytes;
 }
 
-function latin1Decode(bytes, start, end) {
+function latin1Decode(bytes, start, end, stripHighBit) {
   let out = '';
   let chunk = [];
   const len = end - start;
   for (let i = 0; i < len; i++) {
-    chunk.push(bytes[start + i]);
+    const byte = bytes[start + i];
+    chunk.push(stripHighBit ? (byte & 0x7F) : byte);
     if (chunk.length >= 4096) {
       out += String.fromCharCode.apply(null, chunk);
       chunk.length = 0;
@@ -91,7 +92,8 @@ function normalizeEncoding(enc) {
   if (lower === 'utf8' || lower === 'utf-8') return 'utf8';
   if (lower === 'hex') return 'hex';
   if (lower === 'base64') return 'base64';
-  if (lower === 'ascii' || lower === 'binary' || lower === 'latin1') return 'latin1';
+  if (lower === 'ascii') return 'ascii';
+  if (lower === 'binary' || lower === 'latin1') return 'latin1';
   return 'utf8';
 }
 
@@ -99,6 +101,7 @@ function encodeString(str, encoding) {
   switch (normalizeEncoding(encoding)) {
     case 'hex': return hexDecode(str);
     case 'base64': return base64Decode(str);
+    case 'ascii':
     case 'latin1': return latin1Encode(str);
     default: return utf8Encode(str);
   }
@@ -110,7 +113,8 @@ function decodeBytes(bytes, encoding, start, end) {
   switch (normalizeEncoding(encoding)) {
     case 'hex': return hexEncode(bytes.subarray(start, end));
     case 'base64': return base64Encode(bytes.subarray(start, end));
-    case 'latin1': return latin1Decode(bytes, start, end);
+    case 'ascii': return latin1Decode(bytes, start, end, true);
+    case 'latin1': return latin1Decode(bytes, start, end, false);
     default: return utf8Decode(bytes, start, end);
   }
 }
