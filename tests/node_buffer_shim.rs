@@ -1374,6 +1374,75 @@ fn global_buffer_write_range_vectors_match_node() {
 }
 
 #[test]
+fn global_buffer_write_argument_type_validation_matches_node_vectors() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const cases = [
+            ["offset_null", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", null) + ":" + b.toString("hex");
+            }],
+            ["offset_true", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", true) + ":" + b.toString("hex");
+            }],
+            ["offset_object", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", { valueOf() { return 1; } }) + ":" + b.toString("hex");
+            }],
+            ["offset_array", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", [1]) + ":" + b.toString("hex");
+            }],
+            ["offset_undefined", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", undefined) + ":" + b.toString("hex");
+            }],
+            ["offset_string_encoding", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", "utf8") + ":" + b.toString("hex");
+            }],
+            ["length_null", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", 0, null) + ":" + b.toString("hex");
+            }],
+            ["length_false", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", 0, false) + ":" + b.toString("hex");
+            }],
+            ["length_object", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", 0, { valueOf() { return 1; } }) + ":" + b.toString("hex");
+            }],
+            ["length_array", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", 0, [1]) + ":" + b.toString("hex");
+            }],
+            ["length_undefined", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", 0, undefined) + ":" + b.toString("hex");
+            }],
+            ["length_string_encoding", () => {
+                const b = Buffer.alloc(4);
+                return b.write("abcd", 0, "utf8") + ":" + b.toString("hex");
+            }],
+        ];
+        return cases.map(([label, run]) => {
+            try {
+                return label + ":" + run();
+            } catch (e) {
+                return label + ":" + e.name;
+            }
+        }).join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "offset_null:TypeError|offset_true:TypeError|offset_object:TypeError|offset_array:TypeError|offset_undefined:4:61626364|offset_string_encoding:4:61626364|length_null:TypeError|length_false:TypeError|length_object:TypeError|length_array:TypeError|length_undefined:4:61626364|length_string_encoding:4:61626364"
+    );
+}
+
+#[test]
 fn global_buffer_slice_and_subarray_are_shared_buffer_views_like_node() {
     let result = eval_global_buffer(
         r#"(() => {

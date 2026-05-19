@@ -20905,6 +20905,16 @@ if (typeof globalThis.Buffer === 'undefined') {
             }
             return n;
         }
+        static _writeArgBound(value, defaultValue, max) {
+            if (value === undefined) return defaultValue;
+            if (typeof value !== 'number') {
+                throw new TypeError('The offset and length arguments must be numbers');
+            }
+            if (!Number.isInteger(value) || value < 0 || value > max) {
+                throw new RangeError('Index out of range');
+            }
+            return value;
+        }
         static _checkedSize(size) {
             if (typeof size !== 'number') {
                 throw new TypeError('The size argument must be a number');
@@ -21256,14 +21266,14 @@ if (typeof globalThis.Buffer === 'undefined') {
                 enc = offset;
                 len = undefined;
             } else {
-                o = Buffer._writeBound(offset, 0, this.length);
+                o = Buffer._writeArgBound(offset, 0, this.length);
                 if (typeof length === 'string') {
                     enc = length;
                     len = undefined;
                 }
             }
             const bytes = Buffer.from(string, enc);
-            if (len !== undefined) len = Buffer._writeBound(len, 0, this.length);
+            if (len !== undefined) len = Buffer._writeArgBound(len, 0, this.length);
             const limit = len !== undefined ? Math.min(len, bytes.length) : bytes.length;
             const copyLen = Math.max(0, Math.min(limit, this.length - o));
             this.set(bytes.subarray(0, copyLen), o);
