@@ -20885,11 +20885,14 @@ if (typeof globalThis.Buffer === 'undefined') {
             return offset;
         }
         static _checkedOffset(offset, byteLength, bufferLength) {
-            const o = offset === undefined ? 0 : Number(offset);
-            if (!Number.isInteger(o) || o < 0 || o + byteLength > bufferLength) {
+            if (offset === undefined) return 0;
+            if (typeof offset !== 'number') {
+                throw new TypeError('The offset argument must be a number');
+            }
+            if (!Number.isInteger(offset) || offset < 0 || offset + byteLength > bufferLength) {
                 throw new RangeError('Index out of range');
             }
-            return o;
+            return offset;
         }
         static _copyBound(value, defaultValue) {
             const n = value === undefined ? defaultValue : Number(value);

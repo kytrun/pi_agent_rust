@@ -1781,6 +1781,45 @@ fn global_buffer_integer_bounds_vectors_match_node() {
 }
 
 #[test]
+fn global_buffer_integer_offset_argument_validation_matches_node_vectors() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const readCases = [
+            ["read_null", () => Buffer.from([1, 2, 3, 4]).readUInt8(null)],
+            ["read_true", () => Buffer.from([1, 2, 3, 4]).readUInt8(true)],
+            ["read_object", () => Buffer.from([1, 2, 3, 4]).readUInt8({ valueOf() { return 1; } })],
+            ["read_array", () => Buffer.from([1, 2, 3, 4]).readUInt8([1])],
+            ["read_fraction", () => Buffer.from([1, 2, 3, 4]).readUInt8(1.9)],
+            ["read_nan", () => Buffer.from([1, 2, 3, 4]).readUInt8(NaN)],
+            ["read_bad_string", () => Buffer.from([1, 2, 3, 4]).readUInt8("bad")],
+            ["read_undefined", () => Buffer.from([1, 2, 3, 4]).readUInt8(undefined)],
+        ];
+        const writeCases = [
+            ["write_null", () => { const b = Buffer.alloc(4); return b.writeUInt8(9, null) + ":" + b.toString("hex"); }],
+            ["write_true", () => { const b = Buffer.alloc(4); return b.writeUInt8(9, true) + ":" + b.toString("hex"); }],
+            ["write_object", () => { const b = Buffer.alloc(4); return b.writeUInt8(9, { valueOf() { return 1; } }) + ":" + b.toString("hex"); }],
+            ["write_array", () => { const b = Buffer.alloc(4); return b.writeUInt8(9, [1]) + ":" + b.toString("hex"); }],
+            ["write_fraction", () => { const b = Buffer.alloc(4); return b.writeUInt8(9, 1.9) + ":" + b.toString("hex"); }],
+            ["write_nan", () => { const b = Buffer.alloc(4); return b.writeUInt8(9, NaN) + ":" + b.toString("hex"); }],
+            ["write_bad_string", () => { const b = Buffer.alloc(4); return b.writeUInt8(9, "bad") + ":" + b.toString("hex"); }],
+            ["write_undefined", () => { const b = Buffer.alloc(4); return b.writeUInt8(9, undefined) + ":" + b.toString("hex"); }],
+        ];
+        return readCases.concat(writeCases).map(([label, run]) => {
+            try {
+                return label + ":" + run();
+            } catch (e) {
+                return label + ":" + e.name;
+            }
+        }).join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "read_null:TypeError|read_true:TypeError|read_object:TypeError|read_array:TypeError|read_fraction:RangeError|read_nan:RangeError|read_bad_string:TypeError|read_undefined:1|write_null:TypeError|write_true:TypeError|write_object:TypeError|write_array:TypeError|write_fraction:RangeError|write_nan:RangeError|write_bad_string:TypeError|write_undefined:1:09000000"
+    );
+}
+
+#[test]
 fn global_buffer_unknown_encoding_strict_entrypoints_match_node() {
     let result = eval_global_buffer(
         r#"(() => {
