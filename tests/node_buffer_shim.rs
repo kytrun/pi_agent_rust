@@ -1912,6 +1912,34 @@ fn global_buffer_variable_width_unsigned_integer_vectors_match_node() {
 }
 
 #[test]
+fn global_buffer_lowercase_variable_width_uint_aliases_match_node_vectors() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const cases = [
+            ["types", () => ["readUintBE", "readUintLE", "writeUintBE", "writeUintLE"].map((name) => name + ":" + typeof Buffer.prototype[name]).join(",")],
+            ["read_be_6", () => Buffer.from([1, 2, 3, 4, 5, 6]).readUintBE(0, 6)],
+            ["read_le_6", () => Buffer.from([1, 2, 3, 4, 5, 6]).readUintLE(0, 6)],
+            ["write_be_6", () => { const b = Buffer.alloc(6); return b.writeUintBE(0x010203040506, 0, 6) + ":" + b.toString("hex"); }],
+            ["write_le_6", () => { const b = Buffer.alloc(6); return b.writeUintLE(0x010203040506, 0, 6) + ":" + b.toString("hex"); }],
+            ["read_len_string", () => Buffer.from([1, 2]).readUintBE(0, "2")],
+            ["write_oob", () => { const b = Buffer.alloc(2); return b.writeUintBE(0x10000, 0, 2) + ":" + b.toString("hex"); }],
+        ];
+        return cases.map(([label, run]) => {
+            try {
+                return label + ":" + run();
+            } catch (e) {
+                return label + ":" + e.name;
+            }
+        }).join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "types:readUintBE:function,readUintLE:function,writeUintBE:function,writeUintLE:function|read_be_6:1108152157446|read_le_6:6618611909121|write_be_6:6:010203040506|write_le_6:6:060504030201|read_len_string:TypeError|write_oob:RangeError"
+    );
+}
+
+#[test]
 fn global_buffer_variable_width_signed_integer_vectors_match_node() {
     let result = eval_global_buffer(
         r#"(() => {

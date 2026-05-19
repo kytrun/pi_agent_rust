@@ -21363,6 +21363,8 @@ if (typeof globalThis.Buffer === 'undefined') {
         readUInt32LE(offset) { const o = Buffer._checkedOffset(offset, 4, this.length); return (this[o] | (this[o+1] << 8) | (this[o+2] << 16) | (this[o+3] << 24)) >>> 0; }
         readUIntBE(offset, byteLength) { const len = Buffer._checkedByteLength(byteLength); const o = Buffer._checkedOffset(offset, len, this.length); let value = 0; for (let i = 0; i < len; i++) value = (value * 256) + this[o + i]; return value; }
         readUIntLE(offset, byteLength) { const len = Buffer._checkedByteLength(byteLength); const o = Buffer._checkedOffset(offset, len, this.length); let value = 0; let mul = 1; for (let i = 0; i < len; i++) { value += this[o + i] * mul; mul *= 256; } return value; }
+        readUintBE(offset, byteLength) { return this.readUIntBE(offset, byteLength); }
+        readUintLE(offset, byteLength) { return this.readUIntLE(offset, byteLength); }
         readUint8(offset) { return this.readUInt8(offset); }
         readUint16BE(offset) { return this.readUInt16BE(offset); }
         readUint16LE(offset) { return this.readUInt16LE(offset); }
@@ -21388,6 +21390,8 @@ if (typeof globalThis.Buffer === 'undefined') {
         writeIntLE(value, offset, byteLength) { const len = Buffer._checkedByteLength(byteLength); const o = Buffer._checkedOffset(offset, len, this.length); const min = -(2 ** ((8 * len) - 1)); const max = (2 ** ((8 * len) - 1)) - 1; let v = Math.trunc(Buffer._checkedWriteValue(value, min, max)); if (v < 0) v += 2 ** (8 * len); for (let i = 0; i < len; i++) { this[o + i] = v % 256; v = Math.floor(v / 256); } return o + len; }
         writeUIntBE(value, offset, byteLength) { const len = Buffer._checkedByteLength(byteLength); const o = Buffer._checkedOffset(offset, len, this.length); let v = Math.trunc(Buffer._checkedWriteValue(value, 0, (2 ** (8 * len)) - 1)); for (let i = len - 1; i >= 0; i--) { this[o + i] = v % 256; v = Math.floor(v / 256); } return o + len; }
         writeUIntLE(value, offset, byteLength) { const len = Buffer._checkedByteLength(byteLength); const o = Buffer._checkedOffset(offset, len, this.length); let v = Math.trunc(Buffer._checkedWriteValue(value, 0, (2 ** (8 * len)) - 1)); for (let i = 0; i < len; i++) { this[o + i] = v % 256; v = Math.floor(v / 256); } return o + len; }
+        writeUintBE(value, offset, byteLength) { return this.writeUIntBE(value, offset, byteLength); }
+        writeUintLE(value, offset, byteLength) { return this.writeUIntLE(value, offset, byteLength); }
         writeUInt32BE(value, offset) { const o = Buffer._checkedOffset(offset, 4, this.length); const v = Buffer._checkedWriteValue(value, 0, 0xffffffff); this[o]=(v>>>24)&0xff; this[o+1]=(v>>>16)&0xff; this[o+2]=(v>>>8)&0xff; this[o+3]=v&0xff; return o+4; }
         writeUInt32LE(value, offset) { const o = Buffer._checkedOffset(offset, 4, this.length); const v = Buffer._checkedWriteValue(value, 0, 0xffffffff); this[o]=v&0xff; this[o+1]=(v>>>8)&0xff; this[o+2]=(v>>>16)&0xff; this[o+3]=(v>>>24)&0xff; return o+4; }
         writeUint32BE(value, offset) { return this.writeUInt32BE(value, offset); }
