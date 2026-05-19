@@ -20928,10 +20928,7 @@ if (typeof globalThis.Buffer === 'undefined') {
             if (input instanceof ArrayBuffer) {
                 const offset = encoding || 0;
                 const len = length !== undefined ? length : input.byteLength - offset;
-                const view = new Uint8Array(input, offset, len);
-                const out = new Buffer(view.byteLength);
-                out.set(view);
-                return out;
+                return new Buffer(input, offset, len);
             }
             if (ArrayBuffer.isView && ArrayBuffer.isView(input)) {
                 const out = new Buffer(input.byteLength);

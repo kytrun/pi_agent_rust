@@ -872,6 +872,40 @@ fn global_buffer_arraybuffer_offset_length_match_node_vectors() {
 }
 
 #[test]
+fn global_buffer_arraybuffer_backing_view_matches_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const ab = new ArrayBuffer(4);
+        const view = new Uint8Array(ab);
+        view.set([1, 2, 3, 4]);
+        const shared = Buffer.from(ab, 1, 2);
+        shared[0] = 9;
+        view[2] = 8;
+
+        const typed = new Uint8Array([1, 2, 3]);
+        const copied = Buffer.from(typed);
+        copied[0] = 9;
+        typed[1] = 8;
+
+        return [
+            "shared_hex:" + shared.toString("hex"),
+            "ab:" + Array.from(view).join(","),
+            "same:" + (shared.buffer === ab),
+            "offset:" + shared.byteOffset,
+            "len:" + shared.byteLength,
+            "typed_hex:" + copied.toString("hex"),
+            "typed:" + Array.from(typed).join(","),
+            "typed_same:" + (copied.buffer === typed.buffer),
+        ].join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "shared_hex:0908|ab:1,9,8,4|same:true|offset:1|len:2|typed_hex:090203|typed:1,8,3|typed_same:false"
+    );
+}
+
+#[test]
 fn global_buffer_array_like_inputs_match_node_vectors() {
     let result = eval_global_buffer(
         r#"(() => {
