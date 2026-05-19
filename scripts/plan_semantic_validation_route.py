@@ -40,6 +40,7 @@ REQUIRED_TOP_LEVEL_KEYS = (
     "proof_memory_assessment",
     "cache_heat",
     "coalescing_advice",
+    "coordination_risk",
     "coordination_admission",
     "would_run_order",
     "deferred_or_blocked",
@@ -748,56 +749,305 @@ def load_beads_summary(path: Path) -> dict[str, Any]:
                         "title": issue.get("title"),
                         "status": status,
                         "assignee": issue.get("assignee"),
+                        "updated_at": issue.get("updated_at"),
+                        "created_at": issue.get("created_at"),
                     }
                 )
     return {
         "source_status": "loaded",
         "open_count": open_count,
+        "ready_count": open_count,
         "in_progress_count": in_progress_count,
         "active_sample": active[:8],
     }
 
 
-def build_coordination_admission(
-    *,
-    agent_mail_health: dict[str, Any] | None,
-    beads_summary: dict[str, Any],
-    classification: dict[str, Any],
-) -> dict[str, Any]:
+def agent_mail_health_state(agent_mail_health: dict[str, Any] | None) -> dict[str, str]:
     health = agent_mail_health or {}
-    health_level = health.get("health_level") or health.get("status") or "not_provided"
-    reasons: list[str] = []
-    recommended_action = "safe_to_claim_after_reservation"
-    status = "ready"
-    if health_level not in {"green", "ok"}:
-        status = "degraded"
-        recommended_action = "claim_with_beads_soft_lock"
-        reasons.append(f"agent_mail_health={health_level}")
-    if beads_summary.get("in_progress_count", 0) > 0:
-        status = "degraded"
-        reasons.append("active_in_progress_beads_present")
-    if classification["unknown_paths"]:
-        status = "blocked"
-        recommended_action = "stop_surface_blocker"
-        reasons.append("unknown_changed_path_bucket")
-    reservation_paths = sorted(
+    recovery = health.get("recovery") if isinstance(health.get("recovery"), dict) else {}
+    recovery_mode = str(recovery.get("mode") or "not_provided")
+    health_level = str(health.get("health_level") or health.get("status") or "not_provided")
+    effective = health_level
+    if recovery_mode not in {"not_provided", "normal", "none", "ok"}:
+        effective = recovery_mode
+    return {
+        "health_level": health_level,
+        "recovery_mode": recovery_mode,
+        "effective_status": effective,
+    }
+
+
+def route_reservation_paths(classification: dict[str, Any]) -> list[str]:
+    paths = sorted(
         {
             record["path"]
             for record in classification["records"]
             if record["bucket"] != "unknown"
         }
     )
-    if not reservation_paths:
-        reservation_paths = ["docs/evidence/semantic-validation-route-inventory.json"]
+    if paths:
+        return paths
+    return ["docs/evidence/semantic-validation-route-inventory.json"]
+
+
+def path_patterns_from_record(record: dict[str, Any]) -> list[str]:
+    for key in ("path_patterns", "reservation_paths", "reserved_paths", "paths"):
+        raw = record.get(key)
+        if isinstance(raw, list):
+            return [normalize_path(item) for item in raw if isinstance(item, str)]
+    raw_pattern = record.get("path_pattern")
+    if isinstance(raw_pattern, str):
+        return [normalize_path(raw_pattern)]
+    return []
+
+
+def collect_active_reservations(
+    *,
+    agent_mail_health: dict[str, Any] | None,
+    beads_summary: dict[str, Any],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for source, payload in (
+        ("agent_mail_health", agent_mail_health or {}),
+        ("beads", beads_summary),
+    ):
+        raw_reservations = payload.get("active_reservations") if isinstance(payload, dict) else None
+        if isinstance(raw_reservations, list):
+            for item in raw_reservations:
+                if not isinstance(item, dict):
+                    continue
+                patterns = path_patterns_from_record(item)
+                if not patterns:
+                    continue
+                records.append(
+                    {
+                        "source": source,
+                        "holder": item.get("holder") or item.get("agent") or item.get("assignee"),
+                        "thread_id": item.get("thread_id") or item.get("reason"),
+                        "path_patterns": patterns,
+                    }
+                )
+    for item in beads_summary.get("active_sample") or []:
+        if not isinstance(item, dict):
+            continue
+        patterns = path_patterns_from_record(item)
+        if patterns:
+            records.append(
+                {
+                    "source": "beads_active_sample",
+                    "holder": item.get("assignee"),
+                    "thread_id": item.get("id"),
+                    "path_patterns": patterns,
+                }
+            )
+    return records
+
+
+def reservation_overlaps(route_path: str, pattern: str) -> bool:
+    normalized_route = normalize_path(route_path)
+    normalized_pattern = normalize_path(pattern)
+    return matches_pattern(normalized_route, normalized_pattern) or matches_pattern(
+        normalized_pattern,
+        normalized_route,
+    )
+
+
+def overlapping_reservations(
+    route_paths: list[str],
+    reservations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    overlaps: list[dict[str, Any]] = []
+    for reservation in reservations:
+        matched = sorted(
+            {
+                route_path
+                for route_path in route_paths
+                for pattern in reservation["path_patterns"]
+                if reservation_overlaps(route_path, pattern)
+            }
+        )
+        if matched:
+            overlaps.append({**reservation, "matched_route_paths": matched})
+    return overlaps
+
+
+def stale_in_progress_issues(beads_summary: dict[str, Any]) -> list[dict[str, Any]]:
+    stale: list[dict[str, Any]] = []
+    for item in beads_summary.get("active_sample") or []:
+        if not isinstance(item, dict) or item.get("status") != "in_progress":
+            continue
+        if item.get("stale") is True or item.get("stale_candidate") is True:
+            stale.append(
+                {
+                    "id": item.get("id"),
+                    "assignee": item.get("assignee"),
+                    "updated_at": item.get("updated_at"),
+                    "reason": item.get("stale_reason") or "fixture_or_source_marked_stale",
+                }
+            )
+    return stale
+
+
+def dirty_paths_outside_route(
+    *,
+    beads_summary: dict[str, Any],
+    route_paths: list[str],
+) -> list[str]:
+    raw_paths = beads_summary.get("dirty_worktree_paths") or []
+    if not isinstance(raw_paths, list):
+        return []
+    route_set = {normalize_path(path) for path in route_paths}
+    dirty_paths = {normalize_path(path) for path in raw_paths if isinstance(path, str)}
+    return sorted(path for path in dirty_paths if path not in route_set)
+
+
+def build_coordination_risk(
+    *,
+    agent_mail_health: dict[str, Any] | None,
+    beads_summary: dict[str, Any],
+    classification: dict[str, Any],
+) -> dict[str, Any]:
+    route_paths = route_reservation_paths(classification)
+    health_state = agent_mail_health_state(agent_mail_health)
+    active_reservations = collect_active_reservations(
+        agent_mail_health=agent_mail_health,
+        beads_summary=beads_summary,
+    )
+    overlaps = overlapping_reservations(route_paths, active_reservations)
+    stale_issues = stale_in_progress_issues(beads_summary)
+    dirty_mismatch = dirty_paths_outside_route(beads_summary=beads_summary, route_paths=route_paths)
+    risk_factors: list[dict[str, Any]] = []
+
+    if health_state["effective_status"] not in {"green", "ok"}:
+        risk_factors.append(
+            {
+                "id": "agent_mail_not_authoritative",
+                "severity": "degraded",
+                "source": "agent_mail_health",
+                "reason": f"agent_mail_effective_status={health_state['effective_status']}",
+                "recommended_action": "claim_with_beads_soft_lock",
+            }
+        )
+    ready_count = int(beads_summary.get("ready_count", beads_summary.get("open_count", 0)) or 0)
+    if ready_count == 0:
+        risk_factors.append(
+            {
+                "id": "ready_queue_empty",
+                "severity": "blocking",
+                "source": "beads",
+                "reason": "no ready/open bead is available for this route",
+                "recommended_action": "stop_surface_blocker",
+            }
+        )
+    if beads_summary.get("in_progress_count", 0) > 0:
+        risk_factors.append(
+            {
+                "id": "active_in_progress_beads_present",
+                "severity": "degraded",
+                "source": "beads",
+                "reason": "in-progress bead ownership exists and must be checked before claiming",
+                "recommended_action": "claim_with_beads_soft_lock",
+            }
+        )
+    if overlaps:
+        risk_factors.append(
+            {
+                "id": "active_overlap",
+                "severity": "blocking",
+                "source": "agent_mail_or_beads",
+                "reason": "route paths overlap an active reservation or claimed surface",
+                "affected_paths": sorted({path for item in overlaps for path in item["matched_route_paths"]}),
+                "recommended_action": "defer_due_to_collision",
+            }
+        )
+    if stale_issues:
+        risk_factors.append(
+            {
+                "id": "stale_in_progress_issue",
+                "severity": "degraded",
+                "source": "beads",
+                "reason": "in-progress issue is marked stale and needs explicit reopen or soft-lock handling",
+                "issue_ids": [str(item["id"]) for item in stale_issues],
+                "recommended_action": "claim_with_beads_soft_lock",
+            }
+        )
+    if dirty_mismatch:
+        risk_factors.append(
+            {
+                "id": "dirty_worktree_mismatch",
+                "severity": "blocking",
+                "source": "git_status",
+                "reason": "dirty paths outside the requested route make admission unsafe",
+                "affected_paths": dirty_mismatch,
+                "recommended_action": "stop_surface_blocker",
+            }
+        )
+    if classification["unknown_paths"]:
+        risk_factors.append(
+            {
+                "id": "unknown_changed_path_bucket",
+                "severity": "blocking",
+                "source": "changed_path_classification",
+                "reason": "changed path has no known proof route",
+                "affected_paths": classification["unknown_paths"],
+                "recommended_action": "stop_surface_blocker",
+            }
+        )
+
+    blocking = [item for item in risk_factors if item["severity"] == "blocking"]
+    degraded = [item for item in risk_factors if item["severity"] == "degraded"]
+    if blocking:
+        status = "blocked"
+    elif degraded:
+        status = "degraded"
+    else:
+        status = "ready"
+    if any(item["recommended_action"] == "defer_due_to_collision" for item in blocking):
+        recommended_action = "defer_due_to_collision"
+    elif blocking:
+        recommended_action = "stop_surface_blocker"
+    elif degraded:
+        recommended_action = "claim_with_beads_soft_lock"
+    else:
+        recommended_action = "safe_to_claim"
     return {
         "status": status,
+        "risk_level": "blocking" if blocking else ("medium" if degraded else "low"),
         "recommended_action": recommended_action,
-        "agent_mail_health": health_level,
+        "agent_mail_health": health_state,
         "beads_source_status": beads_summary.get("source_status"),
+        "ready_bead_count": ready_count,
         "open_bead_count": beads_summary.get("open_count", 0),
         "in_progress_bead_count": beads_summary.get("in_progress_count", 0),
-        "reservation_paths": reservation_paths,
-        "thread_id_hint": DEFAULT_SOURCE_BEAD,
+        "route_paths": route_paths,
+        "active_overlap": overlaps,
+        "stale_in_progress_issues": stale_issues,
+        "dirty_worktree_mismatch_paths": dirty_mismatch,
+        "risk_factors": risk_factors,
+        "source_authority": {
+            "beads": "source_of_truth_for_issue_status_and_assignment",
+            "agent_mail": "source_of_truth_for_reservations_and_coordination_messages",
+            "git_status": "source_of_truth_for_dirty_path_admission",
+            "semantic_route_plan": "advisory_only",
+        },
+        "advisory_only": True,
+    }
+
+
+def build_coordination_admission(coordination_risk: dict[str, Any], *, source_bead: str) -> dict[str, Any]:
+    reasons = [str(item["id"]) for item in coordination_risk["risk_factors"]]
+    return {
+        "status": coordination_risk["status"],
+        "recommended_action": coordination_risk["recommended_action"],
+        "agent_mail_health": coordination_risk["agent_mail_health"]["effective_status"],
+        "agent_mail_recovery_mode": coordination_risk["agent_mail_health"]["recovery_mode"],
+        "beads_source_status": coordination_risk["beads_source_status"],
+        "ready_bead_count": coordination_risk["ready_bead_count"],
+        "open_bead_count": coordination_risk["open_bead_count"],
+        "in_progress_bead_count": coordination_risk["in_progress_bead_count"],
+        "reservation_paths": coordination_risk["route_paths"],
+        "thread_id_hint": source_bead,
+        "reservation_reason_hint": source_bead,
         "reasons": reasons,
         "claim_boundary": "Advisory only; agents must claim with br and reserve with Agent Mail or Beads soft-lock explicitly.",
     }
@@ -925,6 +1175,16 @@ def validate_plan_shape(plan: dict[str, Any]) -> None:
                 raise RoutePlanError(f"RCH-required group lacks rch exec command: {item.get('group_id')}")
             if not item.get("local_fallback_rejection_reason"):
                 raise RoutePlanError(f"RCH-required group lacks local fallback rejection: {item.get('group_id')}")
+    coordination_risk = plan["coordination_risk"]
+    if coordination_risk.get("advisory_only") is not True:
+        raise RoutePlanError("coordination risk must remain advisory")
+    if plan["coordination_admission"].get("recommended_action") not in {
+        "safe_to_claim",
+        "claim_with_beads_soft_lock",
+        "defer_due_to_collision",
+        "stop_surface_blocker",
+    }:
+        raise RoutePlanError("coordination admission has unknown recommended action")
 
 
 def build_route_plan(
@@ -970,11 +1230,12 @@ def build_route_plan(
         classification=classification,
         proof_memory=proof_assessment,
     )
-    coordination = build_coordination_admission(
+    coordination_risk = build_coordination_risk(
         agent_mail_health=agent_mail_health,
         beads_summary=beads_summary,
         classification=classification,
     )
+    coordination = build_coordination_admission(coordination_risk, source_bead=source_bead)
     would_run, deferred = build_schedule(obligations, coordination=coordination)
     status, decision = determine_status(
         source_issues=source_issues,
@@ -1006,6 +1267,7 @@ def build_route_plan(
         "proof_memory_assessment": proof_assessment,
         "cache_heat": cache_heat,
         "coalescing_advice": coalescing_advice,
+        "coordination_risk": coordination_risk,
         "coordination_admission": coordination,
         "would_run_order": would_run,
         "deferred_or_blocked": deferred,
@@ -1099,6 +1361,8 @@ def run_self_test() -> dict[str, Any]:
             "expect_status": {"ready"},
             "expect_bucket": "provider",
             "expect_heat": "high",
+            "expect_admission": "safe_to_claim",
+            "expect_coordination_status": "ready",
         },
         {
             "id": "mixed_python_rust",
@@ -1110,6 +1374,100 @@ def run_self_test() -> dict[str, Any]:
             "expect_heat": "high",
         },
         {
+            "id": "agent_mail_degraded_read_only",
+            "paths": ["src/providers/openai.rs"],
+            "scheduler": fixture_scheduler(),
+            "proof": fixture_proof_memory(),
+            "agent_mail": {
+                "health_level": "green",
+                "status": "ok",
+                "recovery": {"mode": "degraded_read_only"},
+            },
+            "expect_status": {"degraded"},
+            "expect_bucket": "provider",
+            "expect_heat": "high",
+            "expect_admission": "claim_with_beads_soft_lock",
+            "expect_coordination_status": "degraded",
+        },
+        {
+            "id": "empty_ready_queue",
+            "paths": ["docs/swarm-operations-runbook.md"],
+            "scheduler": fixture_scheduler(),
+            "proof": fixture_proof_memory(),
+            "beads": {"source_status": "fixture", "open_count": 0, "ready_count": 0, "in_progress_count": 0},
+            "expect_status": {"blocked"},
+            "expect_bucket": "scripts_docs_evidence",
+            "expect_heat": "low",
+            "expect_admission": "stop_surface_blocker",
+            "expect_coordination_status": "blocked",
+        },
+        {
+            "id": "active_overlap",
+            "paths": ["src/providers/openai.rs"],
+            "scheduler": fixture_scheduler(),
+            "proof": fixture_proof_memory(),
+            "agent_mail": {
+                "health_level": "green",
+                "status": "ok",
+                "active_reservations": [
+                    {
+                        "holder": "OtherAgent",
+                        "thread_id": "bd-other",
+                        "path_patterns": ["src/providers/**"],
+                    }
+                ],
+            },
+            "expect_status": {"blocked"},
+            "expect_bucket": "provider",
+            "expect_heat": "high",
+            "expect_admission": "defer_due_to_collision",
+            "expect_coordination_status": "blocked",
+        },
+        {
+            "id": "stale_in_progress_issue",
+            "paths": ["src/providers/openai.rs"],
+            "scheduler": fixture_scheduler(),
+            "proof": fixture_proof_memory(),
+            "beads": {
+                "source_status": "fixture",
+                "open_count": 1,
+                "ready_count": 1,
+                "in_progress_count": 1,
+                "active_sample": [
+                    {
+                        "id": "bd-stale",
+                        "status": "in_progress",
+                        "assignee": "OldAgent",
+                        "stale": True,
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    }
+                ],
+            },
+            "expect_status": {"degraded"},
+            "expect_bucket": "provider",
+            "expect_heat": "high",
+            "expect_admission": "claim_with_beads_soft_lock",
+            "expect_coordination_status": "degraded",
+        },
+        {
+            "id": "dirty_worktree_admission_denied",
+            "paths": ["src/providers/openai.rs"],
+            "scheduler": fixture_scheduler(),
+            "proof": fixture_proof_memory(),
+            "beads": {
+                "source_status": "fixture",
+                "open_count": 1,
+                "ready_count": 1,
+                "in_progress_count": 0,
+                "dirty_worktree_paths": ["src/session.rs"],
+            },
+            "expect_status": {"blocked"},
+            "expect_bucket": "provider",
+            "expect_heat": "high",
+            "expect_admission": "stop_surface_blocker",
+            "expect_coordination_status": "blocked",
+        },
+        {
             "id": "unknown_path",
             "paths": ["weird.binary"],
             "scheduler": fixture_scheduler(),
@@ -1117,6 +1475,8 @@ def run_self_test() -> dict[str, Any]:
             "expect_status": {"blocked"},
             "expect_bucket": "unknown",
             "expect_heat": "medium",
+            "expect_admission": "stop_surface_blocker",
+            "expect_coordination_status": "blocked",
         },
         {
             "id": "stale_proof",
@@ -1145,8 +1505,11 @@ def run_self_test() -> dict[str, Any]:
             scheduler_source={"path": "fixture", "status": "loaded"},
             proof_memory=case["proof"],
             proof_memory_source={"path": "fixture", "status": "loaded"},
-            beads_summary={"source_status": "fixture", "open_count": 1, "in_progress_count": 0},
-            agent_mail_health={"health_level": "green", "status": "ok"},
+            beads_summary=case.get(
+                "beads",
+                {"source_status": "fixture", "open_count": 1, "ready_count": 1, "in_progress_count": 0},
+            ),
+            agent_mail_health=case.get("agent_mail", {"health_level": "green", "status": "ok"}),
             generated_at="2026-05-19T00:00:00+00:00",
             source_bead=DEFAULT_SOURCE_BEAD,
         )
@@ -1186,6 +1549,22 @@ def run_self_test() -> dict[str, Any]:
                 and plan["coalescing_advice"]["advisory_only"] is True
                 else "fail",
                 "message": "coalescing advice has ordered advisory guidance",
+            },
+            {
+                "id": "coordination_admission_expected",
+                "status": "pass"
+                if plan["coordination_admission"]["recommended_action"]
+                == case.get("expect_admission", "safe_to_claim")
+                else "fail",
+                "message": f"admission={plan['coordination_admission']['recommended_action']}",
+            },
+            {
+                "id": "coordination_status_expected",
+                "status": "pass"
+                if plan["coordination_admission"]["status"]
+                == case.get("expect_coordination_status", "ready")
+                else "fail",
+                "message": f"coordination_status={plan['coordination_admission']['status']}",
             },
         ]
         results.append(
