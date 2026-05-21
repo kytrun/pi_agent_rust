@@ -1,6 +1,6 @@
 [package]
 name = "pi_agent_rust"
-version = "0.1.15"
+version = "0.1.16"
 edition = "2024"
 rust-version = "1.85"
 description = "High-performance AI coding agent CLI - Rust port of Pi Agent"
@@ -150,7 +150,7 @@ clap = { version = "4.5.60", features = ["derive", "env", "string"] }
 clap_complete = "4.5.66"
 
 # Async runtime
-asupersync = { version = "=0.3.1", default-features = false, features = ["tls-native-roots", "test-internals"] }
+asupersync = { version = "=0.3.2", default-features = false, features = ["tls-native-roots", "test-internals"] }
 futures = "0.3"
 async-trait = "0.1"
 
@@ -249,7 +249,7 @@ arbitrary = { version = "1", features = ["derive"] }
 pretty_assertions = "1"
 insta = { version = "1", features = ["filters"] }
 tempfile = "3.25.0"
-asupersync = { version = "=0.3.1", default-features = false, features = ["test-internals"] }
+asupersync = { version = "=0.3.2", default-features = false, features = ["test-internals"] }
 filetime = "0.2.27"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 jsonschema = { version = "0.42.0", default-features = false }

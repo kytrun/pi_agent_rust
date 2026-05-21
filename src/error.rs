@@ -893,7 +893,10 @@ impl From<asupersync::sync::LockError> for Error {
         match value {
             asupersync::sync::LockError::Cancelled => Self::Aborted,
             asupersync::sync::LockError::Poisoned
-            | asupersync::sync::LockError::PolledAfterCompletion => {
+            | asupersync::sync::LockError::PolledAfterCompletion
+            // asupersync 0.3.2 added LockError::TimedOut(Time) (lock-acquire deadline
+            // elapsed); surface it as a session error — its Display carries the detail.
+            | asupersync::sync::LockError::TimedOut(_) => {
                 Self::session(value.to_string())
             }
         }
