@@ -178,12 +178,16 @@ fn provider_has_dedicated_login_flow(provider: &str) -> bool {
 }
 
 /// Choose the GitHub Copilot device flow over the browser flow when the
-/// current process cannot rely on a localhost OAuth redirect — either because
-/// `GITHUB_COPILOT_CLIENT_ID` is unset (the browser flow rejects that early
-/// with a less actionable error than the device flow), or because the session
-/// is running headless / over SSH where the user's browser cannot reach the
-/// callback server bound on this host. `PI_COPILOT_FORCE_DEVICE_FLOW=1` opts
-/// in unconditionally.
+/// current process cannot rely on a localhost OAuth redirect — i.e. the
+/// session is running headless / over SSH and the user's browser cannot reach
+/// the callback server bound on this host. `PI_COPILOT_FORCE_DEVICE_FLOW=1`
+/// opts in unconditionally.
+///
+/// Note: when `GITHUB_COPILOT_CLIENT_ID` is unset, *both* flows fail with the
+/// same actionable "set GITHUB_COPILOT_CLIENT_ID" error message (the device
+/// flow's error text is slightly better, but neither flow can succeed). We
+/// still route to device flow in that case so the user sees the more explicit
+/// hint, but the only real fix is to set the env var.
 fn should_use_copilot_device_flow() -> bool {
     if std::env::var("PI_COPILOT_FORCE_DEVICE_FLOW")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))

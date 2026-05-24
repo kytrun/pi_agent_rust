@@ -147,29 +147,34 @@ pub async fn refresh_provider_models(provider: &str, api_key: &str) -> Result<Ve
 }
 
 async fn fetch_and_cache(provider: &str, key: &str, api_key: &str) -> Result<Vec<String>> {
-    let models = match fetch_live_models(provider, api_key).await {
-        Ok(live) if !live.is_empty() => live,
+    // Only cache results from a successful live fetch — caching the
+    // static-registry fallback would pin a stale answer for 5 minutes and
+    // silently swallow the next call even after the user adds the missing
+    // API key. The fallback path stays correct (callers always get a list)
+    // without poisoning the next live attempt.
+    match fetch_live_models(provider, api_key).await {
+        Ok(live) if !live.is_empty() => {
+            if !cache_disabled() {
+                cache_store(key.to_string(), live.clone());
+            }
+            Ok(live)
+        }
         Ok(_) => {
             tracing::warn!(
                 provider = %key,
-                "live model fetch returned empty list; falling back to static registry"
+                "live model fetch returned empty list; falling back to static registry (not cached)"
             );
-            static_registry_models(provider)
+            Ok(static_registry_models(provider))
         }
         Err(err) => {
             tracing::warn!(
                 provider = %key,
                 error = %err,
-                "live model fetch failed; falling back to static registry"
+                "live model fetch failed; falling back to static registry (not cached)"
             );
-            static_registry_models(provider)
+            Ok(static_registry_models(provider))
         }
-    };
-
-    if !cache_disabled() {
-        cache_store(key.to_string(), models.clone());
     }
-    Ok(models)
 }
 
 /// Return the static model IDs known to the bundled registry for `provider`.
