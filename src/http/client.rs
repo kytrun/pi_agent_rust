@@ -158,13 +158,13 @@ fn resolve_timeout(setting: RequestTimeout, url: &str) -> Option<std::time::Dura
         RequestTimeout::Disabled => RequestTimeout::Disabled,
         RequestTimeout::Default => timeout_override(|| std::env::var(REQUEST_TIMEOUT_ENV).ok())
             .unwrap_or_else(|| {
-            let secs = if url_is_local_provider(url) {
-                DEFAULT_LOCAL_REQUEST_TIMEOUT_SECS
-            } else {
-                DEFAULT_REMOTE_REQUEST_TIMEOUT_SECS
-            };
-            RequestTimeout::Explicit(std::time::Duration::from_secs(secs))
-        }),
+                let secs = if url_is_local_provider(url) {
+                    DEFAULT_LOCAL_REQUEST_TIMEOUT_SECS
+                } else {
+                    DEFAULT_REMOTE_REQUEST_TIMEOUT_SECS
+                };
+                RequestTimeout::Explicit(std::time::Duration::from_secs(secs))
+            }),
     };
     match resolved {
         RequestTimeout::Explicit(duration) => Some(duration),
@@ -382,7 +382,8 @@ impl<'a> RequestBuilder<'a> {
         let send_fut = send_parts(client, method, &url, &headers, &body);
         let resolved_timeout = resolve_timeout(timeout, &url);
 
-        let (status, response_headers, stream, timeout_info) = if let Some(duration) = resolved_timeout
+        let (status, response_headers, stream, timeout_info) = if let Some(duration) =
+            resolved_timeout
         {
             use asupersync::time::{sleep, wall_now};
             use futures::future::{Either, FutureExt, select};
