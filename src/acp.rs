@@ -13,6 +13,8 @@
 //!   delivered only after the turn completes
 //! - `session/cancel` — abort the current prompt turn for a session
 //! - `session/list`, `session/load`, `session/resume` — session management
+//! - `session/set_model` — switch the live session's provider/model at runtime
+//! - `session/set_config_option` — set a runtime option (e.g. thinking/effort)
 //!
 //! ## Streaming
 //!
@@ -35,7 +37,7 @@ use crate::compaction::ResolvedCompactionSettings;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::model::{AssistantMessageEvent, ContentBlock};
-use crate::models::ModelEntry;
+use crate::models::{ModelEntry, ModelRegistry};
 use crate::provider::StreamOptions;
 use crate::provider_metadata::provider_ids_match;
 use crate::providers;
@@ -194,6 +196,12 @@ struct AcpSessionState {
 pub struct AcpOptions {
     pub config: Config,
     pub available_models: Vec<ModelEntry>,
+    /// Full model registry (every known/loaded model, not just the ready ones in
+    /// `available_models`). Used so a live session can switch to any registered
+    /// model via `session/set_model` and resolve its credentials/headers — the
+    /// `AgentSession::set_provider_model` path requires the registry to locate
+    /// the target model entry.
+    pub model_registry: ModelRegistry,
     pub auth: AuthStorage,
     pub runtime_handle: RuntimeHandle,
     /// When set (from the `--session-dir` CLI flag), ACP sessions persist to
@@ -737,6 +745,140 @@ async fn run(
                 }
             }
 
+            // Dynamic, per-session model switch (#105). Switches the live
+            // session's provider/model so clients can change models at runtime
+            // (e.g. to gpt-5.5) without restarting or editing static config.
+            "session/set_model" => {
+                let session_id = request
+                    .params
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(String::from);
+                let Some(session_id) = session_id else {
+                    let _ = out_tx.send(json_rpc_error(
+                        id,
+                        INVALID_PARAMS,
+                        "Missing required parameter: sessionId",
+                    ));
+                    continue;
+                };
+
+                let (provider, model) =
+                    match resolve_set_model_target(&request.params, &options.model_registry) {
+                        Ok(pair) => pair,
+                        Err(msg) => {
+                            let _ = out_tx.send(json_rpc_error(id, INVALID_PARAMS, msg));
+                            continue;
+                        }
+                    };
+
+                let session_state = {
+                    sessions
+                        .lock(&cx)
+                        .await
+                        .map_or_else(|_| None, |guard| guard.get(&session_id).cloned())
+                };
+                let Some(session_state) = session_state else {
+                    let _ = out_tx.send(json_rpc_error(
+                        id,
+                        SESSION_NOT_FOUND,
+                        format!("Session not found: {session_id}"),
+                    ));
+                    continue;
+                };
+
+                match apply_set_model(&session_state, &provider, &model, &cx).await {
+                    Ok((provider, model)) => {
+                        let _ = out_tx.send(json_rpc_ok(
+                            id,
+                            json!({
+                                "sessionId": session_id,
+                                "model": { "provider": provider, "id": model },
+                            }),
+                        ));
+                    }
+                    Err(msg) => {
+                        let _ = out_tx.send(json_rpc_error(id, INVALID_PARAMS, msg));
+                    }
+                }
+            }
+
+            // Dynamic, per-session config option (#105). Currently applies the
+            // reasoning/thinking effort to the live session; unknown or
+            // restart-only options return a structured error (never a silent
+            // success). See the runtime-vs-restart contract above.
+            "session/set_config_option" => {
+                let session_id = request
+                    .params
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(String::from);
+                let Some(session_id) = session_id else {
+                    let _ = out_tx.send(json_rpc_error(
+                        id,
+                        INVALID_PARAMS,
+                        "Missing required parameter: sessionId",
+                    ));
+                    continue;
+                };
+
+                // Accept `name` or `key` for the option identifier; the value
+                // lives under `value`.
+                let name = request
+                    .params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .or_else(|| request.params.get("key").and_then(Value::as_str));
+                let Some(name) = name else {
+                    let _ = out_tx.send(json_rpc_error(
+                        id,
+                        INVALID_PARAMS,
+                        "Missing required parameter: name (or key)",
+                    ));
+                    continue;
+                };
+                let value = request.params.get("value").cloned().unwrap_or(Value::Null);
+
+                let option = match parse_config_option(name, &value) {
+                    Ok(option) => option,
+                    Err(msg) => {
+                        let _ = out_tx.send(json_rpc_error(id, INVALID_PARAMS, msg));
+                        continue;
+                    }
+                };
+
+                let session_state = {
+                    sessions
+                        .lock(&cx)
+                        .await
+                        .map_or_else(|_| None, |guard| guard.get(&session_id).cloned())
+                };
+                let Some(session_state) = session_state else {
+                    let _ = out_tx.send(json_rpc_error(
+                        id,
+                        SESSION_NOT_FOUND,
+                        format!("Session not found: {session_id}"),
+                    ));
+                    continue;
+                };
+
+                match apply_set_config_option(&session_state, option, &cx).await {
+                    Ok(()) => {
+                        let _ = out_tx.send(json_rpc_ok(
+                            id,
+                            json!({
+                                "sessionId": session_id,
+                                "name": name,
+                                "applied": true,
+                            }),
+                        ));
+                    }
+                    Err(msg) => {
+                        let _ = out_tx.send(json_rpc_error(id, INVALID_PARAMS, msg));
+                    }
+                }
+            }
+
             // File I/O methods. Paths must be under a known session's cwd
             // to prevent arbitrary filesystem access.
             "read_text_file" => {
@@ -1247,8 +1389,13 @@ fn handle_session_new(
         },
     };
 
+    // Wire the model registry and auth storage so the session can switch
+    // provider/model at runtime via `session/set_model` (set_provider_model
+    // needs the registry to find the target model and resolve its credentials).
     let agent_session = AgentSession::new(agent, session_arc, save_enabled, compaction_settings)
-        .with_runtime_handle(options.runtime_handle.clone());
+        .with_runtime_handle(options.runtime_handle.clone())
+        .with_model_registry(options.model_registry.clone())
+        .with_auth_storage(options.auth.clone());
 
     Ok((
         session_id,
@@ -1257,6 +1404,181 @@ fn handle_session_new(
             cwd,
         },
     ))
+}
+
+// ============================================================================
+// Runtime reconfiguration (session/set_model, session/set_config_option)
+// ============================================================================
+//
+// Runtime-vs-restart configuration contract for ACP sessions
+// ----------------------------------------------------------
+// A live ACP session is backed by an `AgentSession` whose provider/model and
+// per-request stream options (thinking level, etc.) can be mutated in place.
+// The following options are settable at runtime on an existing session:
+//
+//   * model              — switch the active provider/model pair. The target
+//                          must be a registered model with usable credentials.
+//                          Param shapes: `{ "provider": "...", "model": "..." }`,
+//                          or just a model id via `model`/`modelId`/`value`
+//                          (provider resolved from the registry).
+//   * thinking level     — controls reasoning effort. Accepted option names:
+//                          `thought_level`, `thinking_level`, `thinking`,
+//                          `reasoning`, `effort`, `reasoning_effort`. Values:
+//                          off|none|minimal|low|medium|high|xhigh (the level is
+//                          clamped to what the active model supports — e.g. a
+//                          non-reasoning model is forced to `off`).
+//
+// Everything else (tool set, cwd, system prompt, compaction limits, image
+// handling) is fixed at `session/new` time and requires a new session to
+// change — `session/set_config_option` returns a structured `INVALID_PARAMS`
+// error naming the option and the settable set rather than silently succeeding.
+
+/// A configuration option recognized by `session/set_config_option`.
+#[derive(Debug)]
+enum RuntimeConfigOption {
+    /// Reasoning/thinking effort, applied to the live session's stream options.
+    ThinkingLevel(crate::model::ThinkingLevel),
+}
+
+/// The set of `session/set_config_option` names this server understands, for
+/// inclusion in actionable error messages.
+const SETTABLE_CONFIG_OPTIONS: &str =
+    "model, thought_level (aliases: thinking_level, thinking, reasoning, effort, reasoning_effort)";
+
+/// Resolve the target `(provider, model)` for a `session/set_model` request.
+///
+/// Accepts either an explicit `{provider, model}` pair or a bare model
+/// identifier supplied via `model`, `modelId`, or `value` (the ACP client in
+/// issue #105 sends `config=model value=gpt-5.5`). When only a model id is
+/// given, the provider is resolved from the registry. Returns a human-readable
+/// error string on missing/unknown input.
+fn resolve_set_model_target(
+    params: &Value,
+    registry: &ModelRegistry,
+) -> std::result::Result<(String, String), String> {
+    let provider = params
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let model = params
+        .get("model")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("modelId").and_then(Value::as_str))
+        .or_else(|| params.get("value").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let Some(model) = model else {
+        return Err(
+            "Missing required parameter: model (or modelId/value) for session/set_model"
+                .to_string(),
+        );
+    };
+
+    if let Some(provider) = provider {
+        // Validate the explicit pair against the registry up front so the error
+        // names what was requested rather than a generic switch failure.
+        if registry.find(provider, model).is_none() {
+            return Err(format!(
+                "Unknown model: provider={provider} model={model} (not in the model registry)"
+            ));
+        }
+        return Ok((provider.to_string(), model.to_string()));
+    }
+
+    // No provider given — resolve it from the registry by model id.
+    match registry.find_by_id(model) {
+        Some(entry) => Ok((entry.model.provider, entry.model.id)),
+        None => Err(format!(
+            "Unknown model: {model} (no provider supplied and no match in the model registry)"
+        )),
+    }
+}
+
+/// Parse a `session/set_config_option` request into a recognized option.
+///
+/// Returns `Ok(Some(_))` for a settable option, or an error string for an
+/// unknown option name or an invalid value. (`Ok(None)` is unused today but
+/// keeps room for options that are accepted-but-ignored.)
+fn parse_config_option(
+    name: &str,
+    value: &Value,
+) -> std::result::Result<RuntimeConfigOption, String> {
+    let key = name.trim().to_ascii_lowercase();
+    match key.as_str() {
+        "thought_level" | "thinking_level" | "thinking" | "reasoning" | "effort"
+        | "reasoning_effort" => {
+            // Accept a JSON string ("off") or a bare number (0..=4).
+            let raw = value.as_str().map(str::to_string).or_else(|| {
+                value
+                    .as_i64()
+                    .map(|n| n.to_string())
+                    .or_else(|| value.as_u64().map(|n| n.to_string()))
+            });
+            let Some(raw) = raw else {
+                return Err(format!(
+                    "Invalid value for config option '{name}': expected a string or integer thinking level (off|minimal|low|medium|high|xhigh)"
+                ));
+            };
+            raw.parse::<crate::model::ThinkingLevel>().map_or_else(
+                |_| {
+                    Err(format!(
+                        "Invalid value for config option '{name}': '{raw}' (expected off|minimal|low|medium|high|xhigh)"
+                    ))
+                },
+                |level| Ok(RuntimeConfigOption::ThinkingLevel(level)),
+            )
+        }
+        _ => Err(format!(
+            "Unknown or non-runtime config option: '{name}'. Settable at runtime: {SETTABLE_CONFIG_OPTIONS}. Other options are fixed at session/new and require a new session."
+        )),
+    }
+}
+
+/// Apply a resolved `session/set_model` to a live session.
+///
+/// Returns the active `(provider, model)` on success. The agent session may be
+/// `None` if a prompt is currently in flight (it is taken out of the state
+/// during a turn); callers should surface that as a retryable error.
+async fn apply_set_model(
+    session_state: &Arc<Mutex<AcpSessionState>>,
+    provider: &str,
+    model: &str,
+    cx: &AgentCx,
+) -> std::result::Result<(String, String), String> {
+    let Ok(mut guard) = session_state.lock(cx).await else {
+        return Err("session state lock unavailable".to_string());
+    };
+    let Some(agent_session) = guard.agent_session.as_mut() else {
+        return Err("Cannot change model while a prompt is in progress".to_string());
+    };
+    agent_session
+        .set_provider_model(provider, model)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok((provider.to_string(), model.to_string()))
+}
+
+/// Apply a parsed `session/set_config_option` to a live session.
+async fn apply_set_config_option(
+    session_state: &Arc<Mutex<AcpSessionState>>,
+    option: RuntimeConfigOption,
+    cx: &AgentCx,
+) -> std::result::Result<(), String> {
+    let Ok(mut guard) = session_state.lock(cx).await else {
+        return Err("session state lock unavailable".to_string());
+    };
+    let Some(agent_session) = guard.agent_session.as_mut() else {
+        return Err("Cannot change configuration while a prompt is in progress".to_string());
+    };
+    match option {
+        RuntimeConfigOption::ThinkingLevel(level) => agent_session
+            .set_thinking_level(level)
+            .await
+            .map_err(|e| e.to_string()),
+    }
 }
 
 /// Execute a prompt for a session and stream `session/update` notifications.
@@ -2071,6 +2393,235 @@ mod tests {
                     if reason.contains("disconnected")
             ));
             assert!(pending_permissions_empty(&pending));
+        });
+    }
+
+    // ── session/set_model + session/set_config_option (#105) ──────────────
+
+    /// Build an `AcpSessionState` backed by a real registry + auth so the
+    /// runtime-reconfig handlers can be exercised end to end. Mirrors the SDK's
+    /// `set_model` test wiring: credentials present for `anthropic`/`openai`,
+    /// active model `anthropic/claude-sonnet-4-5`.
+    fn make_set_model_session_state() -> (Arc<Mutex<AcpSessionState>>, AuthStorage, ModelRegistry) {
+        use crate::agent::{Agent, AgentConfig};
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let auth_path = dir.path().join("auth.json");
+        let mut auth = AuthStorage::load(auth_path).expect("load auth");
+        auth.set(
+            "anthropic",
+            crate::auth::AuthCredential::ApiKey {
+                key: "anthropic-key".to_string(),
+            },
+        );
+        auth.set(
+            "openai",
+            crate::auth::AuthCredential::ApiKey {
+                key: "openai-key".to_string(),
+            },
+        );
+
+        let registry = ModelRegistry::load(&auth, None);
+        let entry = registry
+            .find("anthropic", "claude-sonnet-4-5")
+            .expect("anthropic model in registry");
+        let provider = providers::create_provider(&entry, None).expect("create anthropic provider");
+        let tools = ToolRegistry::new(&[], std::path::Path::new("."), None);
+        let agent = Agent::new(
+            provider,
+            tools,
+            AgentConfig {
+                system_prompt: None,
+                max_tool_iterations: 50,
+                stream_options: StreamOptions::default(),
+                block_images: false,
+                fail_closed_hooks: false,
+                tool_approval: None,
+            },
+        );
+
+        let mut session = Session::in_memory();
+        session.header.provider = Some("anthropic".to_string());
+        session.header.model_id = Some("claude-sonnet-4-5".to_string());
+
+        let agent_session = AgentSession::new(
+            agent,
+            Arc::new(Mutex::new(session)),
+            false,
+            ResolvedCompactionSettings::default(),
+        )
+        .with_model_registry(registry.clone())
+        .with_auth_storage(auth.clone());
+
+        let state = Arc::new(Mutex::new(AcpSessionState {
+            agent_session: Some(agent_session),
+            cwd: PathBuf::from("."),
+        }));
+        (state, auth, registry)
+    }
+
+    #[test]
+    fn resolve_set_model_target_accepts_explicit_provider_model() {
+        let auth = AuthStorage::load(std::env::temp_dir().join("pi-acp-resolve-auth.json"))
+            .expect("load auth");
+        let registry = ModelRegistry::load(&auth, None);
+        let params = json!({ "provider": "openai", "model": "gpt-5.5" });
+        let (provider, model) =
+            resolve_set_model_target(&params, &registry).expect("resolves explicit pair");
+        assert_eq!(provider, "openai");
+        assert_eq!(model, "gpt-5.5");
+    }
+
+    #[test]
+    fn resolve_set_model_target_resolves_provider_from_bare_value() {
+        // The issue #105 client sends `config=model value=gpt-5.5` (no provider).
+        let auth = AuthStorage::load(std::env::temp_dir().join("pi-acp-resolve-auth2.json"))
+            .expect("load auth");
+        let registry = ModelRegistry::load(&auth, None);
+        let params = json!({ "value": "gpt-5.5" });
+        let (provider, model) =
+            resolve_set_model_target(&params, &registry).expect("resolves bare value");
+        assert_eq!(model, "gpt-5.5");
+        assert_eq!(provider, "openai", "provider resolved from registry");
+    }
+
+    #[test]
+    fn resolve_set_model_target_rejects_missing_model() {
+        let auth = AuthStorage::load(std::env::temp_dir().join("pi-acp-resolve-auth3.json"))
+            .expect("load auth");
+        let registry = ModelRegistry::load(&auth, None);
+        let err = resolve_set_model_target(&json!({}), &registry).expect_err("missing model");
+        assert!(err.contains("Missing required parameter"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_set_model_target_rejects_unknown_model() {
+        let auth = AuthStorage::load(std::env::temp_dir().join("pi-acp-resolve-auth4.json"))
+            .expect("load auth");
+        let registry = ModelRegistry::load(&auth, None);
+        let err = resolve_set_model_target(&json!({ "model": "totally-made-up-model" }), &registry)
+            .expect_err("unknown model");
+        assert!(err.contains("Unknown model"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_config_option_accepts_thinking_aliases() {
+        for name in [
+            "thought_level",
+            "thinking_level",
+            "thinking",
+            "reasoning",
+            "effort",
+            "reasoning_effort",
+        ] {
+            let option =
+                parse_config_option(name, &json!("off")).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(matches!(
+                option,
+                RuntimeConfigOption::ThinkingLevel(crate::model::ThinkingLevel::Off)
+            ));
+        }
+    }
+
+    #[test]
+    fn parse_config_option_accepts_numeric_value() {
+        let option = parse_config_option("effort", &json!(3)).expect("numeric level");
+        assert!(matches!(
+            option,
+            RuntimeConfigOption::ThinkingLevel(crate::model::ThinkingLevel::High)
+        ));
+    }
+
+    #[test]
+    fn parse_config_option_rejects_unknown_option() {
+        let err = parse_config_option("temperature", &json!(0.7)).expect_err("unknown option");
+        assert!(
+            err.contains("Unknown or non-runtime config option"),
+            "got: {err}"
+        );
+        assert!(err.contains("require a new session"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_config_option_rejects_bad_thinking_value() {
+        let err = parse_config_option("thought_level", &json!("ludicrous")).expect_err("bad value");
+        assert!(err.contains("Invalid value"), "got: {err}");
+    }
+
+    #[test]
+    fn apply_set_model_switches_provider_and_model() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+        runtime.block_on(async {
+            let cx = AgentCx::for_testing();
+            let (state, _auth, _registry) = make_set_model_session_state();
+
+            let (provider, model) = apply_set_model(&state, "openai", "gpt-4o", &cx)
+                .await
+                .expect("switch succeeds");
+            assert_eq!(provider, "openai");
+            assert_eq!(model, "gpt-4o");
+
+            // The live agent now reports the new provider/model.
+            let guard = state.lock(&cx).await.expect("lock state");
+            let agent_session = guard.agent_session.as_ref().expect("session present");
+            let active = agent_session.agent.provider();
+            assert_eq!(active.name(), "openai");
+            assert_eq!(active.model_id(), "gpt-4o");
+        });
+    }
+
+    #[test]
+    fn apply_set_config_option_applies_thinking_level() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+        runtime.block_on(async {
+            let cx = AgentCx::for_testing();
+            let (state, _auth, _registry) = make_set_model_session_state();
+
+            apply_set_config_option(
+                &state,
+                RuntimeConfigOption::ThinkingLevel(crate::model::ThinkingLevel::Off),
+                &cx,
+            )
+            .await
+            .expect("apply thinking level");
+
+            let guard = state.lock(&cx).await.expect("lock state");
+            let agent_session = guard.agent_session.as_ref().expect("session present");
+            assert_eq!(
+                agent_session.agent.stream_options().thinking_level,
+                Some(crate::model::ThinkingLevel::Off)
+            );
+        });
+    }
+
+    #[test]
+    fn apply_set_model_rejects_unknown_model() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+        runtime.block_on(async {
+            let cx = AgentCx::for_testing();
+            let (state, _auth, _registry) = make_set_model_session_state();
+
+            // Provider exists but the model id is not in the registry → the
+            // underlying set_provider_model rejects the switch.
+            let err = apply_set_model(&state, "openai", "no-such-model", &cx)
+                .await
+                .expect_err("unknown model rejected");
+            assert!(
+                err.contains("switch") || err.contains("Unable") || err.contains("Unknown"),
+                "got: {err}"
+            );
+
+            // Active model is unchanged after a failed switch.
+            let guard = state.lock(&cx).await.expect("lock state");
+            let agent_session = guard.agent_session.as_ref().expect("session present");
+            assert_eq!(agent_session.agent.provider().name(), "anthropic");
         });
     }
 }

@@ -8108,6 +8108,47 @@ impl AgentSession {
         self.persist_session().await
     }
 
+    /// Update the thinking/reasoning level for this session at runtime.
+    ///
+    /// Clamps the requested level to what the active model supports (e.g. a
+    /// non-reasoning model is forced to `Off`), records a thinking-level change
+    /// in session history when it actually changes, and persists the session.
+    /// Mirrors [`crate::sdk::AgentSessionHandle::set_thinking_level`] but is
+    /// callable directly on an [`AgentSession`] (e.g. from the ACP transport,
+    /// which holds an `AgentSession` rather than an SDK handle).
+    pub async fn set_thinking_level(&mut self, level: crate::model::ThinkingLevel) -> Result<()> {
+        let cx = crate::agent_cx::AgentCx::for_request();
+        let (effective_level, changed) = {
+            let mut guard = self
+                .session
+                .lock(cx.cx())
+                .await
+                .map_err(|e| Error::session(e.to_string()))?;
+            let (provider_id, model_id) =
+                guard.effective_model_for_current_path().unwrap_or_else(|| {
+                    let provider = self.agent.provider();
+                    (provider.name().to_string(), provider.model_id().to_string())
+                });
+            let effective_level =
+                self.clamp_thinking_level_for_model(&provider_id, &model_id, level);
+            let level_string = effective_level.to_string();
+            let changed = guard.effective_thinking_level_for_current_path().as_deref()
+                != Some(level_string.as_str());
+            guard.set_model_header(None, None, Some(level_string.clone()));
+            if changed {
+                guard.append_thinking_level_change(level_string);
+            }
+            (effective_level, changed)
+        };
+        self.agent.stream_options_mut().thinking_level = Some(effective_level);
+        self.refresh_extension_completion_host_state();
+        if changed {
+            self.persist_session().await
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn clamp_thinking_level_for_model(
         &self,
         provider_id: &str,

@@ -1289,6 +1289,7 @@ async fn run(
         let acp_options = pi::acp::AcpOptions {
             config: config.clone(),
             available_models,
+            model_registry: model_registry.clone(),
             auth: auth.clone(),
             runtime_handle: runtime_handle.clone(),
             session_dir: cli.session_dir.as_ref().map(PathBuf::from),

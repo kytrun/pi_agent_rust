@@ -1350,36 +1350,13 @@ impl AgentSessionHandle {
     }
 
     /// Update thinking level and persist it to session metadata.
+    ///
+    /// Delegates to [`AgentSession::set_thinking_level`] so the runtime
+    /// reconfiguration logic (clamping, history dedupe, persistence) lives in
+    /// one place and stays consistent across the SDK handle and the ACP
+    /// transport, which both need it.
     pub async fn set_thinking_level(&mut self, level: crate::model::ThinkingLevel) -> Result<()> {
-        let cx = crate::agent_cx::AgentCx::for_request();
-        let (effective_level, changed) = {
-            let mut guard = self
-                .session
-                .session
-                .lock(cx.cx())
-                .await
-                .map_err(|e| Error::session(e.to_string()))?;
-            let (provider_id, model_id) = guard
-                .effective_model_for_current_path()
-                .unwrap_or_else(|| self.model());
-            let effective_level =
-                self.session
-                    .clamp_thinking_level_for_model(&provider_id, &model_id, level);
-            let level_string = effective_level.to_string();
-            let changed = guard.effective_thinking_level_for_current_path().as_deref()
-                != Some(level_string.as_str());
-            guard.set_model_header(None, None, Some(level_string.clone()));
-            if changed {
-                guard.append_thinking_level_change(level_string);
-            }
-            (effective_level, changed)
-        };
-        self.session.agent.stream_options_mut().thinking_level = Some(effective_level);
-        if changed {
-            self.session.persist_session().await
-        } else {
-            Ok(())
-        }
+        self.session.set_thinking_level(level).await
     }
 
     /// Update the persisted session display name.
