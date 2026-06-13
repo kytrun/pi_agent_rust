@@ -172,6 +172,11 @@ fn auth_hints(msg: &str) -> ErrorHint {
 }
 
 fn provider_hints(message: &str) -> ErrorHint {
+    // Connect-path errors re-wrapped by providers keep the original message
+    // text, so match the WSAENOTCONN signature here too (#106).
+    if message.contains("10057") || message.contains("Socket is not connected") {
+        return winsock_not_connected_hints();
+    }
     if message.contains("429") || message.contains("rate limit") {
         return ErrorHint {
             summary: "Rate limit exceeded",
@@ -372,7 +377,32 @@ fn extension_hints(msg: &str) -> ErrorHint {
     }
 }
 
+/// Hint for Windows `WSAENOTCONN` (os error 10057) "Socket is not connected"
+/// failures during connect/TLS handshake (#106, #66, asupersync#35).
+///
+/// Layered Winsock providers (VPN clients, antivirus, firewall LSPs) can
+/// report an outbound connect as complete while the base provider socket has
+/// not finished connecting, so the first send fails with 10057. Pi retries the
+/// connect automatically; if the error still surfaces the interference is
+/// persistent and needs OS-level remediation.
+const fn winsock_not_connected_hints() -> ErrorHint {
+    ErrorHint {
+        summary: "Socket not connected (Windows WSAENOTCONN 10057) - often VPN, antivirus, or Winsock LSP interference",
+        hints: &[
+            "Retry the request; if it persists, temporarily disable VPN/antivirus/firewall software to identify the interfering layer",
+            "Inspect layered providers with 'netsh winsock show catalog'; as a last resort run 'netsh winsock reset' from an elevated prompt and reboot",
+        ],
+        context_fields: &["url"],
+    }
+}
+
 fn io_hints(err: &std::io::Error) -> ErrorHint {
+    // Windows WSAENOTCONN (10057): kind() maps to NotConnected on Windows,
+    // but also check the raw OS code in case the error was synthesized with
+    // an uncategorized kind (#106).
+    if err.kind() == std::io::ErrorKind::NotConnected || err.raw_os_error() == Some(10057) {
+        return winsock_not_connected_hints();
+    }
     match err.kind() {
         std::io::ErrorKind::NotFound => ErrorHint {
             summary: "File or directory not found",
@@ -457,6 +487,12 @@ const fn aborted_hints() -> ErrorHint {
 }
 
 fn api_hints(msg: &str) -> ErrorHint {
+    // TLS connect failures arrive flattened into a message string, e.g.
+    // "TLS connect failed: I/O error: Socket is not connected. (os error
+    // 10057)" (#106).
+    if msg.contains("10057") || msg.contains("Socket is not connected") {
+        return winsock_not_connected_hints();
+    }
     if msg.contains("timed out") || msg.contains("timeout") {
         return ErrorHint {
             summary: "Request timed out",
@@ -954,6 +990,28 @@ mod tests {
         assert_eq!(hint.summary, "I/O error");
     }
 
+    #[test]
+    fn test_io_not_connected_hints() {
+        let io_err =
+            std::io::Error::new(std::io::ErrorKind::NotConnected, "Socket is not connected");
+        let error = Error::Io(Box::new(io_err));
+        let hint = hints_for_error(&error);
+        assert!(hint.summary.contains("10057"));
+        assert!(hint.hints.iter().any(|h| h.contains("netsh winsock")));
+        assert!(hint.hints.iter().any(|h| h.contains("VPN")));
+    }
+
+    #[test]
+    fn test_io_wsaenotconn_raw_os_error_hints() {
+        // Raw os error 10057 must map to the Winsock hint even when the
+        // platform does not categorize the kind (non-Windows hosts).
+        let io_err = std::io::Error::from_raw_os_error(10057);
+        let error = Error::Io(Box::new(io_err));
+        let hint = hints_for_error(&error);
+        assert!(hint.summary.contains("10057"));
+        assert!(hint.hints.iter().any(|h| h.contains("netsh winsock")));
+    }
+
     // -----------------------------------------------------------------------
     // json_hints additional branches
     // -----------------------------------------------------------------------
@@ -1010,6 +1068,26 @@ mod tests {
         let error = Error::api("502 Bad Gateway");
         let hint = hints_for_error(&error);
         assert_eq!(hint.summary, "API error");
+    }
+
+    #[test]
+    fn test_api_tls_connect_10057_hints() {
+        let error =
+            Error::api("TLS connect failed: I/O error: Socket is not connected. (os error 10057)");
+        let hint = hints_for_error(&error);
+        assert!(hint.summary.contains("10057"));
+        assert!(hint.hints.iter().any(|h| h.contains("netsh winsock")));
+    }
+
+    #[test]
+    fn test_provider_socket_not_connected_hints() {
+        let error = Error::provider(
+            "anthropic",
+            "TLS connect failed: I/O error: Socket is not connected. (os error 10057)",
+        );
+        let hint = hints_for_error(&error);
+        assert!(hint.summary.contains("10057"));
+        assert!(hint.hints.iter().any(|h| h.contains("netsh winsock")));
     }
 
     // -----------------------------------------------------------------------

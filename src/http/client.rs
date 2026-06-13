@@ -11,7 +11,7 @@ use asupersync::http::h1::http_client::Scheme;
 use asupersync::io::ext::AsyncWriteExt;
 use asupersync::io::{AsyncRead, AsyncWrite, ReadBuf};
 use asupersync::net::tcp::stream::TcpStream;
-use asupersync::tls::{TlsConnector, TlsConnectorBuilder};
+use asupersync::tls::{TlsConnector, TlsConnectorBuilder, TlsError};
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -696,23 +696,131 @@ impl Response {
     }
 }
 
-async fn connect_transport(parsed: &ParsedUrl, client: &Client) -> Result<Transport> {
+/// Windows Winsock error code for "Socket is not connected" (`WSAENOTCONN`).
+///
+/// Layered Winsock providers (VPN clients, antivirus, firewall LSPs) can
+/// report an outbound TCP connect as complete — `getpeername` succeeds — while
+/// the base provider socket has not actually finished connecting, so the first
+/// send on the socket fails with 10057 (pi_agent_rust#106, previously #66 /
+/// asupersync#35). The upstream asupersync peer_addr readiness probe (0.3.2+)
+/// is not sufficient in those environments, so the connect path retries the
+/// whole connect with a fresh socket.
+const WSAENOTCONN: i32 = 10057;
+
+/// Backoff schedule for retrying a connect that failed with a "socket not
+/// connected" error: three attempts total (initial + one retry per entry).
+const NOT_CONNECTED_RETRY_BACKOFFS: [std::time::Duration; 2] = [
+    std::time::Duration::from_millis(250),
+    std::time::Duration::from_millis(750),
+];
+
+/// Whether an I/O error means the OS reported the socket as not connected
+/// (`WSAENOTCONN` / os error 10057 on Windows, `ENOTCONN` elsewhere).
+///
+/// During an *outbound* connect / TLS handshake this is never a legitimate
+/// terminal state — we just created the socket ourselves — so it is always
+/// worth retrying with a fresh connection on any platform. Other error kinds
+/// (refused, reset, DNS failures, certificate errors, ...) must NOT be
+/// retried here.
+///
+/// Layered transports sometimes wrap the original socket error in another
+/// `io::Error` with a different kind, so the *source chain* is inspected too,
+/// not just the top-level error.
+fn is_retryable_not_connected(err: &std::io::Error) -> bool {
+    fn matches_not_connected(err: &std::io::Error) -> bool {
+        err.kind() == std::io::ErrorKind::NotConnected || err.raw_os_error() == Some(WSAENOTCONN)
+    }
+    if matches_not_connected(err) {
+        return true;
+    }
+    let mut source = std::error::Error::source(err);
+    while let Some(cause) = source {
+        if let Some(io_err) = cause.downcast_ref::<std::io::Error>() {
+            if matches_not_connected(io_err) {
+                return true;
+            }
+        }
+        source = cause.source();
+    }
+    false
+}
+
+/// Whether a TLS connect error is caused by a retryable "socket not
+/// connected" I/O error (see [`is_retryable_not_connected`]).
+fn is_retryable_not_connected_tls(err: &TlsError) -> bool {
+    matches!(err, TlsError::Io(io_err) if is_retryable_not_connected(io_err))
+}
+
+/// A failed connect attempt: the user-facing error plus whether it is a
+/// retryable "socket not connected" failure (classified on the typed error
+/// *before* it is flattened into a message string).
+struct ConnectAttemptError {
+    error: Error,
+    retryable_not_connected: bool,
+}
+
+/// One full connect attempt: fresh TCP connection plus (for HTTPS) a fresh
+/// TLS handshake. On failure the partially-connected stream is dropped, which
+/// closes the socket.
+async fn connect_transport_once(
+    parsed: &ParsedUrl,
+    client: &Client,
+) -> std::result::Result<Transport, ConnectAttemptError> {
     let addr = (parsed.host.clone(), parsed.port);
-    let tcp = TcpStream::connect(addr).await?;
+    let tcp = TcpStream::connect(addr)
+        .await
+        .map_err(|e| ConnectAttemptError {
+            retryable_not_connected: is_retryable_not_connected(&e),
+            error: Error::from(e),
+        })?;
     match parsed.scheme {
         Scheme::Http => Ok(Transport::Tcp(tcp)),
         Scheme::Https => {
-            let tls = client
-                .tls
-                .as_ref()
-                .map_err(|e| Error::api(format!("TLS configuration error: {e}")))?;
-            let tls_stream = tls
-                .clone()
-                .connect(&parsed.host, tcp)
-                .await
-                .map_err(|e| Error::api(format!("TLS connect failed: {e}")))?;
+            let tls = client.tls.as_ref().map_err(|e| ConnectAttemptError {
+                error: Error::api(format!("TLS configuration error: {e}")),
+                retryable_not_connected: false,
+            })?;
+            let tls_stream =
+                tls.clone()
+                    .connect(&parsed.host, tcp)
+                    .await
+                    .map_err(|e| ConnectAttemptError {
+                        retryable_not_connected: is_retryable_not_connected_tls(&e),
+                        error: Error::api(format!("TLS connect failed: {e}")),
+                    })?;
             Ok(Transport::Tls(Box::new(tls_stream)))
         }
+    }
+}
+
+async fn connect_transport(parsed: &ParsedUrl, client: &Client) -> Result<Transport> {
+    use asupersync::time::{sleep, wall_now};
+
+    let mut backoffs = NOT_CONNECTED_RETRY_BACKOFFS.iter();
+    loop {
+        let failure = match connect_transport_once(parsed, client).await {
+            Ok(transport) => return Ok(transport),
+            Err(failure) => failure,
+        };
+        if !failure.retryable_not_connected {
+            return Err(failure.error);
+        }
+        let Some(&backoff) = backoffs.next() else {
+            return Err(failure.error);
+        };
+        tracing::warn!(
+            host = %parsed.host,
+            error = %failure.error,
+            backoff_ms = backoff.as_millis(),
+            "connect reported socket-not-connected (WSAENOTCONN 10057); \
+             retrying with a fresh connection (pi_agent_rust#106)"
+        );
+        // The failed transport was dropped (socket closed) when the attempt
+        // returned; back off briefly, then redo the full TCP + TLS connect.
+        let now = asupersync::Cx::current()
+            .and_then(|cx| cx.timer_driver())
+            .map_or_else(wall_now, |timer| timer.now());
+        sleep(now, backoff).await;
     }
 }
 
@@ -1339,6 +1447,84 @@ mod tests {
     #[test]
     fn method_as_str_post() {
         assert_eq!(Method::Post.as_str(), "POST");
+    }
+
+    // ── is_retryable_not_connected (#106 / #66 / asupersync#35) ─────────
+    #[test]
+    fn retryable_not_connected_kind() {
+        let err = std::io::Error::new(std::io::ErrorKind::NotConnected, "Socket is not connected");
+        assert!(is_retryable_not_connected(&err));
+    }
+
+    #[test]
+    fn retryable_wsaenotconn_raw_os_error() {
+        // On Windows from_raw_os_error(10057) also maps kind() to
+        // NotConnected; on Unix the kind is uncategorized and only the raw
+        // code matches. Both paths must classify as retryable.
+        let err = std::io::Error::from_raw_os_error(WSAENOTCONN);
+        assert!(is_retryable_not_connected(&err));
+    }
+
+    #[test]
+    fn retryable_not_connected_wrapped_in_source_chain() {
+        // A layered transport may wrap the original socket error in another
+        // io::Error with a different kind; the source chain must be walked.
+        let inner = std::io::Error::from_raw_os_error(WSAENOTCONN);
+        let outer = std::io::Error::other(inner);
+        assert!(is_retryable_not_connected(&outer));
+
+        let inner = std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected");
+        let outer = std::io::Error::new(std::io::ErrorKind::BrokenPipe, inner);
+        assert!(is_retryable_not_connected(&outer));
+    }
+
+    #[test]
+    fn not_retryable_wrapped_other_error() {
+        let inner = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
+        let outer = std::io::Error::other(inner);
+        assert!(!is_retryable_not_connected(&outer));
+    }
+
+    #[test]
+    fn not_retryable_connection_refused() {
+        let err = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
+        assert!(!is_retryable_not_connected(&err));
+    }
+
+    #[test]
+    fn not_retryable_generic_io_error() {
+        let err = std::io::Error::other("boom");
+        assert!(!is_retryable_not_connected(&err));
+    }
+
+    #[test]
+    fn retryable_tls_io_not_connected() {
+        let err = TlsError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "Socket is not connected",
+        ));
+        assert!(is_retryable_not_connected_tls(&err));
+    }
+
+    #[test]
+    fn retryable_tls_io_wsaenotconn_raw() {
+        let err = TlsError::Io(std::io::Error::from_raw_os_error(WSAENOTCONN));
+        assert!(is_retryable_not_connected_tls(&err));
+    }
+
+    #[test]
+    fn not_retryable_tls_handshake_failure() {
+        let err = TlsError::Handshake("handshake failure".to_string());
+        assert!(!is_retryable_not_connected_tls(&err));
+    }
+
+    #[test]
+    fn not_retryable_tls_io_other_kind() {
+        let err = TlsError::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "reset",
+        ));
+        assert!(!is_retryable_not_connected_tls(&err));
     }
 
     // ── find_headers_end ────────────────────────────────────────────────
