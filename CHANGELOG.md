@@ -12,7 +12,111 @@ Repository: <https://github.com/Dicklesworthstone/pi_agent_rust>
 
 ---
 
-## [Unreleased]
+## [v0.1.20] — 2026-06-13 — Tag-only
+
+### Bug Fixes
+
+- **Windows connect retries now survive `WSAENOTCONN` ("Socket is not
+  connected")** — the HTTP client retries the TCP connect when Winsock reports
+  `WSAENOTCONN`, and the error-classification logic walks the full
+  `io::Error::get_ref` source chain so the code is detected even when it is
+  wrapped several layers deep. A Winsock remediation hint is surfaced when the
+  condition is hit. Fixes [#106](https://github.com/Dicklesworthstone/pi_agent_rust/issues/106).
+
+### Internal
+
+- Synced `Cargo.lock` to the released `0.1.19` dependency set.
+
+## [v0.1.19] — 2026-06-11 — Tag-only
+
+### Features
+
+- **ACP dynamic configuration** — ACP mode supports `session/set_model` and
+  `session/set_config_option`, so clients can switch the active model and tune
+  config options mid-session.
+  Fixes [#105](https://github.com/Dicklesworthstone/pi_agent_rust/issues/105).
+- **ACP sessions can persist to disk** — `--session-dir` is honored in ACP mode,
+  letting ACP-driven sessions be stored and resumed like interactive ones.
+  Fixes [#102](https://github.com/Dicklesworthstone/pi_agent_rust/issues/102).
+
+### Bug Fixes
+
+- **System prompt emits date only (no clock time)** — the system prompt now
+  carries a date-only stamp instead of a full timestamp, so the leading prompt
+  prefix stays byte-stable within a day and provider KV caches are preserved
+  instead of being invalidated on every turn.
+  Fixes [#103](https://github.com/Dicklesworthstone/pi_agent_rust/issues/103).
+- **`llamacpp` and `mistral.rs` are treated as keyless local providers** — these
+  local OpenAI-compatible backends no longer demand an API key to be selectable.
+  Fixes [#104](https://github.com/Dicklesworthstone/pi_agent_rust/issues/104).
+- **Bundled TLS roots + cached connector** — the HTTP client uses bundled webpki
+  roots and caches the TLS connector, avoiding slow per-request system trust-store
+  parsing (notably the multi-second `SecTrustSettings` stall on macOS arm64).
+  Fixes [#101](https://github.com/Dicklesworthstone/pi_agent_rust/issues/101).
+- **Snapshot/override entries honored for native-adapter legacy providers** —
+  `models.json` snapshot and `models-override.json` entries are no longer
+  silently dropped for native-adapter providers (openai-codex, github-copilot,
+  google-gemini-cli, google-antigravity).
+  Fixes [#100](https://github.com/Dicklesworthstone/pi_agent_rust/issues/100).
+
+### Internal
+
+- Upgraded `asupersync` to `0.3.4`, dropping the `=0.3.2` pin (`0.3.3` was
+  yanked).
+- Pinned `rust-toolchain` to `nightly-2026-02-19` to stop clippy lint drift, and
+  the publish workflow now emits the missing-token error on stdout.
+- Docs: model examples use the `openai-completions` API id rather than `openai`.
+
+## [v0.1.18] — 2026-06-05 — Release
+
+### Features
+
+- **TUI front-end is feature-gated behind a default-on `tui` feature** — SDK and
+  library consumers can now build without compiling the terminal stack by
+  disabling the `tui` feature, while default installs are unchanged.
+  Fixes [#98](https://github.com/Dicklesworthstone/pi_agent_rust/issues/98).
+
+### Internal
+
+- The publish workflow fails loudly when `CARGO_REGISTRY_TOKEN` is missing, so
+  crates.io publishes can no longer be silently skipped.
+  Fixes [#99](https://github.com/Dicklesworthstone/pi_agent_rust/issues/99).
+- Formatting and beads export housekeeping.
+
+## [v0.1.17] — 2026-06-04 — Release
+
+### Features
+
+- **Configurable provider-aware HTTP request timeout** — request timeouts are now
+  configurable and provider-aware, addressing spurious "Request timed out"
+  failures on slow providers.
+  Fixes [#90](https://github.com/Dicklesworthstone/pi_agent_rust/issues/90).
+- **Dynamic model fetch with caching** — providers can fetch their live model
+  list with a 5-minute TTL cache and a static-registry fallback; the static
+  fallback is no longer cached so a transient fetch failure does not pin a stale
+  list.
+
+### Bug Fixes
+
+- **GitHub Copilot sign-in works out of the box** — a default Copilot
+  `client_id` is shipped and the Copilot device flow is wired into `/login`
+  with an SSH/headless fallback, so login no longer requires manual client
+  configuration.
+  Fixes [#97](https://github.com/Dicklesworthstone/pi_agent_rust/issues/97).
+- **Idle CPU churn from cursor blink removed** — the interactive front-end stops
+  the cursor-blink repaint loop while idle so the async runtime can actually
+  park.
+- **Kimi-for-coding fallbacks modernized** — prefer K2.6/K2.5 over the legacy
+  K2-thinking model as concrete fallbacks.
+
+### Internal
+
+- Release binary size budget raised from 20 MB to 25 MB; no-mock CI now gates
+  only new violations via a `.no-mock-allowlist` file; fuzz target forced to
+  `x86_64-unknown-linux-gnu` so ASan links against dynamic libc; trimmed 70 more
+  stale `ext_conformance` artifact fixtures.
+
+## [v0.1.16] — 2026-05-22 — Release
 
 ### Features
 
@@ -50,6 +154,35 @@ Repository: <https://github.com/Dicklesworthstone/pi_agent_rust>
   default to `MiniMax-M2.7` (was `MiniMax-M2.5`), and the Kimi for Coding plan
   uses its stable virtual model id `kimi-for-coding`. The single defaults
   table now also feeds ad-hoc synthesis, eliminating duplication.
+- **Active model auto-switches when it loses credentials** — when the selected
+  model's credentials disappear mid-session, the interactive front-end switches
+  to a still-ready model instead of failing the next turn.
+  Fixes [#81](https://github.com/Dicklesworthstone/pi_agent_rust/issues/81).
+- **Actionable hints for host/network-unreachable connect failures** — connect
+  errors (host unreachable / network unreachable, e.g. the macOS arm64
+  `EHOSTUNREACH` case) now surface a remediation hint instead of a bare OS error.
+  Fixes [#88](https://github.com/Dicklesworthstone/pi_agent_rust/issues/88).
+
+### Internal
+
+- **`asupersync` upgraded to `0.3.2`**, fixing a post-session persistence worker
+  that spun at ~500% CPU after a session completed.
+  Fixes [#83](https://github.com/Dicklesworthstone/pi_agent_rust/issues/83).
+- **Large QuickJS Node-shim conformance push** — extensive hardening of the
+  embedded-runtime Node API shims, especially the global `Buffer` surface
+  (encoding/length coercion, integer read/write bounds and validation, base64/hex
+  decoding, `ArrayBuffer` sharing/offsets, byte-swap parity, single-byte
+  encodings) plus `fs`/`crypto` shim fixes, tighter extension-VFS path scoping and
+  hermetic fixtures, and fail-closed handling of non-primary entrypoint load
+  errors. Adds the `@mariozechner/pi-ai` completion + model-registry host bridge.
+- **Swarm operations + autopilot tooling** — deterministic swarm-replay engine
+  and ingestor, `pi doctor` swarm checks (rch warm-target affinity planner,
+  conflict predictor, reservation recommendations, affinity-proof gate), an
+  autopilot dry-run next-action planner with budget-drift watcher and failure
+  action catalog, a completion-audit generator, and a swarm operations runbook.
+- Regenerate `rquickjs` bindings at build time on Android/Termux; track
+  `scripts/skill-smoke.sh` and the `pi-agent-rust` skill so the installer
+  regression harness passes in clean CI checkouts.
 
 ---
 
@@ -789,7 +922,12 @@ Key early commits:
 
 ---
 
-[Unreleased]: https://github.com/Dicklesworthstone/pi_agent_rust/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/Dicklesworthstone/pi_agent_rust/compare/v0.1.20...HEAD
+[v0.1.20]: https://github.com/Dicklesworthstone/pi_agent_rust/compare/v0.1.19...v0.1.20
+[v0.1.19]: https://github.com/Dicklesworthstone/pi_agent_rust/compare/v0.1.18...v0.1.19
+[v0.1.18]: https://github.com/Dicklesworthstone/pi_agent_rust/compare/v0.1.17...v0.1.18
+[v0.1.17]: https://github.com/Dicklesworthstone/pi_agent_rust/compare/v0.1.16...v0.1.17
+[v0.1.16]: https://github.com/Dicklesworthstone/pi_agent_rust/compare/v0.1.15...v0.1.16
 [v0.1.9]: https://github.com/Dicklesworthstone/pi_agent_rust/compare/v0.1.8...v0.1.9
 [v0.1.8]: https://github.com/Dicklesworthstone/pi_agent_rust/compare/v0.1.7...v0.1.8
 [v0.1.7]: https://github.com/Dicklesworthstone/pi_agent_rust/compare/v0.1.6...v0.1.7
